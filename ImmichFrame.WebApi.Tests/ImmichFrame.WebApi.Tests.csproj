@@ -43,6 +43,18 @@
     <Content Update="Resources\TestV2_NoGeneral.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <None Remove="Resources\TestProfiles.json" />
+    <Content Include="Resources\TestProfiles.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <None Remove="Resources\TestProfiles.yml" />
+    <Content Include="Resources\TestProfiles.yml">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <None Remove="Resources\TestNoProfiles.json" />
+    <Content Include="Resources\TestNoProfiles.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
   <ItemGroup>

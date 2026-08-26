@@ -1,0 +1,45 @@
+{
+  "General": {
+    "Interval": 45,
+    "ShowClock": true,
+    "ShowAlbumName": true,
+    "Language": "en",
+    "PrimaryColor": "#base",
+    "Webcalendars": [
+      "https://calendar.example.com/base.ics"
+    ]
+  },
+  "Accounts": [
+    {
+      "ImmichServerUrl": "https://base1.example.com",
+      "ApiKey": "base1-key"
+    },
+    {
+      "ImmichServerUrl": "https://base2.example.com",
+      "ApiKey": "base2-key"
+    }
+  ],
+  "Profiles": {
+    "kitchen": {
+      "General": {
+        "Interval": 10,
+        "ShowClock": false
+      }
+    },
+    "living-room": {
+      "General": {
+        "PrimaryColor": "#living",
+        "Webcalendars": [
+          "https://calendar.example.com/living.ics"
+        ]
+      },
+      "Accounts": [
+        {
+          "ImmichServerUrl": "https://living.example.com",
+          "ApiKey": "living-key"
+        }
+      ]
+    },
+    "empty": null
+  }
+}

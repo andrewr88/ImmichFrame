@@ -57,7 +57,8 @@ var configPath = Environment.GetEnvironmentVariable("IMMICHFRAME_CONFIG_PATH") ?
         .FirstOrDefault(d => string.Equals(Path.GetFileName(d), "Config", StringComparison.OrdinalIgnoreCase))
         ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Config");
 builder.Services.AddTransient<ConfigLoader>();
-builder.Services.AddSingleton<IServerSettings>(srv => srv.GetRequiredService<ConfigLoader>().LoadConfig(configPath));
+builder.Services.AddSingleton<IConfigCatalog>(srv => srv.GetRequiredService<ConfigLoader>().LoadCatalog(configPath));
+builder.Services.AddSingleton<IServerSettings>(srv => srv.GetRequiredService<IConfigCatalog>().Default);
 
 // Register sub-settings
 builder.Services.AddSingleton<IGeneralSettings>(srv => srv.GetRequiredService<IServerSettings>().GeneralSettings);

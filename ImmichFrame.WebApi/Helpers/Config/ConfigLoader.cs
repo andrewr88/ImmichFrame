@@ -20,20 +20,28 @@ public class ConfigLoader(ILogger<ConfigLoader> _logger)
             .FirstOrDefault(f => fileNames.Any(name => string.Equals(Path.GetFileName(f), name, StringComparison.OrdinalIgnoreCase)))
             ?? Path.Combine(dir, fileNames.First());
     }
-    public IServerSettings LoadConfig(string configPath)
+
+    /// <summary>
+    /// Loads every configuration ImmichFrame should serve: the default one, plus any profile
+    /// declared under <c>Profiles</c> in the settings file.
+    /// </summary>
+    public IConfigCatalog LoadCatalog(string configPath)
     {
-        var config = LoadConfigRaw(configPath);
-        config.Validate();
-        return config;
+        var catalog = LoadCatalogRaw(configPath);
+        catalog.Validate();
+        return catalog;
     }
-    private IServerSettings LoadConfigRaw(string configPath)
+
+    public IServerSettings LoadConfig(string configPath) => LoadCatalog(configPath).Default;
+
+    private ConfigCatalog LoadCatalogRaw(string configPath)
     {
         var jsonConfigPath = FindConfigFile(configPath, "Settings.json");
         if (File.Exists(jsonConfigPath))
         {
             try
             {
-                return LoadConfigJson<ServerSettings>(jsonConfigPath);
+                return LoadCatalogJson(jsonConfigPath);
             }
             catch (Exception e)
             {
@@ -43,7 +51,7 @@ public class ConfigLoader(ILogger<ConfigLoader> _logger)
             try
             {
                 var v1 = LoadConfigJson<ServerSettingsV1>(jsonConfigPath);
-                return new ServerSettingsV1Adapter(v1);
+                return new ConfigCatalog(new ServerSettingsV1Adapter(v1));
             }
             catch (Exception e)
             {
@@ -56,7 +64,7 @@ public class ConfigLoader(ILogger<ConfigLoader> _logger)
         {
             try
             {
-                return LoadConfigYaml<ServerSettings>(ymlConfigPath);
+                return LoadCatalogYaml(ymlConfigPath);
             }
             catch (Exception e)
             {
@@ -66,7 +74,7 @@ public class ConfigLoader(ILogger<ConfigLoader> _logger)
             try
             {
                 var v1 = LoadConfigYaml<ServerSettingsV1>(ymlConfigPath);
-                return new ServerSettingsV1Adapter(v1);
+                return new ConfigCatalog(new ServerSettingsV1Adapter(v1));
             }
             catch (Exception e)
             {
@@ -76,8 +84,9 @@ public class ConfigLoader(ILogger<ConfigLoader> _logger)
 
         try
         {
+            // Environment variables are flat, so they can only ever describe a single configuration.
             var v1 = LoadConfigFromDictionary<ServerSettingsV1>(Environment.GetEnvironmentVariables());
-            return new ServerSettingsV1Adapter(v1);
+            return new ConfigCatalog(new ServerSettingsV1Adapter(v1));
         }
         catch (Exception e)
         {
@@ -85,6 +94,36 @@ public class ConfigLoader(ILogger<ConfigLoader> _logger)
         }
 
         throw new ImmichFrameException("Failed to load configuration");
+    }
+
+    internal ConfigCatalog LoadCatalogJson(string configPath)
+        => BuildCatalog(new JsonConfigDocument(ReadConfigFile(configPath)));
+
+    internal ConfigCatalog LoadCatalogYaml(string configPath)
+        => BuildCatalog(new YamlConfigDocument(ReadConfigFile(configPath)));
+
+    private static string ReadConfigFile(string configPath)
+    {
+        if (!File.Exists(configPath)) throw new FileNotFoundException(configPath);
+
+        return File.ReadAllText(configPath);
+    }
+
+    private static ConfigCatalog BuildCatalog(IConfigDocument document)
+    {
+        // A settings file from before 'General'/'Accounts' existed binds to an empty current-version
+        // config rather than failing, so check the shape explicitly and let the caller fall back to
+        // the V1 reader instead of starting up with no accounts at all.
+        if (!document.HasKey("General") && !document.HasKey("Accounts"))
+        {
+            throw new SettingsNotValidException("The settings file contains neither a 'General' nor an 'Accounts' section.");
+        }
+
+        var profiles = document.ProfileNames
+            .Select(name => KeyValuePair.Create(name, (IServerSettings)document.Bind<ServerSettings>(name)))
+            .ToList();
+
+        return new ConfigCatalog(document.Bind<ServerSettings>(null), profiles);
     }
 
     internal T LoadConfigFromDictionary<T>(IDictionary env) where T : IConfigSettable, new()

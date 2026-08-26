@@ -1,0 +1,11 @@
+{
+  "General": {
+    "Interval": 45
+  },
+  "Accounts": [
+    {
+      "ImmichServerUrl": "https://base1.example.com",
+      "ApiKey": "base1-key"
+    }
+  ]
+}

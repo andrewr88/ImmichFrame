@@ -32,6 +32,12 @@
         public MemoryNotFoundException(string message) : base(message) { }
         public MemoryNotFoundException(string message, Exception innerException) : base(message, innerException) { }
     }
+    public class ProfileNotFoundException : ImmichFrameException
+    {
+        public ProfileNotFoundException() : base() { }
+        public ProfileNotFoundException(string message) : base(message) { }
+        public ProfileNotFoundException(string message, Exception innerException) : base(message, innerException) { }
+    }
     public class SettingsNotValidException : ImmichFrameException
     {
         public SettingsNotValidException() : base() { }
