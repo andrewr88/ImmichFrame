@@ -1,8 +1,11 @@
 {
   "name": "ImmichFrame",
-  // Ships .NET 8, make, git and gcc already. The tag floats within .NET 8; pin it to a
+  // Thin layer over mcr.microsoft.com/devcontainers/dotnet:1-8.0-bookworm that drops a
+  // broken apt source; see the Dockerfile. The tag floats within .NET 8 - pin it to a
   // digest if you want builds reproducible across months rather than across machines.
-  "image": "mcr.microsoft.com/devcontainers/dotnet:1-8.0-bookworm",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
 
   "features": {
     // Node 22 to match the frontend build stage in the production Dockerfile.

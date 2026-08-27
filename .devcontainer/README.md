@@ -61,5 +61,8 @@ make api            # regenerate the TS API client — needs `make dev` running 
 ## Notes
 
 - Ports 5217, 5173 and 3000 are forwarded automatically.
-- There is no custom `Dockerfile` on purpose: the base image already carries .NET 8, make, git and
-  gcc, and everything else arrives as a devcontainer feature.
+- The `Dockerfile` exists for one reason: the base image ships an apt source for yarn signed by a
+  key it no longer carries, which makes `apt-get update` fail and takes every package-installing
+  feature down with it. Removing that source has to happen in a Dockerfile, because features are
+  layered on top of the built image. Everything else the container needs is either already in the
+  base image (.NET 8, make, git, gcc) or arrives as a feature.
