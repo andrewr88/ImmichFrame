@@ -1,0 +1,59 @@
+{
+  "name": "ImmichFrame",
+  // Ships .NET 8, make, git and gcc already. The tag floats within .NET 8; pin it to a
+  // digest if you want builds reproducible across months rather than across machines.
+  "image": "mcr.microsoft.com/devcontainers/dotnet:1-8.0-bookworm",
+
+  "features": {
+    // Node 22 to match the frontend build stage in the production Dockerfile.
+    // The docs site needs >=20, so one version covers both.
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "22"
+    },
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    // Talks to the host's Docker daemon, so `make docker-prod` and `make docker-build-prod`
+    // work from inside the container without nesting a second daemon.
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
+  },
+
+  "forwardPorts": [5217, 5173, 3000],
+  "portsAttributes": {
+    "5217": {
+      "label": "WebApi (http, + /swagger)",
+      "onAutoForward": "notify"
+    },
+    "5173": {
+      "label": "Web dev server (vite)",
+      "onAutoForward": "openPreview"
+    },
+    "3000": {
+      "label": "Docs (docusaurus)",
+      "onAutoForward": "silent"
+    }
+  },
+
+  "postCreateCommand": "./.devcontainer/post-create.sh",
+  "waitFor": "postCreateCommand",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-dotnettools.csharp",
+        "svelte.svelte-vscode",
+        "bradlc.vscode-tailwindcss",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "redhat.vscode-yaml"
+      ],
+      "settings": {
+        "dotnet.defaultSolution": "ImmichFrame.sln",
+        "files.exclude": {
+          "**/bin": true,
+          "**/obj": true
+        }
+      }
+    }
+  },
+
+  "remoteUser": "vscode"
+}
