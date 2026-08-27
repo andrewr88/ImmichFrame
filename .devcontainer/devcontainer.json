@@ -35,6 +35,21 @@
     }
   },
 
+  // Forwarded from the host shell; no secret values live in this file. TINES_DEVICE_ID is
+  // derived from the host-side folder name so this container keeps one stable identity across
+  // rebuilds, rather than minting a fresh random one and publishing under a shared device row.
+  "remoteEnv": {
+    "TINES_TOKEN": "${localEnv:TINES_TOKEN}",
+    "TINES_URL": "${localEnv:TINES_URL}",
+    "TINES_DEFAULT_WORKDIR": "${containerWorkspaceFolder}",
+    "TINES_DEVICE_ID": "${localWorkspaceFolderBasename}-devcontainer",
+    "TINES_DEVICE_NAME": "ImmichFrame"
+  },
+
+  // Keep the container running once the editor disconnects, so the Tines agent stays alive
+  // and keeps reporting.
+  "shutdownAction": "none",
+
   "postCreateCommand": "./.devcontainer/post-create.sh",
   "waitFor": "postCreateCommand",
 

@@ -26,6 +26,18 @@ else
     SEEDED_ENV=0
 fi
 
+# TINES_TOKEN and TINES_URL arrive through remoteEnv in devcontainer.json, forwarded from the
+# host shell. If they are unset - someone building this container without them - the install
+# is skipped rather than failing the setup. Note the script runs under `set -euo pipefail`, so
+# an install that does run and fails will abort postCreate; that is deliberate, but it means a
+# rebuild with the server unreachable stops here.
+if [[ -n "${TINES_TOKEN:-}" && -n "${TINES_URL:-}" ]]; then
+    echo "==> Installing Tines agent from $TINES_URL"
+    curl -sSL -H "Authorization: Bearer $TINES_TOKEN" "$TINES_URL/tines/install/" | TINES_AUTO=1 bash
+else
+    echo "==> Skipping Tines agent (TINES_TOKEN / TINES_URL not set)"
+fi
+
 cat <<'EOF'
 
 ==> Ready.
