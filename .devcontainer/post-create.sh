@@ -4,6 +4,27 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# Claude writes its config, history and credentials under $HOME, which lives in the container
+# image and is therefore thrown away on every rebuild. Symlinking it into a gitignored directory
+# inside the workspace keeps it across rebuilds without bind-mounting anything from the host.
+#
+# Guarded to containers deliberately: the rm below would delete the real ~/.claude if this script
+# were ever run on the host by hand, which the header above openly invites.
+if [ -f /.dockerenv ]; then
+    CLAUDE_DATA_DIR="$PWD/.claude-data"
+
+    mkdir -p "$CLAUDE_DATA_DIR/.claude"
+    [ -f "$CLAUDE_DATA_DIR/.claude.json" ] || echo '{}' > "$CLAUDE_DATA_DIR/.claude.json"
+
+    rm -rf "$HOME/.claude" "$HOME/.claude.json"
+    ln -sf "$CLAUDE_DATA_DIR/.claude" "$HOME/.claude"
+    ln -sf "$CLAUDE_DATA_DIR/.claude.json" "$HOME/.claude.json"
+
+    echo "==> Claude state persisted to $CLAUDE_DATA_DIR"
+else
+    echo "==> Skipping Claude state symlink (not in a container)"
+fi
+
 echo "==> Restoring .NET dependencies"
 # Also generates the Immich API client, which the Core project builds from an OpenAPI spec.
 dotnet restore ImmichFrame.sln

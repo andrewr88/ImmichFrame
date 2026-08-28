@@ -457,3 +457,6 @@ $RECYCLE.BIN/
 ## Ignore Settings file
 ImmichFrame/Settings.json
 ImmichFrame.WebApi/Config/Settings.json
+
+## Per-project Claude state, symlinked into the devcontainer (see .devcontainer/post-create.sh)
+.claude-data/
