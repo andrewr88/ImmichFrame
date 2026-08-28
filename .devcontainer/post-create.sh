@@ -59,6 +59,20 @@ else
     echo "==> Skipping Tines agent (TINES_TOKEN / TINES_URL not set)"
 fi
 
+# The Tines claude-tmux shim takes over `claude` on PATH, so tell it where the real binary is
+# rather than let it search PATH and find itself. Resolved to the versioned executable, because
+# ~/.local/bin/claude may be the shim by this point. No-op when Tines is not installed.
+if [ -d "$HOME/.tines" ]; then
+    CLAUDE_REAL="$(ls -1d "$HOME"/.local/share/claude/versions/* 2>/dev/null | sort -V | tail -1)"
+
+    if [ -x "${CLAUDE_REAL:-}" ]; then
+        printf '%s\n' "$CLAUDE_REAL" > "$HOME/.tines/claude-bin"
+        echo "==> Pointed claude-tmux at $CLAUDE_REAL"
+    else
+        echo "==> WARNING: Claude Code binary not found; claude-tmux will not start"
+    fi
+fi
+
 cat <<'EOF'
 
 ==> Ready.

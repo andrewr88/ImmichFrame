@@ -18,3 +18,14 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends tmux \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# Claude Code. Installed as the user that will actually run it, because the installer is
+# per-user: it drops a versioned binary in ~/.local/share/claude and links it from
+# ~/.local/bin, which this base image already has on PATH for both login and interactive
+# shells. A native binary, so it does not need the Node feature - which is layered on after
+# this build anyway and so would not be available here.
+USER vscode
+RUN curl -fsSL https://claude.ai/install.sh | bash
+
+# Back to root: devcontainer features are layered on top of this image and install as root.
+USER root
