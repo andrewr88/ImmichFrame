@@ -8,7 +8,7 @@ using System.Text.Encodings.Web;
 
 public class ImmichFrameAuthenticationHandler : AuthenticationHandler<AuthenticationSchemeOptions>
 {
-    private readonly string? _authenticationSecret;
+    private readonly IServerSettings _settings;
 
     public ImmichFrameAuthenticationHandler(
         IOptionsMonitor<AuthenticationSchemeOptions> options,
@@ -17,15 +17,20 @@ public class ImmichFrameAuthenticationHandler : AuthenticationHandler<Authentica
         IServerSettings settings)
         : base(options, logger, encoder)
     {
-        _authenticationSecret = settings.GeneralSettings.AuthenticationSecret;
+        _settings = settings;
     }
 
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
+        // Read per request rather than in the constructor: the settings belong to the request's
+        // configuration profile, so capturing a value at construction time bakes in whichever
+        // profile happened to build the handler.
+        var authenticationSecret = _settings.GeneralSettings.AuthenticationSecret;
+
         var endpoint = Context.GetEndpoint();
         var authorizeAttribute = endpoint?.Metadata?.GetMetadata<IAuthorizeData>();
 
-        if (_authenticationSecret == null || authorizeAttribute == null)
+        if (authenticationSecret == null || authorizeAttribute == null)
         {
             // No auth is required
             var claims = new[] { new Claim(ClaimTypes.NameIdentifier, "anonymous") };
@@ -46,7 +51,7 @@ public class ImmichFrameAuthenticationHandler : AuthenticationHandler<Authentica
         {
             var token = authHeader.Substring("Bearer ".Length).Trim();
 
-            if (token == _authenticationSecret)
+            if (token == authenticationSecret)
             {
                 var claims = new[] { new Claim(ClaimTypes.NameIdentifier, "authenticatedUser") };
                 var identity = new ClaimsIdentity(claims, Scheme.Name);

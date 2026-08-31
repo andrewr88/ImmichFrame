@@ -7,6 +7,7 @@ using ImmichFrame.Core.Logic;
 using ImmichFrame.Core.Logic.AccountSelection;
 using ImmichFrame.WebApi.Helpers;
 using ImmichFrame.WebApi.Helpers.Config;
+using ImmichFrame.WebApi.Helpers.Profiles;
 
 var builder = WebApplication.CreateBuilder(args);
 //log the version number
@@ -58,25 +59,30 @@ var configPath = Environment.GetEnvironmentVariable("IMMICHFRAME_CONFIG_PATH") ?
         ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Config");
 builder.Services.AddTransient<ConfigLoader>();
 builder.Services.AddSingleton<IConfigCatalog>(srv => srv.GetRequiredService<ConfigLoader>().LoadCatalog(configPath));
-builder.Services.AddSingleton<IServerSettings>(srv => srv.GetRequiredService<IConfigCatalog>().Default);
 
-// Register sub-settings
-builder.Services.AddSingleton<IGeneralSettings>(srv => srv.GetRequiredService<IServerSettings>().GeneralSettings);
-builder.Services.AddSingleton<IClientSettings>(srv => srv.GetRequiredService<IGeneralSettings>());
-builder.Services.AddSingleton<IServerBehaviorSettings>(srv => srv.GetRequiredService<IGeneralSettings>());
-
-// Register services
-builder.Services.AddSingleton<IWeatherService, OpenWeatherMapService>();
-builder.Services.AddSingleton<ICalendarService, IcalCalendarService>();
-builder.Services.AddSingleton<IAssetAccountTracker, BloomFilterAssetAccountTracker>();
-builder.Services.AddSingleton<Func<IList<IAccountImmichFrameLogic>, IAccountSelectionStrategy>>(srv =>
-    accounts => ActivatorUtilities.CreateInstance<TotalAccountImagesSelectionStrategy>(srv, accounts));
 builder.Services.AddHttpClient(); // Ensures IHttpClientFactory is available
 
-builder.Services.AddTransient<Func<IAccountSettings, IAccountImmichFrameLogic>>(srv =>
-    account => ActivatorUtilities.CreateInstance<PooledImmichFrameLogic>(srv, account));
+// One set of services per configuration profile, built on first use and cached for the life of
+// the process; the pools, HTTP clients and caches inside are far too expensive to rebuild.
+builder.Services.AddSingleton<ProfileRegistry>();
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<ICurrentProfile, CurrentProfile>();
 
-builder.Services.AddSingleton<IImmichFrameLogic, MultiImmichFrameLogicDelegate>();
+ProfileServices CurrentProfileServices(IServiceProvider srv) =>
+    srv.GetRequiredService<ProfileRegistry>().For(srv.GetRequiredService<ICurrentProfile>().Name);
+
+// Settings and services are scoped and resolve through the registry, so a request naming a
+// profile gets that profile's configuration while controllers go on asking for the same
+// interfaces they always have. Sub-settings keep delegating down the chain rather than each
+// reaching into the registry, so overriding one of them still overrides those below it.
+builder.Services.AddScoped<IServerSettings>(srv => CurrentProfileServices(srv).Settings);
+builder.Services.AddScoped<IGeneralSettings>(srv => srv.GetRequiredService<IServerSettings>().GeneralSettings);
+builder.Services.AddScoped<IClientSettings>(srv => srv.GetRequiredService<IGeneralSettings>());
+builder.Services.AddScoped<IServerBehaviorSettings>(srv => srv.GetRequiredService<IGeneralSettings>());
+
+builder.Services.AddScoped<IWeatherService>(srv => CurrentProfileServices(srv).WeatherService);
+builder.Services.AddScoped<ICalendarService>(srv => CurrentProfileServices(srv).CalendarService);
+builder.Services.AddScoped<IImmichFrameLogic>(srv => CurrentProfileServices(srv).Logic);
 
 builder.Services.AddControllers();
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
@@ -113,6 +119,9 @@ if (app.Environment.IsDevelopment())
 }
 
 // app.UseHttpsRedirection();
+// Ahead of authentication: the auth handler resolves the profile's settings, so an unknown
+// profile has to be turned away before it gets there.
+app.UseMiddleware<UnknownProfileMiddleware>();
 app.UseMiddleware<CustomAuthenticationMiddleware>();
 
 app.UseAuthentication();

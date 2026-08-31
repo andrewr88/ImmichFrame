@@ -1,6 +1,7 @@
 using ImmichFrame.Core.Api;
 using ImmichFrame.Core.Helpers;
 using ImmichFrame.Core.Interfaces;
+using ImmichFrame.WebApi.Helpers.Config;
 
 namespace ImmichFrame.WebApi.Helpers
 {
@@ -14,7 +15,7 @@ namespace ImmichFrame.WebApi.Helpers
         public const int MinimumSupportedMajorVersion = 3;
 
         /// <summary>
-        /// Checks and logs the version of every configured Immich server.
+        /// Checks and logs the version of every Immich server configured by any profile.
         /// </summary>
         /// <returns>
         /// <c>true</c> only if every configured Immich server was reachable and reported a version of
@@ -27,7 +28,10 @@ namespace ImmichFrame.WebApi.Helpers
             IEnumerable<IAccountSettings> accounts;
             try
             {
-                accounts = services.GetRequiredService<IServerSettings>().Accounts;
+                // Resolved from the catalog rather than IServerSettings: that is scoped now, and
+                // there is no request scope at startup. It also means every profile's servers get
+                // checked, not just the default configuration's.
+                accounts = AllAccounts(services.GetRequiredService<IConfigCatalog>());
             }
             catch (Exception ex)
             {
@@ -70,5 +74,18 @@ namespace ImmichFrame.WebApi.Helpers
 
             return allCompatible;
         }
+
+        /// <summary>
+        /// Every account across the default configuration and all profiles, deduplicated - profiles
+        /// commonly share accounts, and the same server does not need checking twice. Materialized
+        /// so a configuration problem surfaces at the call site rather than mid-iteration.
+        /// </summary>
+        private static IEnumerable<IAccountSettings> AllAccounts(IConfigCatalog catalog) =>
+            catalog.ProfileNames
+                .Select(catalog.Get)
+                .Prepend(catalog.Default)
+                .SelectMany(settings => settings.Accounts)
+                .DistinctBy(account => (account.ImmichServerUrl, account.ApiKey))
+                .ToList();
     }
 }

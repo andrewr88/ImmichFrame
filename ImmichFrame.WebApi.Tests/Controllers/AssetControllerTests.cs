@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using Moq.Protected;
 using ImmichFrame.Core.Api;
+using ImmichFrame.WebApi.Helpers.Config;
 using ImmichFrame.WebApi.Models;
 using ImmichFrame.WebApi.Tests.Mocks;
 using ImmichFrame.Core.Interfaces; // Added this back
@@ -73,10 +74,10 @@ namespace ImmichFrame.WebApi.Tests.Controllers
                             AccountsImpl = new List<ServerAccountSettings> { accountSettings }
                         };
 
-                        services.AddSingleton<IServerSettings>(serverSettings);
-                        services.AddSingleton<IGeneralSettings>(generalSettings);
-                        // Ensure IAccountSettings can be resolved if needed by MultiImmichFrameLogicDelegate directly
-                        // However, PooledImmichFrameLogic receives IAccountSettings via the factory Func
+                        // Seeding the catalog rather than IServerSettings directly: the per-profile
+                        // services are built from the catalog, so settings registered around it
+                        // would not reach the asset logic.
+                        services.AddSingleton<IConfigCatalog>(new ConfigCatalog(serverSettings));
                     });
                 });
         }
