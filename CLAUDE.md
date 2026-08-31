@@ -69,9 +69,26 @@ The core is language-agnostic; source discovery, priority, build/test commands,
 the analyzer catalog, and the arch report live in `audit/adapters/<lang>.sh`,
 selected by `AUDIT_ADAPTER`. This repo's is `audit/adapters/fullstack.sh` (the
 Makefile default) — one composite adapter for both halves of the stack, since
-the core sources exactly one file. It currently covers git-tracked C# files
-under the four project directories plus `Directory.Packages.props`; the
-TypeScript/Svelte seams are still to be written.
+the core sources exactly one file. It covers git-tracked C# files under the four
+project directories plus `Directory.Packages.props`, and git-tracked
+`*.ts`/`*.svelte`/`*.js` under `immichFrame.Web/src` plus
+`immichFrame.Web/package.json` and `immichFrame.Web/static/pwa-service-worker.js`
+— the last of those is not build configuration but hand-written code that caches
+a bearer auth secret and signs outbound video-stream requests with it, so it
+carries the highest priority on the frontend side. The oazapfts-generated
+`immichFrame.Web/src/lib/immichFrameApi.ts` is deliberately excluded — it is
+marked DO NOT MODIFY, so auditing it would queue an agent to hand-edit
+generated code.
+
+Six scan drivers: `dotnet build`, `dotnet list package --vulnerable` and
+`roslynator` for the C# half; `eslint`, `svelte-check` and `npm audit` for the
+frontend. Prettier is deliberately not a driver — formatting diffs are noise in
+a findings table, the same reason `dotnet format` is absent. `npm audit` runs a
+second pass with `--omit=dev` and seeds advisories that are unreachable from the
+production dependency graph one severity level lower, tagged `dev dependency` in
+the title, so build tooling cannot crowd out real findings. If that second
+pass fails, every advisory is kept at full severity and the driver says so —
+so a row that is not tagged `dev dependency` has genuinely been checked.
 
 **Phase 3 (`arch-sweep`) is not implemented for this repo.** The adapter defines
 no `audit_arch_*` members, and the core's placeholder substitution only covers
@@ -84,11 +101,25 @@ undefined function. Phases 1 and 2 are unaffected. `audit/adapters/go.sh` is the
 upstream reference and `audit/ADAPTERS.md` the contract. `audit/THREAT_MODEL.md` is written around Go
 tells; its issue classes carry over to C# but its code patterns do not.
 
-Requires `sqlite3`, `jq`, `curl` and `unzip` on PATH, plus the .NET 8 SDK.
-`make audit-tools` needs `curl`/`unzip` to fetch `roslynator` and the
-`Roslynator.Analyzers` assemblies — the CLI package ships none, so without them
-Roslynator's own `RCS*` rules never load and the scan reports only the
+Requires `sqlite3`, `jq`, `curl`, `unzip`, `node` and `npm` on PATH, plus the
+.NET 8 SDK. `make audit-tools` needs `curl`/`unzip` to fetch `roslynator` and
+the `Roslynator.Analyzers` assemblies — the CLI package ships none, so without
+them Roslynator's own `RCS*` rules never load and the scan reports only the
 analyzers the projects already reference.
+
+The three frontend drivers run out of `immichFrame.Web/node_modules`, so on a
+fresh clone run:
+
+```sh
+npm --prefix immichFrame.Web ci    # one-time, before the first audit-scan
+```
+
+A scan never installs dependencies itself. Without `node_modules` the three
+frontend drivers print that command as a notice and report state `missing`; the
+C# half still scans normally. Note the summary table's wording for a missing
+tool is the core's, and always reads `not installed (run 'make audit-tools')` —
+for the frontend drivers the actual remedy is the `npm ci` above, which is why
+each driver prints its own notice as it stands down.
 
 ## Agent skills
 
