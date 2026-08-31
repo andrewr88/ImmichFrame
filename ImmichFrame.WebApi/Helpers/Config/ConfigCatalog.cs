@@ -5,7 +5,7 @@ using ImmichFrame.Core.Interfaces;
 
 namespace ImmichFrame.WebApi.Helpers.Config;
 
-public class ConfigCatalog : IConfigCatalog
+public partial class ConfigCatalog : IConfigCatalog
 {
     /// <summary>
     /// Name a client can use to explicitly ask for <see cref="Default"/>. Reserved, so that a
@@ -14,8 +14,11 @@ public class ConfigCatalog : IConfigCatalog
     public const string DefaultProfileName = "default";
 
     // Profile names travel as a path segment on the web client and as a query parameter on the
-    // API, so restrict them to characters that need no escaping in either.
-    private static readonly Regex ValidProfileName = new("^[A-Za-z0-9_-]{1,64}$", RegexOptions.Compiled);
+    // API, so restrict them to characters that need no escaping in either. Anchored with \A and \z
+    // rather than ^ and $, because $ also matches just before a trailing newline - 'api\n' would
+    // otherwise pass as valid and then slip past the reserved-name check below.
+    [GeneratedRegex(@"\A[A-Za-z0-9_-]{1,64}\z")]
+    private static partial Regex ValidProfileName();
 
     // Paths the backend already serves. A profile named after one of these could never be reached
     // at /{profile} in the browser, so reject it up front rather than let it fail mysteriously.
@@ -87,7 +90,7 @@ public class ConfigCatalog : IConfigCatalog
 
     private static void ValidateProfileName(string name)
     {
-        if (!ValidProfileName.IsMatch(name))
+        if (!ValidProfileName().IsMatch(name))
         {
             throw new SettingsNotValidException(
                 $"'{name}' is not a valid configuration profile name. Use between 1 and 64 characters from A-Z, a-z, 0-9, '-' and '_'.");
