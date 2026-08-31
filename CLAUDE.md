@@ -54,8 +54,7 @@ make audit          # coverage, findings, package progress
 make audit-sweep    # generate a prompt for the next file batch
 ```
 
-Other targets: `audit-next`, `audit-findings`. (`audit-arch` exists but refuses
-— see below.)
+Other targets: `audit-next`, `audit-findings`, `audit-arch` (Phase 3 — see below).
 
 For a subcommand with no target of its own, set the adapter explicitly:
 
@@ -90,15 +89,49 @@ the title, so build tooling cannot crowd out real findings. If that second
 pass fails, every advisory is kept at full severity and the driver says so —
 so a row that is not tagged `dev dependency` has genuinely been checked.
 
-**Phase 3 (`arch-sweep`) is not implemented for this repo.** The adapter defines
-no `audit_arch_*` members, and the core's placeholder substitution only covers
-the optional Section A/B/D/E bodies — `audit/arch.sh` calls
-`audit_arch_preflight` unguarded. The adapter therefore ships a stub preflight
-that refuses with an explanatory message, so every entry point (`make
-audit-arch`, a bare `audit/audit.sh arch-sweep`, and the automatic hand-off
-after Phases 1 and 2 complete) exits non-zero cleanly rather than dying on an
-undefined function. Phases 1 and 2 are unaffected. `audit/adapters/go.sh` is the
-upstream reference and `audit/ADAPTERS.md` the contract. `audit/THREAT_MODEL.md` is written around Go
+**Phase 3 (`arch-sweep`) covers both stacks.** `make audit-arch` reports on the
+whole repo; `make audit-arch PKG=<target>` scopes it, where `<target>` is a
+subtree (`ImmichFrame.Core/Logic`) or a C# namespace
+(`ImmichFrame.Core.Logic.Pool`) — the adapter resolves the latter onto a
+directory. The SvelteKit `$lib` alias also resolves, but **not through `PKG=`**:
+make expands a command-line variable on assignment, so `PKG='$lib/stores'` is
+already `ib/stores` before the recipe runs. Use the script for that form:
+
+```sh
+AUDIT_ADAPTER=fullstack audit/audit.sh arch-sweep '$lib/stores'
+```
+
+Section A prints **two separate import subgraphs**, C# and frontend: the SPA
+reaches the API over HTTP, not through a module import, so there is no edge
+between them, and Section E's `raw-fetch` rule is what guards that boundary
+instead. C# edges come from each file's actual `namespace` declaration rather
+than from assuming namespace mirrors path — it does not, the project directories
+carry dots — and a `using` is then resolved only into projects the owning
+`.csproj` actually references (transitively). That second filter is not
+optional: `ImmichFrame.Core.csproj` has no `<ProjectReference>` at all, and two
+files under `ImmichFrame.Core/Helpers` declare a `ImmichFrame.WebApi.Helpers`
+namespace, so without it the graph invents Core → WebApi edges that cannot
+compile. If the reference graph cannot be established at all — a csproj that is
+missing, unreadable, truncated, or carries a `<ProjectReference>` with no
+readable `Include` — the run says so on stderr, suppresses every cross-project
+edge, and makes `core-to-webapi` refuse a verdict rather than print a `pass` it
+cannot justify. Section B is a **branch-keyword heuristic, not
+cyclomatic complexity**, and says so in its own header: there is no CC tool in
+this toolchain (Roslynator's CLI has no complexity command and
+`Microsoft.CodeAnalysis.Metrics` would make the audit alter the build), and
+function boundaries are pattern-matched rather than parsed. Read it as a
+ranking, not a measurement. Section E checks five invariants from
+`ARCHITECTURE.md` — `core-to-webapi`, `aspnet-in-core`, `test-in-prod`,
+`profile-leak`, `raw-fetch` — plus one hygiene rule,
+`namespace-project-mismatch`. Every rule prints a verdict with the number of
+files it read, so a genuine `pass` is never confused with a rule that had
+nothing in scope (`n/a`); `FAIL` means a layering invariant is broken and `WARN`
+means hygiene that still compiles. `core-to-webapi` resolves its `using`s
+through the same edge list Section A draws rather than grepping, so the two
+sections cannot contradict each other — a bare grep reports two hits here that
+are *not* layer inversions, and they surface under the hygiene rule instead. Phase 3 shells out to neither dotnet nor npm: it is
+git + grep + awk + sqlite3 over the tree. `audit/adapters/go.sh` is the upstream
+reference and `audit/ADAPTERS.md` the contract. `audit/THREAT_MODEL.md` is written around Go
 tells; its issue classes carry over to C# but its code patterns do not.
 
 Requires `sqlite3`, `jq`, `curl`, `unzip`, `node` and `npm` on PATH, plus the

@@ -17,12 +17,9 @@
 # See audit/ADAPTERS.md for the contract and audit/adapters/go.sh for the
 # reference implementation this follows.
 #
-# Architecture members (audit_arch_*) are deliberately ABSENT, so `arch-sweep`
-# is NOT available under this adapter. The core's placeholder substitution
-# covers only the optional Section A/B/D/E bodies; audit/arch.sh:45 calls
-# audit_arch_preflight unguarded, so running arch-sweep here dies with
-# "audit_arch_preflight: not found". The audit-arch Make target refuses with a
-# clear message instead of entering that path. Authoring them is a later task.
+# The architecture members (audit_arch_*) are implemented at the bottom of this
+# file, so `arch-sweep` works under this adapter. Phase 3 shells out to neither
+# dotnet nor npm: the whole report is git + grep + awk + sqlite3 over the tree.
 #
 # POSIX sh only. The core is `#!/bin/sh` and SOURCES this file, so a bashism
 # here breaks the core itself: no arrays, no `[[`, no `local`, no `${var,,}`.
@@ -54,6 +51,17 @@
 # REPO_ROOT, TMP_DIR, FILES_CACHE, and the helper functions lookup_fid,
 # sql_escape, rel_path, truncate_str, count_lines, apply_batch,
 # write_batch_header, write_batch_footer.
+#
+# Architecture report (used by audit/arch.sh arch-sweep). Section C is the
+# core's; A, B, D and E are this adapter's:
+#   audit_arch_preflight            Preconditions + AUDIT_ARCH_MODULE + graph inputs.
+#   audit_arch_resolve_nondir <arg> C# namespace or $lib alias -> directory.
+#   audit_arch_has_sources <dir>    Zero if <dir> holds tracked sources.
+#   audit_arch_build_graph          Both import graphs + the scoped file lists.
+#   audit_arch_section_a/_b/_d/_e   Section bodies, headers included.
+#
+# The arch members run with DB, REPO_ROOT, TMP_DIR, TARGET_SCOPE, TARGET_DIR and
+# TARGET_FILE_LIKE in scope.
 
 # ---------------------------------------------------------------------------
 # Discovery & priority
@@ -1168,25 +1176,1290 @@ scan_npmaudit() {
 }
 
 # ---------------------------------------------------------------------------
-# Architecture report — not implemented
+# Architecture report (ImmichFrame-specific analysis)
 # ---------------------------------------------------------------------------
+#
+# Phase 3. The core (audit/arch.sh) owns target resolution, Section C and report
+# assembly; everything below is the project-specific analysis it calls, in this
+# order: audit_arch_preflight -> resolve_target (which may call
+# audit_arch_resolve_nondir / audit_arch_has_sources) -> audit_arch_build_graph
+# -> sections A, B, C (core's), D, E.
+#
+# ONE repo, TWO stacks, and no import edge between them: the SvelteKit SPA talks
+# to the ASP.NET API over HTTP, not through a module import. Section A therefore
+# renders two clearly-labelled subgraphs side by side rather than pretending to a
+# single graph. Joining Svelte call sites to controller routes is a much larger
+# piece of work; the drift that actually matters there — a component bypassing
+# the generated client with a bare fetch() — is caught by Section E's raw-fetch
+# rule instead.
+#
+# Every artefact these functions share lives under $TMP_DIR with an "arch."
+# prefix, so nothing collides with the scan drivers' temp files.
+#
+# All locals are _af_-prefixed. audit/arch.sh uses bare `arg`, `resolved`,
+# `letter` and `fn` in the same shell, and audit_arch_has_sources is called
+# WITHOUT a subshell between `arg="${TARGET#./}"` and `TARGET_SCOPE="$arg"` —
+# clobbering `arg` there would silently retarget the whole report.
 
-# audit_arch_preflight: refuse arch-sweep cleanly.
+# Tunables private to the sections below. TOP_FILES (Section C) is the core's.
+AUDIT_ARCH_TOP_COMPLEXITY=15
+AUDIT_ARCH_COMPLEXITY_OVER=10
+
+# The SvelteKit `$lib` alias. SvelteKit derives it from kit.files.lib, which
+# svelte.config.js does not override, so it is the default: <root>/src/lib.
+AUDIT_ARCH_WEB_LIB="$AUDIT_WEB_ROOT/src/lib"
+
+# The UTF-8 byte-order mark, as three literal bytes.
 #
-# The core's placeholder substitution covers only the optional Section A/B/D/E
-# bodies. audit/arch.sh:45 calls this function unguarded, so WITHOUT this stub
-# every arch entry point dies with "audit_arch_preflight: not found" — and there
-# are three that never touch the Makefile guard: `audit/audit.sh arch-sweep`
-# (documented at audit/README.md:45), the command
-# .claude/skills/sweep/phase-3-architecture.md tells an agent to run, and
-# advance_to_arch_or_idle (audit.sh:772), which calls cmd_arch_sweep on its own
-# once Phases 1 and 2 complete.
+# 19 tracked .cs files in this repo start with one, and it is glued to the first
+# token: six open `<BOM>namespace ...` and eleven open `<BOM>using ...`. Every
+# pattern here anchors with ^, so without stripping it the whole first line is
+# invisible -- which silently dropped ImmichFrame.Core.Exceptions out of the
+# namespace map (it is declared ONLY in a BOM'd file) and lost five real import
+# edges whose `using` happened to be on line 1.
 #
-# Returning non-zero makes arch.sh's `|| exit 1` refuse with the message below.
-# This stub is deleted when the real audit_arch_* members land.
+# Compared with index()/substr() rather than a regex escape so it is both
+# locale-proof and awk-implementation-proof: mawk sees three bytes and gawk in a
+# UTF-8 locale sees one character, and length(bom) is right in both.
+AUDIT_ARCH_BOM="$(printf '\357\273\277')"
+
+# _af_arch_dirname <path>: repo-relative directory of a path, "." for a
+# root-level file. Parameter expansion, not dirname(1) — this is called in
+# loops over every tracked file.
+_af_arch_dirname() {
+    case "$1" in
+        */*) printf '%s' "${1%/*}" ;;
+        *)   printf '%s' "." ;;
+    esac
+}
+
+# _af_arch_cs_files: every tracked C# file in the repo, repo-relative.
+# Mirrors audit_discover_sources' C# arm (the same four projects, the same
+# obj/bin exclusion) so the graph is built over exactly the audited corpus.
+_af_arch_cs_files() {
+    for _af_arch_p in $AUDIT_CS_PROJECTS; do
+        git ls-files -- "$_af_arch_p/*.cs"
+    done \
+    | grep -Ev '(^|/)(obj|bin)/' \
+    | while IFS= read -r _af_arch_f; do [ -f "$_af_arch_f" ] && printf '%s\n' "$_af_arch_f"; done \
+    | sort -u
+}
+
+# _af_arch_web_files: every tracked frontend source in the repo, repo-relative.
+# The oazapfts-generated client is excluded for the same reason discovery skips
+# it — it is machine-written and marked DO NOT MODIFY, so its own imports are
+# not architecture anyone authored. It remains a valid import TARGET, and edges
+# into it land on its directory ($lib) like any other file there.
+_af_arch_web_files() {
+    git ls-files -- "$AUDIT_WEB_ROOT/src/*.ts" "$AUDIT_WEB_ROOT/src/*.svelte" \
+                    "$AUDIT_WEB_ROOT/src/*.js" "$AUDIT_WEB_SERVICE_WORKER" \
+    | grep -Fxv "$AUDIT_WEB_GENERATED" \
+    | while IFS= read -r _af_arch_f; do [ -f "$_af_arch_f" ] && printf '%s\n' "$_af_arch_f"; done \
+    | sort -u
+}
+
+# audit_arch_preflight: verify preconditions, publish AUDIT_ARCH_MODULE, and
+# stash the one graph input that has to exist BEFORE the core resolves the
+# target — the C# namespace -> directory map, which audit_arch_resolve_nondir
+# reads to turn `ImmichFrame.Core.Logic.Pool` into a path.
+#
+# Preconditions are deliberately narrow: this returns non-zero only when the
+# report genuinely cannot be produced (arch.sh does `audit_arch_preflight ||
+# exit 1`). An empty subtree, a missing node_modules, an absent roslynator —
+# none of those are failures here. Nothing in Phase 3 shells out to dotnet or
+# npm at all: the whole report is git + grep + awk + sqlite3 over the tree, so
+# it works on a machine with neither toolchain installed.
 audit_arch_preflight() {
-    echo "arch-sweep: the fullstack adapter implements no audit_arch_* members" >&2
-    echo "  (see audit/ADAPTERS.md, 'Architecture report'). Phase 1 (sweep) and" >&2
-    echo "  Phase 2 (deep-sweep) are unaffected." >&2
-    return 1
+    if ! command -v git >/dev/null 2>&1; then
+        echo "arch-sweep: git not found on PATH; the import graph is built from the git index." >&2
+        return 1
+    fi
+    if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        echo "arch-sweep: $REPO_ROOT is not a git work tree." >&2
+        return 1
+    fi
+    if [ ! -f "ImmichFrame.sln" ]; then
+        echo "arch-sweep: ImmichFrame.sln not found in $REPO_ROOT;" >&2
+        echo "  arch-sweep must be run from the repository root." >&2
+        return 1
+    fi
+
+    # Report header. Names the repo and BOTH stacks, since a reader seeing only
+    # "ImmichFrame" would not know the report spans a C# solution and an SPA.
+    _af_arch_tfm="$(sed -n 's/.*<TargetFramework>\([^<]*\)<.*/\1/p' Directory.Build.props 2>/dev/null | head -1)"
+    [ -n "$_af_arch_tfm" ] || _af_arch_tfm="unknown-tfm"
+    _af_arch_nproj="$(printf '%s\n' $AUDIT_CS_PROJECTS | wc -l | tr -d ' ')"
+    AUDIT_ARCH_MODULE="ImmichFrame.sln (C# $_af_arch_tfm, $_af_arch_nproj projects) + $AUDIT_WEB_ROOT (SvelteKit/TypeScript)"
+
+    # Assert the csproj files are there and readable before anything relies on
+    # the reference graph they define. Not fatal: the frontend half of the
+    # report, Section C and the file-size ranking are all still valid, so this
+    # degrades the C# analysis loudly rather than killing the whole run.
+    _af_arch_check_csprojs
+
+    # Namespace -> directory map, from the ACTUAL `namespace` declarations
+    # rather than by substituting '/' for '.'. ARCHITECTURE.md says the two
+    # track each other, but the mapping is not mechanical: the project
+    # directories carry dots (ImmichFrame.Core.Tests/Logic/Pool declares
+    # `namespace ImmichFrame.Core.Tests.Logic.Pool`), so a naive substitution
+    # would produce ImmichFrame/Core/Tests/Logic/Pool and resolve nothing.
+    # Both declaration forms are handled: file-scoped (`namespace X;`) and
+    # block-scoped (`namespace X` followed by `{`).
+    _af_arch_cs_files > "$TMP_DIR/arch.cs.files"
+    awk -v bom="$AUDIT_ARCH_BOM" '
+    {
+        f = $0
+        ns = ""
+        nsline = 0
+        lno = 0
+        while ((getline line < f) > 0) {
+            lno++
+            if (lno == 1 && index(line, bom) == 1) line = substr(line, length(bom) + 1)
+            if (line ~ /^[ \t]*namespace[ \t]+/) {
+                sub(/^[ \t]*namespace[ \t]+/, "", line)
+                sub(/[ \t]*[;{].*$/, "", line)
+                sub(/[ \t]+$/, "", line)
+                if (line != "") { ns = line; nsline = lno; break }
+            }
+        }
+        close(f)
+        if (ns == "") next
+        d = f
+        if (sub(/\/[^\/]*$/, "", d) == 0) d = "."
+        print ns "\t" d "\t" f "\t" nsline
+    }' "$TMP_DIR/arch.cs.files" | sort -u > "$TMP_DIR/arch.ns.decl"
+
+    # Two derived views of the same scan. arch.ns.map is the lookup the graph
+    # and audit_arch_resolve_nondir use (namespace -> directory, deduped, so a
+    # namespace declared by four files in one directory yields one row).
+    # arch.ns.decl keeps per-FILE provenance, which Section E's
+    # namespace-project-mismatch rule needs to print a file:line.
+    cut -f1,2 "$TMP_DIR/arch.ns.decl" | sort -u > "$TMP_DIR/arch.ns.map"
+
+    # Not fatal: a repo state with no tracked C# still has a frontend to report
+    # on, and the sections say so per-subgraph rather than the whole run dying.
+    if [ ! -s "$TMP_DIR/arch.ns.map" ]; then
+        echo "arch-sweep: no C# namespace declarations found in the tracked corpus;" >&2
+        echo "  the C# subgraph will be reported as empty." >&2
+    fi
+    return 0
+}
+
+# AUDIT_ARCH_PROJREFS_OK: "yes" once the compile-time project reference graph
+# has been established from the csproj files; "no" if anything prevented that.
+#
+# It gates two things, because both are only sound with a trustworthy graph:
+# Section A's cross-project C# edges, and Section E's core-to-webapi FAIL rule.
+# A rule that cannot establish its premise must not print `pass`.
+AUDIT_ARCH_PROJREFS_OK=yes
+AUDIT_ARCH_PROJREFS_WHY=""
+
+_af_arch_projrefs_fail() {
+    AUDIT_ARCH_PROJREFS_OK=no
+    if [ -z "$AUDIT_ARCH_PROJREFS_WHY" ]; then
+        AUDIT_ARCH_PROJREFS_WHY="$1"
+    else
+        AUDIT_ARCH_PROJREFS_WHY="$AUDIT_ARCH_PROJREFS_WHY; $1"
+    fi
+}
+
+# _af_arch_check_csprojs: assert every project in AUDIT_CS_PROJECTS has at least
+# one readable, non-empty csproj that actually looks like an MSBuild project.
+#
+# Called from preflight, BEFORE anything depends on the answer. A project whose
+# csproj is missing, unreadable or truncated silently loses its outgoing
+# references, and the only visible symptom is a rule quietly reporting `pass` --
+# so the condition is detected up front and announced, not inferred later from
+# an empty result.
+# _af_arch_csproj_wellformed <file>: zero if <file> is a COMPLETE MSBuild
+# project -- a root <Project> element that is actually closed.
+#
+# Both halves are load-bearing, and a substring test gets both wrong:
+#
+#   * `grep -q '<Project'` also matches <ProjectReference, so a fragment holding
+#     nothing but reference elements passes as a project file.
+#   * checking only for the opening tag accepts a write cut short AFTER it.
+#     That file parses to zero references without erroring -- the precise
+#     "could not parse" case that must never be read as "genuinely empty".
+#     Requiring the close is what separates the two.
+#
+# So the root tag is matched as <Project followed by a non-name character, and
+# the element must be closed by </Project> or be self-closing. The self-closing
+# test also anchors on that non-name character, otherwise
+# `<ProjectReference ... />` in a truncated file would satisfy it.
+_af_arch_csproj_wellformed() {
+    awk '
+    { buf = buf " " $0 }
+    END {
+        if (!(match(buf, /<Project[ \t>]/) || match(buf, /<Project\/>/))) exit 1
+        if (index(buf, "</Project>") > 0) exit 0
+        if (match(buf, /<Project[ \t][^>]*\/>/) || match(buf, /<Project\/>/)) exit 0
+        exit 1
+    }' "$1" 2>/dev/null
+}
+
+_af_arch_check_csprojs() {
+    for _af_arch_cp in $AUDIT_CS_PROJECTS; do
+        _af_arch_cpok=no
+        _af_arch_cpsaw=no
+        for _af_arch_cpf in "$_af_arch_cp"/*.csproj; do
+            [ -f "$_af_arch_cpf" ] && [ -r "$_af_arch_cpf" ] && [ -s "$_af_arch_cpf" ] || continue
+            _af_arch_cpsaw=yes
+            _af_arch_csproj_wellformed "$_af_arch_cpf" || continue
+            _af_arch_cpok=yes
+        done
+        if [ "$_af_arch_cpok" != yes ]; then
+            if [ "$_af_arch_cpsaw" = yes ]; then
+                _af_arch_projrefs_fail "$_af_arch_cp/ has a csproj with no closed <Project> element (truncated or malformed)"
+            else
+                _af_arch_projrefs_fail "no readable MSBuild csproj under $_af_arch_cp/"
+            fi
+        fi
+    done
+
+    if [ "$AUDIT_ARCH_PROJREFS_OK" != yes ]; then
+        echo "arch-sweep: cannot establish the C# project reference graph." >&2
+        echo "  $AUDIT_ARCH_PROJREFS_WHY" >&2
+        echo "  Section A's cross-project C# edges are unverified and the" >&2
+        echo "  core-to-webapi rule will refuse to render a verdict." >&2
+    fi
+    return 0
+}
+
+# _af_arch_build_projrefs: write $TMP_DIR/arch.proj.refs, one "<from>|<to>" row
+# per project pair whose compile-time reference is real, reflexive rows
+# included.
+#
+# This is what keeps Section A honest. A C# `using N;` does NOT reach every
+# directory that declares N -- it reaches the members of N in THIS assembly and
+# in assemblies this project references. ImmichFrame.Core.csproj carries no
+# <ProjectReference> at all, so a `using ImmichFrame.WebApi.Helpers;` inside
+# ImmichFrame.Core cannot possibly bind to ImmichFrame.WebApi/Helpers; it binds
+# to the two files under ImmichFrame.Core/Helpers that declare that namespace
+# from inside Core. Emitting the WebApi edges anyway invented four upward
+# Core -> WebApi edges that cannot compile, contradicting both ARCHITECTURE.md's
+# one-way rule and Section E on the same page.
+#
+# The closure is transitive because C# project references are: ImmichFrame.
+# WebApi.Tests references only WebApi, yet its files legitimately `using
+# ImmichFrame.Core.*` through it.
+#
+# Read from the csproj files rather than hardcoded, so the guard follows the
+# reference graph if it ever changes.
+#
+# Parsing notes. MSBuild is XML, and the previous single-line double-quote-only
+# sed missed several perfectly legal spellings -- each of which silently
+# produced a clean core-to-webapi `pass` over a repo that had a real violation:
+#
+#   * an attribute on a continuation line (<ProjectReference\n  Include="...">),
+#     so the element is accumulated across lines before Include is extracted;
+#   * a single-quoted Include='...', so both quote styles are accepted (spelled
+#     \047 / \042 to keep the awk program single-quotable in sh);
+#   * a csproj whose basename differs from its directory
+#     (ImmichFrame.WebApi/WebApi.csproj). Taking the referenced project's name
+#     from the csproj BASENAME produced a bogus "WebApi" row and dropped the
+#     real allow-rule. The Include path is now resolved relative to the
+#     referring project directory and reduced to the referenced DIRECTORY,
+#     which is the key the rest of the graph uses.
+#
+# "Parsed, and genuinely empty" is a legitimate answer -- Core really has zero
+# references. It is distinguished from "could not parse" by the csproj assertion
+# in preflight plus the unparsable-element marker below, never by row count.
+_af_arch_build_projrefs() {
+    : > "$TMP_DIR/arch.proj.direct"
+    : > "$TMP_DIR/arch.proj.unparsed"
+    for _af_arch_pr in $AUDIT_CS_PROJECTS; do
+        printf '%s|%s\n' "$_af_arch_pr" "$_af_arch_pr" >> "$TMP_DIR/arch.proj.direct"
+        for _af_arch_csproj in "$_af_arch_pr"/*.csproj; do
+            [ -f "$_af_arch_csproj" ] && [ -r "$_af_arch_csproj" ] || continue
+            _af_arch_pawk=0
+            awk -v from="$_af_arch_pr" -v self="$_af_arch_csproj" '
+            function norm(p,   n, a, i, m, out, s) {
+                n = split(p, a, "/")
+                m = 0
+                for (i = 1; i <= n; i++) {
+                    if (a[i] == "" || a[i] == ".") continue
+                    if (a[i] == "..") { if (m > 0) m--; continue }
+                    out[++m] = a[i]
+                }
+                s = ""
+                for (i = 1; i <= m; i++) s = s (i > 1 ? "/" : "") out[i]
+                return s
+            }
+            { buf = buf " " $0 }
+            END {
+                # Directory the Include paths are relative to: the referring
+                # csproj own directory.
+                base = self
+                if (sub(/\/[^\/]*$/, "", base) == 0) base = "."
+                while (match(buf, /<ProjectReference[^>]*>/)) {
+                    el = substr(buf, RSTART, RLENGTH)
+                    buf = substr(buf, RSTART + RLENGTH)
+                    if (!match(el, /Include[ \t]*=[ \t]*[\047\042][^\047\042]*[\047\042]/)) {
+                        print "UNPARSED\t" self
+                        continue
+                    }
+                    v = substr(el, RSTART, RLENGTH)
+                    sub(/^Include[ \t]*=[ \t]*./, "", v)
+                    sub(/.$/, "", v)
+                    gsub(/\\/, "/", v)
+                    if (v == "") { print "UNPARSED\t" self; continue }
+                    # Resolve to the referenced csproj path, then to its
+                    # directory -- the project key the graph is built on.
+                    full = norm(base "/" v)
+                    dir = full
+                    if (sub(/\/[^\/]*$/, "", dir) == 0) dir = "."
+                    if (dir == "") { print "UNPARSED\t" self; continue }
+                    print "REF\t" from "|" dir
+                }
+            }' "$_af_arch_csproj" > "$TMP_DIR/arch.proj.one" || _af_arch_pawk=$?
+            if [ "$_af_arch_pawk" -ne 0 ]; then
+                _af_arch_projrefs_fail "failed to parse $_af_arch_csproj (awk exit $_af_arch_pawk)"
+                continue
+            fi
+            grep '^UNPARSED	' "$TMP_DIR/arch.proj.one" \
+                >> "$TMP_DIR/arch.proj.unparsed" || :
+            sed -n 's/^REF\t//p' "$TMP_DIR/arch.proj.one" \
+                >> "$TMP_DIR/arch.proj.direct" || :
+        done
+    done
+
+    if [ -s "$TMP_DIR/arch.proj.unparsed" ]; then
+        _af_arch_projrefs_fail \
+            "$(wc -l < "$TMP_DIR/arch.proj.unparsed" | tr -d ' ') <ProjectReference> element(s) with no readable Include"
+        echo "arch-sweep: unparsable <ProjectReference> element(s):" >&2
+        sort -u "$TMP_DIR/arch.proj.unparsed" | sed 's/^UNPARSED\t/  /' >&2
+    fi
+
+    _af_arch_cawk=0
+    awk -F'|' '
+    { ref[$1, $2] = 1
+      if (!($1 in seen)) { seen[$1] = 1; plist[++np] = $1 }
+      if (!($2 in seen)) { seen[$2] = 1; plist[++np] = $2 } }
+    END {
+        # Fixpoint transitive closure. `(a, b) in ref` is used throughout
+        # rather than ref[a, b] because the `in` operator does not create the
+        # element -- a bare subscript reference would, and every pair would
+        # then test true.
+        changed = 1
+        while (changed) {
+            changed = 0
+            for (i = 1; i <= np; i++)
+                for (j = 1; j <= np; j++) {
+                    if (!((plist[i], plist[j]) in ref)) continue
+                    for (k = 1; k <= np; k++)
+                        if ((plist[j], plist[k]) in ref && !((plist[i], plist[k]) in ref)) {
+                            ref[plist[i], plist[k]] = 1
+                            changed = 1
+                        }
+                }
+        }
+        for (i = 1; i <= np; i++)
+            for (k = 1; k <= np; k++)
+                if ((plist[i], plist[k]) in ref) print plist[i] "|" plist[k]
+    }' "$TMP_DIR/arch.proj.direct" > "$TMP_DIR/arch.proj.refs.raw" || _af_arch_cawk=$?
+    if [ "$_af_arch_cawk" -ne 0 ]; then
+        _af_arch_projrefs_fail "reference closure failed (awk exit $_af_arch_cawk)"
+        : > "$TMP_DIR/arch.proj.refs"
+        return 0
+    fi
+    sort -u "$TMP_DIR/arch.proj.refs.raw" > "$TMP_DIR/arch.proj.refs"
+
+    # Reflexive rows are emitted unconditionally, so one row per project is the
+    # floor. Fewer means the closure lost projects, which is a parse problem,
+    # not a repo with no references.
+    _af_arch_nproj=$(printf '%s\n' $AUDIT_CS_PROJECTS | wc -l | tr -d ' ')
+    if [ "$(wc -l < "$TMP_DIR/arch.proj.refs" | tr -d ' ')" -lt "$_af_arch_nproj" ]; then
+        _af_arch_projrefs_fail "reference closure is smaller than the project count"
+    fi
+    return 0
+}
+
+# audit_arch_resolve_nondir <arg>: map a non-directory target onto a
+# repo-relative directory. Called by the core only after its own `[ -d ]` test
+# has already failed, inside a command substitution, and its output is used only
+# if non-empty — so printing nothing is the correct "I can't map this".
+#
+# Two forms, one per stack:
+#   $lib/stores                  -> immichFrame.Web/src/lib/stores   (SvelteKit alias)
+#   ImmichFrame.Core.Logic.Pool  -> ImmichFrame.Core/Logic/Pool      (C# namespace)
+#
+# The namespace arm is a lookup in the declaration map built by preflight, never
+# a dot-to-slash substitution; see the comment there for why. A namespace
+# declared in more than one directory (this repo has one) resolves to the first
+# in sorted order — any of them is a defensible target, and the report header
+# echoes the subtree that was actually chosen.
+audit_arch_resolve_nondir() {
+    _af_arch_a="$1"
+    case "$_af_arch_a" in
+        '$lib')
+            printf '%s' "$AUDIT_ARCH_WEB_LIB"
+            return 0 ;;
+        '$lib/'*)
+            printf '%s' "$AUDIT_ARCH_WEB_LIB/${_af_arch_a#\$lib/}"
+            return 0 ;;
+    esac
+    [ -f "$TMP_DIR/arch.ns.map" ] || return 0
+    awk -F'\t' -v ns="$_af_arch_a" '$1 == ns { printf "%s", $2; exit }' "$TMP_DIR/arch.ns.map"
+    return 0
+}
+
+# audit_arch_has_sources <dir>: zero if <dir> holds sources this audit tracks.
+#
+# The test is against the files table, not the filesystem, and deliberately so:
+# every section below is built from that table scoped by TARGET_FILE_LIKE, so a
+# directory with no rows in it yields a report with nothing in any section. A
+# filesystem test would pass docs/ (Docusaurus ships .js and .ts) and hand the
+# operator five empty sections instead of the core's "contains no source files".
+# The LIKE pattern is exactly the TARGET_FILE_LIKE the core is about to build,
+# so what this accepts and what the sections can see cannot drift apart.
+audit_arch_has_sources() {
+    _af_arch_hsdir=$(printf '%s' "$1" | sed "s/'/''/g")
+    _af_arch_hs=$(sqlite3 "$DB" \
+        "SELECT 1 FROM files WHERE path LIKE '$_af_arch_hsdir/%' LIMIT 1;" 2>/dev/null)
+    [ -n "$_af_arch_hs" ]
+}
+
+# audit_arch_build_graph: build BOTH import graphs and the scoped file lists the
+# sections read. Artefacts written under $TMP_DIR:
+#
+#   arch.scope.files     tracked files in scope (from the files table)
+#   arch.scope.cs.pkgs   in-scope C# package directories
+#   arch.scope.web.pkgs  in-scope frontend package directories
+#   arch.proj.refs       "<from-proj>|<to-proj>" compile-time reference closure
+#   arch.edges.cs        "<from-dir>|<to-dir>", repo-wide, deduped
+#   arch.edges.cs.detail the same edges plus "|<file>|<line>" provenance
+#   arch.edges.web       ditto for the frontend
+#
+# Edges are repo-wide even when the target is scoped, because fan-IN for an
+# in-scope package comes from importers that may sit outside the scope. Only the
+# package lists are scoped; that is what go.sh does with rel.imports vs
+# target.rel.
+#
+# Returns non-zero ONLY on a genuine toolchain failure — the core exits the whole
+# run on non-zero. A scope holding no packages is not a failure; the sections
+# report it as an empty scope.
+audit_arch_build_graph() {
+    # ---- in-scope file lists, straight from the audited corpus -------------
+    sqlite3 "$DB" "
+        SELECT path FROM files
+        WHERE path LIKE '$TARGET_FILE_LIKE'
+        ORDER BY path;" > "$TMP_DIR/arch.scope.files" || {
+        echo "arch-sweep: failed to read the files table from $DB." >&2
+        return 1
+    }
+
+    _af_arch_build_projrefs
+
+    grep -E '\.cs$' "$TMP_DIR/arch.scope.files" > "$TMP_DIR/arch.scope.cs.files" || :
+    grep -E '\.(ts|js|svelte)$' "$TMP_DIR/arch.scope.files" > "$TMP_DIR/arch.scope.web.files" || :
+
+    awk '{ d = $0; if (sub(/\/[^\/]*$/, "", d) == 0) d = "."; print d }' \
+        "$TMP_DIR/arch.scope.cs.files" | sort -u > "$TMP_DIR/arch.scope.cs.pkgs"
+    awk '{ d = $0; if (sub(/\/[^\/]*$/, "", d) == 0) d = "."; print d }' \
+        "$TMP_DIR/arch.scope.web.files" | sort -u > "$TMP_DIR/arch.scope.web.pkgs"
+
+    # ---- C# edges ---------------------------------------------------------
+    # For every tracked .cs file: read its `using` lines, keep only the
+    # ImmichFrame.* ones (framework and third-party namespaces are not internal
+    # edges), and resolve each through the declaration map to a directory.
+    # `using static X`, `using Alias = X` and `global using X` all reduce to the
+    # first ImmichFrame.* token on the line, so one match handles every form.
+    # A using that resolves to the file's own directory is dropped: a package
+    # does not depend on itself.
+    #
+    # One namespace can be declared in SEVERAL directories, and in this repo one
+    # is: ImmichFrame.WebApi.Helpers is declared under ImmichFrame.WebApi/Helpers,
+    # under ImmichFrame.WebApi/Helpers/Config, AND by two files that physically
+    # sit under ImmichFrame.Core/Helpers. The map is therefore multi-valued --
+    # but a `using` only binds within the compiling assembly and the assemblies
+    # it references, so a candidate directory in an UNREFERENCED project is
+    # discarded (see _af_arch_build_projrefs). Without that filter this emitted
+    # four Core -> WebApi edges that cannot compile, and for WebhookHelper.cs it
+    # replaced a same-directory reference with two cross-project ones, because
+    # the only true target was its own directory and was dropped as a self-edge.
+    #
+    # Output carries provenance -- "<from-dir>|<to-dir>|<file>|<line>" -- so
+    # Section E can report a resolved violation at file:line off exactly the
+    # edges Section A drew. The two cannot disagree because they are one list.
+    : > "$TMP_DIR/arch.edges.cs.detail"
+    : > "$TMP_DIR/arch.edges.cs"
+    if [ -s "$TMP_DIR/arch.cs.files" ] && [ -s "$TMP_DIR/arch.ns.map" ]; then
+        awk -F'\t' -v nsmap="$TMP_DIR/arch.ns.map" \
+                   -v prefs="$TMP_DIR/arch.proj.refs" \
+                   -v projects="$AUDIT_CS_PROJECTS" \
+                   -v bom="$AUDIT_ARCH_BOM" '
+        function projof(dir,   i, best) {
+            # LONGEST project name that prefixes this directory on a path
+            # boundary. First-match would be wrong the moment one project
+            # directory nests inside another; the "/" boundary happens to save
+            # it today (ImmichFrame.Core does not prefix
+            # ImmichFrame.Core.Tests/x because "." != "/"), but the WARN rule
+            # below already does longest-match and the two must agree.
+            best = ""
+            for (i = 1; i <= nproj; i++)
+                if ((dir == proj[i] || index(dir, proj[i] "/") == 1) \
+                    && length(proj[i]) > length(best)) best = proj[i]
+            return best
+        }
+        BEGIN { nproj = split(projects, proj, " ") }
+        # The appended value is computed into a temp FIRST: writing
+        # nsdir[$1] = (($1 in nsdir) ? ...) makes awk create the array element
+        # for the assignment target before evaluating the condition, so the
+        # `in` test is always true and every namespace picks up a leading
+        # empty directory.
+        FILENAME == nsmap {
+            v = ($1 in nsdir) ? nsdir[$1] SUBSEP $2 : $2
+            nsdir[$1] = v
+            next
+        }
+        FILENAME == prefs { split($0, pr, "|"); allow[pr[1], pr[2]] = 1; next }
+        {
+            f = $0
+            d = f
+            if (sub(/\/[^\/]*$/, "", d) == 0) d = "."
+            dp = projof(d)
+            lno = 0
+            while ((getline line < f) > 0) {
+                lno++
+                if (lno == 1 && index(line, bom) == 1) line = substr(line, length(bom) + 1)
+                if (line !~ /^[ \t]*(global[ \t]+)?using[ \t]/) continue
+                if (!match(line, /ImmichFrame(\.[A-Za-z_][A-Za-z0-9_]*)+/)) continue
+                ns = substr(line, RSTART, RLENGTH)
+                if (!(ns in nsdir)) continue
+                k = split(nsdir[ns], dirs, SUBSEP)
+                for (j = 1; j <= k; j++) {
+                    t = dirs[j]
+                    if (t == "" || t == d) continue
+                    tp = projof(t)
+                    # Cross-project only where a real (transitive) project
+                    # reference backs it. Unknown-project dirs are left alone.
+                    if (dp != "" && tp != "" && dp != tp && !((dp, tp) in allow)) continue
+                    print d "|" t "|" f "|" lno
+                }
+            }
+            close(f)
+        }' "$TMP_DIR/arch.ns.map" "$TMP_DIR/arch.proj.refs" "$TMP_DIR/arch.cs.files" \
+        | sort -u > "$TMP_DIR/arch.edges.cs.detail"
+        cut -d'|' -f1,2 "$TMP_DIR/arch.edges.cs.detail" | sort -u > "$TMP_DIR/arch.edges.cs"
+    fi
+
+    # ---- frontend edges ---------------------------------------------------
+    # Two passes, because resolving a module specifier needs the filesystem and
+    # awk cannot stat. Pass 1 (awk) extracts and normalises each specifier into
+    # a candidate repo path; pass 2 (shell) turns that candidate into the
+    # directory it actually names.
+    #
+    # Bare specifiers (`svelte`, `@sveltejs/kit`, `luxon`) are skipped: they are
+    # node_modules packages, not internal structure.
+    _af_arch_web_files > "$TMP_DIR/arch.web.files"
+    : > "$TMP_DIR/arch.edges.web"
+    if [ -s "$TMP_DIR/arch.web.files" ]; then
+        awk -v lib="$AUDIT_ARCH_WEB_LIB" -v bom="$AUDIT_ARCH_BOM" '
+        function norm(p,   n, a, i, m, out, s) {
+            n = split(p, a, "/")
+            m = 0
+            for (i = 1; i <= n; i++) {
+                if (a[i] == "" || a[i] == ".") continue
+                if (a[i] == "..") { if (m > 0) m--; continue }
+                out[++m] = a[i]
+            }
+            s = ""
+            for (i = 1; i <= m; i++) s = s (i > 1 ? "/" : "") out[i]
+            return s
+        }
+        {
+            f = $0
+            d = f
+            if (sub(/\/[^\/]*$/, "", d) == 0) d = "."
+            lno = 0
+            while ((getline line < f) > 0) {
+                lno++
+                if (lno == 1 && index(line, bom) == 1) line = substr(line, length(bom) + 1)
+                # `from "x"` covers static imports and re-exports; the other two
+                # forms are side-effect imports and dynamic import("x").
+                if (match(line, /from[ \t]*["'"'"'][^"'"'"']+["'"'"']/)) {
+                    s = substr(line, RSTART, RLENGTH)
+                } else if (match(line, /import[ \t]*\([ \t]*["'"'"'][^"'"'"']+["'"'"']/)) {
+                    s = substr(line, RSTART, RLENGTH)
+                } else if (match(line, /^[ \t]*import[ \t]+["'"'"'][^"'"'"']+["'"'"']/)) {
+                    s = substr(line, RSTART, RLENGTH)
+                } else continue
+                if (!match(s, /["'"'"'][^"'"'"']+["'"'"']/)) continue
+                spec = substr(s, RSTART + 1, RLENGTH - 2)
+                if (spec ~ /^\$lib$/)        p = lib
+                else if (spec ~ /^\$lib\//)  p = lib "/" substr(spec, 6)
+                else if (spec ~ /^\.\.?\//)  p = norm(d "/" spec)
+                else continue
+                if (p == "") continue
+                print d "|" p
+            }
+            close(f)
+        }' "$TMP_DIR/arch.web.files" > "$TMP_DIR/arch.web.rawimports"
+
+        while IFS='|' read -r _af_arch_src _af_arch_p; do
+            [ -n "$_af_arch_p" ] || continue
+            if [ -f "$_af_arch_p" ] || [ -f "$_af_arch_p.ts" ] || [ -f "$_af_arch_p.js" ] \
+               || [ -f "$_af_arch_p.svelte" ] || [ -f "$_af_arch_p.d.ts" ]; then
+                _af_arch_dst="$(_af_arch_dirname "$_af_arch_p")"
+            elif [ -d "$_af_arch_p" ]; then
+                _af_arch_dst="$_af_arch_p"
+            else
+                # Unresolvable on disk — SvelteKit's generated ./$types is the
+                # common case. The DIRECTORY is still the right answer for a
+                # package-level graph, and a self-edge is dropped just below.
+                _af_arch_dst="$(_af_arch_dirname "$_af_arch_p")"
+            fi
+            [ "$_af_arch_dst" = "$_af_arch_src" ] && continue
+            printf '%s|%s\n' "$_af_arch_src" "$_af_arch_dst"
+        done < "$TMP_DIR/arch.web.rawimports" | sort -u > "$TMP_DIR/arch.edges.web"
+    fi
+    return 0
+}
+
+# _af_arch_fanout_fanin <pkg-list> <edge-file> <width>: render one fan-in /
+# fan-out subtable. Shared by both subgraphs in Section A so the two are
+# guaranteed to be computed the same way.
+_af_arch_fanout_fanin() {
+    printf "  %-${3}s %-9s %s\n" "Package" "Fan-out" "Fan-in (importers)"
+    printf "  %-${3}s %-9s %s\n" \
+        "$(printf '%*s' "$3" '' | tr ' ' '-')" "---------" "----------------------------------"
+    # The edge file is matched by FILENAME, not by FNR == NR: an empty edge file
+    # contributes no records at all, and FNR == NR would then silently treat the
+    # package list as the edge list and print nothing.
+    awk -F'|' -v w="$3" -v ef="$2" '
+    FILENAME == ef { out[$1]++; nin[$2]++
+                     imp[$2] = (imp[$2] == "" ? $1 : imp[$2] "," $1); next }
+    {
+        p = $0
+        s = imp[p]
+        n = nin[p] + 0
+        if (s != "") {
+            k = split(s, a, ",")
+            s = ""
+            for (i = 1; i <= k && i <= 3; i++) s = s (i > 1 ? ", " : "") a[i]
+            if (k > 3) s = s ", ..."
+            printf "  %-" w "s %-9d %d  (%s)\n", p, out[p] + 0, n, s
+        } else {
+            printf "  %-" w "s %-9d %d\n", p, out[p] + 0, n
+        }
+    }' "$2" "$1"
+}
+
+# -------- Section A: Import graph (fan-in / fan-out) ------------------
+
+audit_arch_section_a() {
+    echo ""
+    echo "=== Section A: Import graph ==="
+    echo ""
+    echo "  Two subgraphs, deliberately NOT merged: the SPA reaches the API over HTTP,"
+    echo "  not through a module import, so there is no edge to draw between them."
+    echo "  Section E's raw-fetch rule is what guards that boundary."
+
+    echo ""
+    echo "  -- C# (using ImmichFrame.* resolved via namespace declarations) --"
+    echo ""
+    if [ "$AUDIT_ARCH_PROJREFS_OK" != yes ]; then
+        echo "  [!] the project reference graph could not be established"
+        echo "      ($AUDIT_ARCH_PROJREFS_WHY)."
+        # How much is missing depends on WHICH degradation happened. Losing one
+        # csproj or one Include leaves every surviving allow row intact, so the
+        # table is usually still mostly right and still shows cross-project
+        # rows; only a failed closure empties the allow-list outright. Claiming
+        # "within-project structure only" in the partial case points a reader
+        # away from cross-project rows that are sitting right in front of them.
+        if [ -s "$TMP_DIR/arch.proj.refs" ]; then
+            echo "      SOME cross-project edges may be missing: the allow-list was built"
+            echo "      from the csproj files that could be read, so edges permitted only"
+            echo "      by one that could not are absent. Rows below are still real."
+        else
+            echo "      The allow-list is EMPTY, so every cross-project edge is suppressed"
+            echo "      and the table below shows within-project structure only."
+        fi
+        echo "      Either way the error is one of omission — an unverified reference is"
+        echo "      dropped, never invented — so do not read a fan-in here as complete."
+        echo ""
+    fi
+    if [ ! -f "$TMP_DIR/arch.edges.cs" ] || [ ! -f "$TMP_DIR/arch.scope.cs.pkgs" ]; then
+        echo "  [!] the C# import graph was not built; cannot report fan-in/fan-out."
+    elif [ ! -s "$TMP_DIR/arch.scope.cs.pkgs" ]; then
+        echo "  (no tracked C# sources in scope '$TARGET_SCOPE')"
+    else
+        _af_arch_fanout_fanin "$TMP_DIR/arch.scope.cs.pkgs" "$TMP_DIR/arch.edges.cs" 46
+    fi
+
+    echo ""
+    echo "  -- Frontend (relative and \$lib imports; bare package imports ignored) --"
+    echo ""
+    if [ ! -f "$TMP_DIR/arch.edges.web" ] || [ ! -f "$TMP_DIR/arch.scope.web.pkgs" ]; then
+        echo "  [!] the frontend import graph was not built; cannot report fan-in/fan-out."
+    elif [ ! -s "$TMP_DIR/arch.scope.web.pkgs" ]; then
+        echo "  (no tracked frontend sources in scope '$TARGET_SCOPE')"
+    else
+        _af_arch_fanout_fanin "$TMP_DIR/arch.scope.web.pkgs" "$TMP_DIR/arch.edges.web" 56
+    fi
+}
+
+# -------- Section B: Complexity hotspots ------------------------------
+#
+# APPROXIMATE BY CONSTRUCTION — see the banner the section prints. This is a
+# branch-keyword count per function, not cyclomatic complexity:
+#
+#   * There is no CC tool in this stack's audit toolchain. Roslynator's CLI has
+#     no complexity command, and Microsoft.CodeAnalysis.Metrics was rejected in
+#     001 because wiring an analyzer package into the projects would make the
+#     audit tool alter the build it is auditing.
+#   * Function boundaries are found by pattern, not by parsing. A signature-
+#     shaped line followed by a `{` opens a function and the matching `}` closes
+#     it. Expression-bodied C# members (`=> expr;`) and brace-less arrow
+#     functions are never entered at all, so they score nothing.
+#   * Keywords inside string literals and trailing comments still count.
+#
+# The output is a RANKING to steer a reader's attention, and nothing more.
+#
+# Counting notes: `else if` is not counted separately from `if` — an `else if`
+# contains an `if` and would otherwise score twice, while a bare `else` adds no
+# branch. The ternary is counted as a space-delimited " ? " rather than every
+# `?`, because C# nullable annotations (`string?`, `int?`) would otherwise
+# dominate the score of any DTO-heavy file; `??` and `?.` are consumed first so
+# they cannot also register as ternaries.
+audit_arch_section_b() {
+    echo ""
+    echo "=== Section B: Complexity hotspots (APPROXIMATE, branch-keyword score > $AUDIT_ARCH_COMPLEXITY_OVER) ==="
+    echo ""
+    echo "  NOT cyclomatic complexity. Per detected function, a count of branch keywords"
+    echo "  and operators (if / while / for / foreach / case / catch / && / || / ?? / ?. / ternary)."
+    echo "  Function boundaries are matched by pattern, not parsed, for both C# and Svelte,"
+    echo "  so treat these as a ranking to look at first — not as a measured metric."
+    echo ""
+
+    if [ ! -f "$TMP_DIR/arch.scope.files" ]; then
+        echo "  [!] the in-scope file list was not built; cannot rank complexity."
+        return
+    fi
+    grep -E '\.(cs|ts|js|svelte)$' "$TMP_DIR/arch.scope.files" \
+        > "$TMP_DIR/arch.cx.files" || :
+    if [ ! -s "$TMP_DIR/arch.cx.files" ]; then
+        echo "  (no tracked C#, TypeScript, JavaScript or Svelte sources in scope '$TARGET_SCOPE')"
+        return
+    fi
+
+    awk -v thr="$AUDIT_ARCH_COMPLEXITY_OVER" -v bom="$AUDIT_ARCH_BOM" '
+    # gsub takes its pattern as a dynamic string here: a /re/ literal passed as
+    # a function argument would be evaluated as ($0 ~ /re/) and yield 0 or 1.
+    function nchar(s, re,   t) { t = s; return gsub(re, "", t) }
+    function kwcount(line,   t, n, i, m, a, c) {
+        c = 0
+        t = line
+        c += gsub(/&&/, "", t)
+        c += gsub(/\|\|/, "", t)
+        c += gsub(/\?\?/, "", t)
+        c += gsub(/\?\./, "", t)
+        c += gsub(/ \? /, " ", t)
+        m = split(line, a, /[^A-Za-z0-9_]+/)
+        for (i = 1; i <= m; i++)
+            if (a[i] == "if" || a[i] == "while" || a[i] == "for" ||
+                a[i] == "foreach" || a[i] == "case" || a[i] == "catch") c++
+        return c
+    }
+    function is_sig_cs(c) {
+        if (c !~ /\(/ || c !~ /\)/) return 0
+        if (c ~ /;[ \t]*$/) return 0
+        if (c !~ /^[ \t]*[A-Za-z_@]/) return 0
+        if (c ~ /(^|[^A-Za-z0-9_])(class|interface|struct|record|enum|namespace|new|return|throw|await|using|typeof|nameof)([^A-Za-z0-9_]|$)/) return 0
+        if (c ~ /^[ \t]*(if|else|for|foreach|while|switch|case|catch|lock|do|fixed|try|get|set)([^A-Za-z0-9_]|$)/) return 0
+        if (c ~ /=>/) return 0
+        return 1
+    }
+    function is_sig_web(c) {
+        if (c ~ /^[ \t]*(if|else|for|while|switch|case|catch|do|try)([^A-Za-z0-9_$]|$)/) return 0
+        if (c ~ /(^|[^A-Za-z0-9_$])function[ \t]*[A-Za-z0-9_$]*[ \t]*\(/) return 1
+        if (c ~ /=[ \t]*(async[ \t]+)?\([^)]*\)[ \t]*(:[^=]*)?=>/) return 1
+        if (c ~ /=[ \t]*(async[ \t]+)?[A-Za-z0-9_$]+[ \t]*=>/) return 1
+        return 0
+    }
+    # Name a detected function. Two passes, because neither alone is enough:
+    #
+    #  (1) the first `identifier(` on the line. This is what handles a return
+    #      type that itself contains a paren -- `Task<(string a, Stream b)>
+    #      GetImageAsset(Guid id)` opens its first paren inside the TUPLE, so
+    #      taking the token left of the first `(` yields nothing usable.
+    #  (2) failing that, walk left from the first paren skipping modifier
+    #      keywords, which is what names an arrow function:
+    #      `const handleDone = async (a, b) => {` must name handleDone.
+    function signame(c,   i, s, w, rest, n) {
+        rest = c
+        while (match(rest, /[A-Za-z_$@][A-Za-z0-9_$]*[ \t]*\(/)) {
+            w = substr(rest, RSTART, RLENGTH)
+            sub(/[ \t]*\($/, "", w)
+            if (w != "if" && w != "while" && w != "for" && w != "foreach" &&
+                w != "switch" && w != "catch" && w != "return" && w != "new" &&
+                w != "typeof" && w != "nameof" && w != "lock" && w != "using" &&
+                w != "async" && w != "await" && w != "function") return w
+            rest = substr(rest, RSTART + RLENGTH)
+        }
+        i = index(c, "(")
+        if (i == 0) return "?"
+        s = substr(c, 1, i - 1)
+        for (n = 0; n < 5; n++) {
+            sub(/[ \t]+$/, "", s)
+            if (!match(s, /[A-Za-z_$@][A-Za-z0-9_$]*$/)) return "?"
+            w = substr(s, RSTART, RLENGTH)
+            if (w != "async" && w != "function" && w != "await" &&
+                w != "new" && w != "return" && w != "static") return w
+            s = substr(s, 1, RSTART - 1)
+            sub(/[ \t=:]+$/, "", s)
+        }
+        return "?"
+    }
+    {
+        f = $0
+        ext = f; sub(/^.*\./, "", ext)
+        iscs = (ext == "cs")
+        depth = 0; infn = 0; fndepth = 0; score = 0; fnline = 0; fnname = ""
+        pend = 0; pendline = 0; pendname = ""; pendscore = 0; lno = 0
+        while ((getline line < f) > 0) {
+            lno++
+            code = line
+            if (lno == 1 && index(code, bom) == 1) code = substr(code, length(bom) + 1)
+            # Whole-line comments only. Stripping from a mid-line "//" would
+            # also cut string literals containing "http://".
+            if (code ~ /^[ \t]*\/\//) code = ""
+            nopen = nchar(code, "\\{")
+            nclos = nchar(code, "\\}")
+            if (infn) {
+                score += kwcount(code)
+                depth += nopen - nclos
+                if (depth <= fndepth) {
+                    if (score > thr) print score "|" f ":" fnline "|" fnname
+                    infn = 0
+                }
+                continue
+            }
+            if (!pend) {
+                if (iscs ? is_sig_cs(code) : is_sig_web(code)) {
+                    pend = 1; pendline = lno
+                    pendname = signame(code); pendscore = kwcount(code)
+                }
+            }
+            if (pend && nopen > 0) {
+                infn = 1; fndepth = depth; fnline = pendline; fnname = pendname
+                score = pendscore; pend = 0
+                depth += nopen - nclos
+                if (depth <= fndepth) {
+                    if (score > thr) print score "|" f ":" fnline "|" fnname
+                    infn = 0
+                }
+            } else {
+                depth += nopen - nclos
+                if (pend && code ~ /;[ \t]*$/) pend = 0
+            }
+        }
+        close(f)
+    }' "$TMP_DIR/arch.cx.files" > "$TMP_DIR/arch.complexity" || _af_arch_bawk=$?
+
+    # A dead awk leaves an empty file, which is indistinguishable from "nothing
+    # scored over the threshold" unless the status is checked. Saying "no
+    # hotspots" when the scan never ran is the failure mode this report exists
+    # to avoid.
+    if [ "${_af_arch_bawk:-0}" -ne 0 ]; then
+        echo "  [!] the complexity scan failed (awk exit $_af_arch_bawk); no ranking was produced."
+        echo "      Do NOT read this as 'no hotspots' — the scan did not complete."
+        _af_arch_bawk=0
+        return
+    fi
+    _af_arch_bawk=0
+
+    if [ ! -s "$TMP_DIR/arch.complexity" ]; then
+        echo "  (no detected function scores above $AUDIT_ARCH_COMPLEXITY_OVER in scope '$TARGET_SCOPE')"
+        return
+    fi
+
+    printf "  %-7s %-52s %s\n" "Score" "Function" "File:Line"
+    printf "  %-7s %-52s %s\n" "-----" \
+        "----------------------------------------------------" "---------------------------------"
+    sort -t'|' -k1,1 -rn "$TMP_DIR/arch.complexity" \
+        | head -n "$AUDIT_ARCH_TOP_COMPLEXITY" \
+        | awk -F'|' -v w=52 '
+            {
+                # Truncate rather than overflow: a long NUnit method name would
+                # otherwise push File:Line out of the column for every row.
+                n = $3
+                if (length(n) > w) n = substr(n, 1, w - 2) ".."
+                printf "  %-7s %-" w "s %s\n", $1, n, $2
+            }'
+}
+
+# -------- Section D: Public API surface -------------------------------
+#
+# Plain counting, no symbol server. `roslynator list-symbols` would give a truer
+# C# answer but Roslynator is an OPTIONAL tool here (make audit-tools installs
+# it; a fresh machine has neither it nor its analyzer assemblies), and the arch
+# report has to work without it — so Section D counts declaration lines.
+#
+# Known undercount on the C# side: an interface member carries no `public`
+# keyword, so ImmichFrame.Core/Interfaces shows its interface TYPES but not
+# their members. Counting those would need a parser. The columns are named for
+# what is actually counted.
+audit_arch_section_d() {
+    echo ""
+    echo "=== Section D: Public API surface ==="
+    echo ""
+    echo "  Declaration-line counts, per package. C#: lines opening with a public (or"
+    echo "  protected internal) modifier — interface members, which carry no modifier,"
+    echo "  are not counted. Frontend: lines opening with \`export\`."
+
+    echo ""
+    echo "  -- C# --"
+    echo ""
+    if [ ! -f "$TMP_DIR/arch.scope.cs.files" ] || [ ! -f "$TMP_DIR/arch.scope.cs.pkgs" ]; then
+        echo "  [!] the in-scope C# file list was not built; cannot count the public surface."
+    elif [ ! -s "$TMP_DIR/arch.scope.cs.pkgs" ]; then
+        echo "  (no tracked C# sources in scope '$TARGET_SCOPE')"
+    else
+        printf "  %-46s %-8s %-14s %s\n" "Package" "Files" "Public types" "Public members"
+        printf "  %-46s %-8s %-14s %s\n" \
+            "----------------------------------------------" "-----" "------------" "--------------"
+        awk -v bom="$AUDIT_ARCH_BOM" '
+        {
+            f = $0
+            d = f
+            if (sub(/\/[^\/]*$/, "", d) == 0) d = "."
+            nfile[d]++
+            lno = 0
+            while ((getline line < f) > 0) {
+                lno++
+                if (lno == 1 && index(line, bom) == 1) line = substr(line, length(bom) + 1)
+                if (line !~ /^[ \t]*(\[[^]]*\][ \t]*)*(public|protected[ \t]+internal)[ \t]/) continue
+                if (line ~ /(^|[^A-Za-z0-9_])(class|interface|struct|record|enum|delegate)([^A-Za-z0-9_])/)
+                    ntype[d]++
+                else
+                    nmemb[d]++
+            }
+            close(f)
+        }
+        END { for (d in nfile) printf "%s|%d|%d|%d\n", d, nfile[d], ntype[d] + 0, nmemb[d] + 0 }
+        ' "$TMP_DIR/arch.scope.cs.files" > "$TMP_DIR/arch.api.cs"
+        awk -F'|' -v af="$TMP_DIR/arch.api.cs" '
+        FILENAME == af { fl[$1] = $2; ty[$1] = $3; mb[$1] = $4; next }
+        { printf "  %-46s %-8s %-14s %s\n", $0, fl[$0] + 0, ty[$0] + 0, mb[$0] + 0 }
+        ' "$TMP_DIR/arch.api.cs" "$TMP_DIR/arch.scope.cs.pkgs"
+    fi
+
+    echo ""
+    echo "  -- Frontend --"
+    echo ""
+    if [ ! -f "$TMP_DIR/arch.scope.web.files" ] || [ ! -f "$TMP_DIR/arch.scope.web.pkgs" ]; then
+        echo "  [!] the in-scope frontend file list was not built; cannot count the export surface."
+    elif [ ! -s "$TMP_DIR/arch.scope.web.pkgs" ]; then
+        echo "  (no tracked frontend sources in scope '$TARGET_SCOPE')"
+    else
+        printf "  %-56s %-8s %s\n" "Package" "Files" "Exports"
+        printf "  %-56s %-8s %s\n" \
+            "--------------------------------------------------------" "-----" "-------"
+        awk -v bom="$AUDIT_ARCH_BOM" '
+        {
+            f = $0
+            d = f
+            if (sub(/\/[^\/]*$/, "", d) == 0) d = "."
+            nfile[d]++
+            lno = 0
+            while ((getline line < f) > 0) {
+                lno++
+                if (lno == 1 && index(line, bom) == 1) line = substr(line, length(bom) + 1)
+                if (line ~ /^[ \t]*export([ \t]|$)/) nexp[d]++
+            }
+            close(f)
+        }
+        END { for (d in nfile) printf "%s|%d|%d\n", d, nfile[d], nexp[d] + 0 }
+        ' "$TMP_DIR/arch.scope.web.files" > "$TMP_DIR/arch.api.web"
+        awk -F'|' -v af="$TMP_DIR/arch.api.web" '
+        FILENAME == af { fl[$1] = $2; ex[$1] = $3; next }
+        { printf "  %-56s %-8s %s\n", $0, fl[$0] + 0, ex[$0] + 0 }
+        ' "$TMP_DIR/arch.api.web" "$TMP_DIR/arch.scope.web.pkgs"
+    fi
+}
+
+# -------- Section E: Layer violations ---------------------------------
+#
+# Rules from ARCHITECTURE.md's stated invariants, plus one hygiene rule this
+# work turned up:
+#
+#   core-to-webapi  "Dependency direction is one-way: WebApi -> Core."
+#   aspnet-in-core  "Core knows nothing about ASP.NET."
+#   test-in-prod    the test stack (NUnit, Moq) belongs to the two *.Tests
+#                   projects; a production assembly referencing it is a leak.
+#   profile-leak    "Don't inject IConfigCatalog or ProfileRegistry into
+#                   controllers; no controller in the tree knows profiles exist."
+#   raw-fetch       "API access goes exclusively through the generated
+#                   $lib/immichFrameApi."
+#   namespace-project-mismatch
+#                   a file declaring a namespace owned by a DIFFERENT project
+#                   than the one it is compiled into. Hygiene, not a layer
+#                   inversion -- see the rule below for why the distinction
+#                   matters here.
+#
+# Three verdicts, and the difference between them is load-bearing:
+#
+#   FAIL  a layering invariant is broken. Reserved for rules that resolve.
+#   WARN  a hygiene problem: confusing, but nothing is layered wrongly.
+#   pass  the rule ran, over the stated number of files, and found nothing.
+#   n/a   the scope held no files this rule applies to, and says which.
+#
+# An empty table is never a pass, and a `pass` always carries its file count.
+
+# _af_arch_rule <id> <verdict-word> <n/a-explanation> <file-list> <ERE>:
+# run one grep-based rule and print its verdict plus any file:line hits.
+#
+# The BOM strip matters: 19 tracked .cs files here open with EF BB BF glued to
+# the first token, and every ERE below is ^-anchored, so a `using` on line 1 of
+# such a file is otherwise invisible to three of these rules.
+_af_arch_rule() {
+    _af_arch_rid="$1"
+    _af_arch_rverdict="$2"
+    _af_arch_rna="$3"
+    _af_arch_rlist="$4"
+    _af_arch_rere="$5"
+
+    _af_arch_rn=0
+    if [ -f "$_af_arch_rlist" ]; then
+        _af_arch_rn=$(wc -l < "$_af_arch_rlist" | tr -d ' ')
+    fi
+    if [ "$_af_arch_rn" -eq 0 ]; then
+        printf "  %-26s n/a   (%s)\n" "$_af_arch_rid" "$_af_arch_rna"
+        return
+    fi
+
+    _af_arch_rhits="$TMP_DIR/arch.rule.hits"
+    _af_arch_rsrc="$TMP_DIR/arch.rule.src"
+    _af_arch_rraw="$TMP_DIR/arch.rule.raw"
+    : > "$_af_arch_rhits"
+    _af_arch_rbroke=0
+
+    # Every stage is status-checked. Piping sed into grep into awk discards all
+    # but the last exit status, so a sed that could not open the file or a grep
+    # that died on a bad pattern would produce no lines and read as `pass` --
+    # the same success-with-zero-results shape this report is built to refuse.
+    # grep's exit 1 means "no match" and is the normal case; only >= 2 is an
+    # error, which is why the status cannot simply be tested for non-zero.
+    while IFS= read -r _af_arch_rf; do
+        [ -f "$_af_arch_rf" ] || continue
+        if ! sed "1s/^$AUDIT_ARCH_BOM//" "$_af_arch_rf" > "$_af_arch_rsrc" 2>/dev/null; then
+            _af_arch_rbroke=1
+            continue
+        fi
+        _af_arch_rgrc=0
+        grep -nE "$_af_arch_rere" "$_af_arch_rsrc" > "$_af_arch_rraw" || _af_arch_rgrc=$?
+        if [ "$_af_arch_rgrc" -ge 2 ]; then
+            _af_arch_rbroke=1
+            continue
+        fi
+        [ -s "$_af_arch_rraw" ] || continue
+        awk -v p="$_af_arch_rf" -F: '
+            {
+                n = $1
+                sub(/^[0-9]+:/, "")
+                sub(/^[ \t]+/, "")
+                printf "      %s:%s: %s\n", p, n, $0
+            }' "$_af_arch_rraw"
+    done < "$_af_arch_rlist" >> "$_af_arch_rhits"
+
+    if [ "$_af_arch_rbroke" -ne 0 ]; then
+        printf "  %-26s [!]   (scan errored on at least one file; rule did NOT complete)\n" \
+            "$_af_arch_rid"
+        if [ -s "$_af_arch_rhits" ]; then
+            echo "      partial hits below; absence of a hit is NOT evidence of a pass"
+            cat "$_af_arch_rhits"
+        fi
+        return
+    fi
+
+    _af_arch_rprint "$_af_arch_rid" "$_af_arch_rverdict" "$_af_arch_rn" "$_af_arch_rhits"
+}
+
+# _af_arch_rprint <id> <verdict-word> <files-checked> <hits-file>
+_af_arch_rprint() {
+    if [ -s "$4" ]; then
+        printf "  %-26s %-5s (%s hit(s) in %s file(s) checked)\n" \
+            "$1" "$2" "$(wc -l < "$4" | tr -d ' ')" "$3"
+        cat "$4"
+    else
+        printf "  %-26s pass  (%s file(s) checked)\n" "$1" "$3"
+    fi
+}
+
+# _af_arch_rule_core_to_webapi: the one rule that must RESOLVE rather than grep.
+#
+# A grep for `using ImmichFrame.WebApi` under ImmichFrame.Core/ reports two hits
+# in this repo, and calling them a broken one-way dependency would be wrong:
+# ImmichFrame.Core.csproj has no <ProjectReference> at all, so those usings
+# cannot bind to anything in the WebApi assembly. They resolve inside Core, to
+# the two files under ImmichFrame.Core/Helpers that declare a WebApi namespace
+# from inside Core -- which is a naming problem, reported separately below as
+# namespace-project-mismatch. The code compiles precisely because it is not a
+# layer inversion.
+#
+# So this rule reads the resolved edge list Section A drew (which already
+# applies the project-reference filter) and fails only on an edge that genuinely
+# leaves Core for WebApi. Sharing one list is what stops Section A and Section E
+# contradicting each other on the same page.
+_af_arch_rule_core_to_webapi() {
+    if [ "$AUDIT_ARCH_PROJREFS_OK" != yes ]; then
+        printf "  %-26s [!]   (project reference graph unavailable; rule did NOT run)\n" \
+            core-to-webapi
+        echo "      $AUDIT_ARCH_PROJREFS_WHY"
+        echo "      This rule decides what a 'using' actually binds to, so without the"
+        echo "      reference graph it has no premise. Absence of a hit is NOT a pass."
+        return
+    fi
+    if [ ! -f "$TMP_DIR/arch.edges.cs.detail" ]; then
+        printf "  %-26s [!]   (the resolved C# edge list was not built; rule did NOT run)\n" \
+            core-to-webapi
+        return
+    fi
+    _af_arch_rn=0
+    if [ -f "$TMP_DIR/arch.rule.core" ]; then
+        _af_arch_rn=$(wc -l < "$TMP_DIR/arch.rule.core" | tr -d ' ')
+    fi
+    if [ "$_af_arch_rn" -eq 0 ]; then
+        printf "  %-26s n/a   (no ImmichFrame.Core/ C# files in scope '%s')\n" \
+            core-to-webapi "$TARGET_SCOPE"
+        return
+    fi
+    _af_arch_hits="$TMP_DIR/arch.rule.hits.c2w"
+    # No `|| :` here. An awk that died would leave an empty hits file, which
+    # _af_arch_rprint would then render as a clean `pass` -- the exact
+    # "success with zero results" failure this report must never produce.
+    if ! awk -F'|' -v files="$TMP_DIR/arch.rule.core" '
+        FILENAME == files { inscope[$0] = 1; next }
+        $1 ~ /^ImmichFrame\.Core\// && $2 ~ /^ImmichFrame\.WebApi\// && ($3 in inscope) {
+            printf "      %s:%s: resolves to %s\n", $3, $4, $2
+        }
+    ' "$TMP_DIR/arch.rule.core" "$TMP_DIR/arch.edges.cs.detail" > "$_af_arch_hits"; then
+        printf "  %-26s [!]   (edge scan failed; rule did NOT run, do not read as clean)\n" \
+            core-to-webapi
+        return
+    fi
+    _af_arch_rprint core-to-webapi FAIL "$_af_arch_rn" "$_af_arch_hits"
+}
+
+# _af_arch_rule_ns_mismatch: a file whose declared namespace is owned by a
+# different project than the directory it is compiled from.
+#
+# WARN, not FAIL: nothing is layered wrongly and nothing fails to build. It is a
+# readability and tooling trap -- it is exactly what makes a plain grep call the
+# core-to-webapi rule above a layer inversion, and what makes a namespace look
+# like it lives somewhere it does not.
+_af_arch_rule_ns_mismatch() {
+    if [ ! -f "$TMP_DIR/arch.ns.decl" ]; then
+        printf "  %-26s [!]   (the namespace declaration list was not built; rule did NOT run)\n" \
+            namespace-project-mismatch
+        return
+    fi
+    _af_arch_rn=0
+    if [ -f "$TMP_DIR/arch.rule.allcs" ]; then
+        _af_arch_rn=$(wc -l < "$TMP_DIR/arch.rule.allcs" | tr -d ' ')
+    fi
+    if [ "$_af_arch_rn" -eq 0 ]; then
+        printf "  %-26s n/a   (no C# files in scope '%s')\n" \
+            namespace-project-mismatch "$TARGET_SCOPE"
+        return
+    fi
+    _af_arch_hits="$TMP_DIR/arch.rule.hits.nsmm"
+    # As above: a failed scan must not read as a clean rule.
+    if ! awk -F'\t' -v files="$TMP_DIR/arch.rule.allcs" -v projects="$AUDIT_CS_PROJECTS" '
+        function projof_dir(dir,   i, best) {
+            best = ""
+            for (i = 1; i <= nproj; i++)
+                if ((dir == proj[i] || index(dir, proj[i] "/") == 1) \
+                    && length(proj[i]) > length(best)) best = proj[i]
+            return best
+        }
+        function projof_ns(ns,   i, best) {
+            # Longest project NAME that prefixes the namespace on a dot
+            # boundary. Longest wins so ImmichFrame.Core.Tests.Logic.Pool is
+            # attributed to ImmichFrame.Core.Tests, not ImmichFrame.Core.
+            best = ""
+            for (i = 1; i <= nproj; i++)
+                if ((ns == proj[i] || index(ns, proj[i] ".") == 1) \
+                    && length(proj[i]) > length(best)) best = proj[i]
+            return best
+        }
+        BEGIN { nproj = split(projects, proj, " ") }
+        FILENAME == files { inscope[$0] = 1; next }
+        !($3 in inscope) { next }
+        {
+            fp = projof_dir($2)
+            np = projof_ns($1)
+            if (fp == "" || np == "" || fp == np) next
+            printf "      %s:%s: namespace %s (owned by %s) declared inside %s\n", \
+                $3, $4, $1, np, fp
+        }
+    ' "$TMP_DIR/arch.rule.allcs" "$TMP_DIR/arch.ns.decl" > "$_af_arch_hits"; then
+        printf "  %-26s [!]   (declaration scan failed; rule did NOT run, do not read as clean)\n" \
+            namespace-project-mismatch
+        return
+    fi
+    _af_arch_rprint namespace-project-mismatch WARN "$_af_arch_rn" "$_af_arch_hits"
+}
+
+audit_arch_section_e() {
+    echo ""
+    echo "=== Section E: Layer violations ==="
+    echo ""
+
+    if [ ! -f "$TMP_DIR/arch.scope.files" ]; then
+        echo "  [!] the in-scope file list was not built; the rules did NOT run."
+        echo "      Do not read this as a clean result."
+        return
+    fi
+
+    echo "  Rules from ARCHITECTURE.md. 'pass' means the rule ran over the stated number"
+    echo "  of files and found nothing; 'n/a' means the scope held no files it applies to."
+    echo "  FAIL is a broken layering invariant; WARN is hygiene that still compiles."
+    echo ""
+
+    grep -E '\.cs$' "$TMP_DIR/arch.scope.files" > "$TMP_DIR/arch.rule.allcs" || :
+
+    # WebApi -> Core is the only permitted direction. Resolved, not grepped.
+    grep -E '^ImmichFrame\.Core/.*\.cs$' "$TMP_DIR/arch.scope.files" \
+        > "$TMP_DIR/arch.rule.core" || :
+    _af_arch_rule_core_to_webapi
+    _af_arch_rule aspnet-in-core FAIL \
+        "no ImmichFrame.Core/ C# files in scope '$TARGET_SCOPE'" \
+        "$TMP_DIR/arch.rule.core" \
+        '^[[:space:]]*(global[[:space:]]+)?using[[:space:]]+(static[[:space:]]+)?([A-Za-z0-9_]+[[:space:]]*=[[:space:]]*)?Microsoft\.AspNetCore'
+
+    # The test stack must not be referenced from a production assembly.
+    grep -Ev '^ImmichFrame\.(Core|WebApi)\.Tests/' "$TMP_DIR/arch.rule.allcs" \
+        > "$TMP_DIR/arch.rule.prod" || :
+    _af_arch_rule test-in-prod FAIL \
+        "no non-test C# files in scope '$TARGET_SCOPE'" \
+        "$TMP_DIR/arch.rule.prod" \
+        '^[[:space:]]*(global[[:space:]]+)?using[[:space:]]+(static[[:space:]]+)?([A-Za-z0-9_]+[[:space:]]*=[[:space:]]*)?(NUnit|Moq)([.;]|[[:space:]]|$)'
+
+    # No controller may know profiles exist.
+    grep -E '^ImmichFrame\.WebApi/Controllers/.*\.cs$' "$TMP_DIR/arch.scope.files" \
+        > "$TMP_DIR/arch.rule.ctrl" || :
+    _af_arch_rule profile-leak FAIL \
+        "no ImmichFrame.WebApi/Controllers/ files in scope '$TARGET_SCOPE'" \
+        "$TMP_DIR/arch.rule.ctrl" \
+        '(^|[^A-Za-z0-9_])(IConfigCatalog|ProfileRegistry)([^A-Za-z0-9_]|$)'
+
+    # All API access goes through the generated client. Scoped to src/ on
+    # purpose: static/pwa-service-worker.js is a service worker, whose entire
+    # job is intercepting and re-issuing raw fetch() calls, so the three it
+    # contains are correct and the rule must not look there. The n/a text says
+    # so, because a scope of static/ alone would otherwise read as "nothing to
+    # see" over a file that visibly calls fetch().
+    grep -E "^$AUDIT_WEB_ROOT/src/.*\.(ts|js|svelte)$" "$TMP_DIR/arch.scope.files" \
+        | grep -Fxv "$AUDIT_WEB_GENERATED" \
+        > "$TMP_DIR/arch.rule.web" || :
+    _af_arch_rule raw-fetch FAIL \
+        "no $AUDIT_WEB_ROOT/src sources in scope '$TARGET_SCOPE'; the rule never covers static/, where the service worker calls fetch() by design" \
+        "$TMP_DIR/arch.rule.web" \
+        '(^|[^A-Za-z0-9_$])fetch[[:space:]]*\('
+
+    # Hygiene, reported last so it cannot be mistaken for a layering result.
+    _af_arch_rule_ns_mismatch
 }
