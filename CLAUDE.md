@@ -131,8 +131,10 @@ through the same edge list Section A draws rather than grepping, so the two
 sections cannot contradict each other — a bare grep reports two hits here that
 are *not* layer inversions, and they surface under the hygiene rule instead. Phase 3 shells out to neither dotnet nor npm: it is
 git + grep + awk + sqlite3 over the tree. `audit/adapters/go.sh` is the upstream
-reference and `audit/ADAPTERS.md` the contract. `audit/THREAT_MODEL.md` is written around Go
-tells; its issue classes carry over to C# but its code patterns do not.
+reference and `audit/ADAPTERS.md` the contract. `audit/THREAT_MODEL.md` has been
+rewritten for this stack — 13 classes, each tagged `(C#)`, `(frontend)` or
+`(both)` and grounded in a `file:line` here — and is what every sweep phase
+walks as its security lens.
 
 Requires `sqlite3`, `jq`, `curl`, `unzip`, `node` and `npm` on PATH, plus the
 .NET 8 SDK. `make audit-tools` needs `curl`/`unzip` to fetch `roslynator` and
@@ -164,3 +166,19 @@ at the repo root.
 
 Provenance: replicated from https://onedev.sharpspoon.io/agent-kit; the file
 list and SHA-256s it was verified against are in `audit/manifest.json`.
+
+**Kit verification is 20 of 21 files.** `audit/THREAT_MODEL.md` is the known
+exception: the kit ships it owned by the consuming repo and *expected to
+diverge* (its own preamble and `audit/ADAPTERS.md:12` both say so), it has been
+rewritten from Go idioms to C#/TypeScript, and sweeps append newly-found classes
+to it (`.claude/skills/sweep/phase-1-files.md:32`, `phase-2-packages.md:40`,
+`phase-3-architecture.md:9`). Its checksum will not match and is not meant to. Do not "fix" `audit/manifest.json` — that file is the
+record of what upstream shipped, and keeping the stale entry is what lets a
+genuine upstream revision of the threat model still be spotted. Verify with:
+
+```sh
+jq -r '.files[] | "\(.sha256)  \(.path)"' audit/manifest.json | sha256sum -c -
+```
+
+20 `OK` plus a `FAILED` on `audit/THREAT_MODEL.md` is the expected result; a
+failure on any other file means the kit has drifted and should be investigated.
