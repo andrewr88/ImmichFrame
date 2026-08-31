@@ -2,6 +2,7 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ImmichFrame.Core.Interfaces;
+using ImmichFrame.WebApi.Helpers.Config;
 using ImmichFrame.WebApi.Models;
 using ImmichFrame.WebApi.Tests.Mocks;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -84,8 +85,10 @@ namespace ImmichFrame.WebApi.Tests.Controllers
                     {
                         services.UseMockHandler(versionHandler);
 
-                        services.AddSingleton<IServerSettings>(serverSettings);
-                        services.AddSingleton<IGeneralSettings>(generalSettings);
+                        // Seeding the catalog rather than IServerSettings directly: the per-profile
+                        // services are built from the catalog, and IClientSettings resolves down
+                        // through it.
+                        services.AddSingleton<IConfigCatalog>(new ConfigCatalog(serverSettings));
                     });
                 });
         }
