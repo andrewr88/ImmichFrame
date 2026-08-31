@@ -54,17 +54,17 @@ audit-next:
 audit-findings:
 	audit/audit.sh findings
 
-## Phase 3 is not wired up for this repo: audit/adapters/fullstack.sh implements
-## no audit_arch_* members and audit/arch.sh calls audit_arch_preflight
-## unguarded, so refuse with a clear message rather than dying in the shell.
+## Phase 3. PKG is optional: omit it for a whole-repo report, or pass a subtree
+## (make audit-arch PKG=ImmichFrame.Core/Logic) or a C# namespace
+## (PKG=ImmichFrame.Core.Logic.Pool).
+##
+## A $lib target cannot come through PKG. Make expands a command-line variable
+## on assignment, so PKG='$lib/stores' has already become 'ib/stores' before any
+## recipe runs and no quoting -- nor $(value PKG) -- can recover it. The adapter
+## resolves the alias fine; reach it through the script instead:
+##
+##   AUDIT_ADAPTER=fullstack audit/audit.sh arch-sweep '$lib/stores'
 audit-arch:
-	@if [ "$(AUDIT_ADAPTER)" = "fullstack" ]; then \
-	    echo "make audit-arch: unavailable with the fullstack adapter." >&2; \
-	    echo "  audit/adapters/fullstack.sh does not implement the audit_arch_* contract" >&2; \
-	    echo "  members (see audit/ADAPTERS.md), and audit/arch.sh calls audit_arch_preflight" >&2; \
-	    echo "  unguarded. Phase 1 (audit-sweep) and Phase 2 (deep-sweep) are unaffected." >&2; \
-	    exit 1; \
-	fi; \
 	audit/audit.sh arch-sweep $(PKG)
 
 ## Analyzers the scan drivers shell out to. dotnet ships with the SDK and
