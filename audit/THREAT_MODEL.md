@@ -259,6 +259,19 @@ or not — re-check the line before trusting it.
     at the boundary rather than at the sink; for URLs, validate the scheme is
     `http`/`https` before binding it to `href`.
 
+14. **`$`-anchored validation regex accepting a trailing newline** *(C#)* — in
+    .NET, `$` matches at end of input **or immediately before a single trailing
+    `\n`**, so `^...$` on a validator admits one more character than it reads
+    as admitting. A length bound is off by one for the same reason, and any
+    exact-match denylist checked afterwards is bypassed, because the denylist
+    compares the whole string including the newline.
+    Tell: `^`/`$` anchors on a regex that validates rather than searches —
+    especially where a `HashSet.Contains` or equality check downstream is
+    expected to catch reserved values. `ImmichFrame.Core/Helpers/ImageHelper.cs:7`
+    still uses `^...$` on a data URI and is the untouched sibling.
+    Safe: `\A` and `\z` for validators. `\Z` is not the fix — it has the same
+    trailing-newline behaviour as `$`.
+
 ---
 
 This list is maintained: when a new recurring class is found and fixed, add it

@@ -192,16 +192,34 @@ public class ConfigCatalogTest
     [TestCase("kitchen.2")]
     [TestCase("kitchen?")]
     [TestCase("../etc")]
+    [TestCase("kitchen\n")]
     public void InvalidProfileNamesAreRejected(string name)
     {
         CatalogWithProfile(name).Should().Throw<SettingsNotValidException>()
             .WithMessage("*is not a valid configuration profile name*");
     }
 
+    /// <summary>
+    /// A trailing newline must not smuggle a reserved name past the name check: '$' matches just
+    /// before one, so anchoring on it would let 'api\n' through and shadow a backend path.
+    /// </summary>
+    [Test]
+    public void ReservedProfileNameWithATrailingNewlineIsRejected()
+    {
+        CatalogWithProfile("api\n").Should().Throw<SettingsNotValidException>();
+    }
+
     [Test]
     public void OverlyLongProfileNamesAreRejected()
     {
         CatalogWithProfile(new string('a', 65)).Should().Throw<SettingsNotValidException>()
+            .WithMessage("*is not a valid configuration profile name*");
+    }
+
+    [Test]
+    public void ProfileNameAtTheLengthLimitWithATrailingNewlineIsRejected()
+    {
+        CatalogWithProfile(new string('a', 64) + "\n").Should().Throw<SettingsNotValidException>()
             .WithMessage("*is not a valid configuration profile name*");
     }
 
