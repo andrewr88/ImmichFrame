@@ -460,3 +460,8 @@ ImmichFrame.WebApi/Config/Settings.json
 
 ## Per-project Claude state, symlinked into the devcontainer (see .devcontainer/post-create.sh)
 .claude-data/
+
+## Audit findings database (audit/schema.sql is the tracked source of truth)
+audit/audit.db
+audit/audit.db-wal
+audit/audit.db-shm

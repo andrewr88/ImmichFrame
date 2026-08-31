@@ -13,9 +13,12 @@ RUN rm -f /etc/apt/sources.list.d/yarn.list
 # tmux is baked into the image rather than installed at postCreate: the claude-tmux shim
 # needs it, and an image layer is cached, always present, and costs no apt round-trip - nor
 # a network flake - on every rebuild. Depends on the yarn source removal above.
+# sqlite3 rides along for the same reason: audit/audit.sh keeps its findings database in
+# SQLite and shells out to the CLI for every read and write, so the audit kit is inert
+# without it.
 RUN apt-get update \
     && export DEBIAN_FRONTEND=noninteractive \
-    && apt-get install -y --no-install-recommends tmux \
+    && apt-get install -y --no-install-recommends tmux sqlite3 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

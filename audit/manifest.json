@@ -1,0 +1,90 @@
+{
+  "kit": "omnispoon-agent-kit",
+  "version": "46284224d8f44a7ff0c8452b6ed20eaefb560d66aff6e0c3cb08bfb921786442",
+  "files": [
+    {
+      "path": ".claude/skills/_shared/concurrency.md",
+      "sha256": "0dd45c554c4c9e9cc3b4615d68ef47a3b4080c8b26372bebecf2f45b12642f0b"
+    },
+    {
+      "path": ".claude/skills/architect/SKILL.md",
+      "sha256": "c15f5e275d9cb226814a72a58ff3d1d83ad3ff0f460330e52fbdfee50ff2505a"
+    },
+    {
+      "path": ".claude/skills/code-reviewer/SKILL.md",
+      "sha256": "c1d5a7c784d21adffe5118e0c6a9fcb163ad5d2f36aa3af1d1e5b0a7f4278174"
+    },
+    {
+      "path": ".claude/skills/code-reviewerer/SKILL.md",
+      "sha256": "0483944210520758ebb62087f7d174aa6ededcc3a0361b8a55cb25590d62ff5b"
+    },
+    {
+      "path": ".claude/skills/developer/SKILL.md",
+      "sha256": "acce21017284870411e48d1351842ba1456f4ffa8b58bcdf3229d1398d257739"
+    },
+    {
+      "path": ".claude/skills/diff-summarizer/SKILL.md",
+      "sha256": "4a66834132c3ab80f2b5c872c158d598989b6594931c85ca6a1cd25a22d7f6db"
+    },
+    {
+      "path": ".claude/skills/repo-scout/SKILL.md",
+      "sha256": "ed0e97faed1ae8c0b8ca0bd50f08e03a93c17d641b66d763fd639d6ce023dfeb"
+    },
+    {
+      "path": ".claude/skills/sweep/SKILL.md",
+      "sha256": "0d8a0e5d6c8afdb07bf51adba2fb834940af82b1a4e171e2010509d79b2b7c35"
+    },
+    {
+      "path": ".claude/skills/sweep/phase-1-files.md",
+      "sha256": "05915527470e3a8d5777a1caedf87a30581e92a1d266459b803e437a1c3b5543"
+    },
+    {
+      "path": ".claude/skills/sweep/phase-2-packages.md",
+      "sha256": "4d429402ade19eb973ebb683bdb9258cdb993eef55a420ee269b08a87d0b3844"
+    },
+    {
+      "path": ".claude/skills/sweep/phase-3-architecture.md",
+      "sha256": "75036feefc31432b1f17fdbb2e87b474c3a7a8a82a4e336e6a9d58579fdaf54a"
+    },
+    {
+      "path": "audit/ADAPTERS.md",
+      "sha256": "ca12fc5c91c84b05598cf0557a64ef29fa92af5cb0778477a2607d6fc3accbb6"
+    },
+    {
+      "path": "audit/INTEGRATION.md",
+      "sha256": "472dc3c2295b2bc170d6423da069b5bfb28a2847ab4ba23d6827dc8805c6ee1f"
+    },
+    {
+      "path": "audit/README.md",
+      "sha256": "ac8b82bd937b208b2c05837e6013b85a16459b99b1e86b7a64b40b47b071176f"
+    },
+    {
+      "path": "audit/THREAT_MODEL.md",
+      "sha256": "81ac1a3ab1dac4cc405fa0377a0b441028edb10d86da63829b0a4f04847e6d83"
+    },
+    {
+      "path": "audit/adapters/go.sh",
+      "sha256": "aae110355621c3d2f8142329552bac470f77c22edce5099b1272f5f16afcc7d2"
+    },
+    {
+      "path": "audit/arch.sh",
+      "sha256": "b44c114f612db627bda3ffde1c2a0e4e163d67c6d6656432599c116d308fca57"
+    },
+    {
+      "path": "audit/audit.sh",
+      "sha256": "3dc529e5cdeeb41cae3d6abea2655b6ec745da20ced1c1383fe60fdaa7f38ae4"
+    },
+    {
+      "path": "audit/migrate.sh",
+      "sha256": "91516fa928cf8d1ab2c410fb3f084430e6f06e9bb0f1b97ce56cc6cacbf1cd64"
+    },
+    {
+      "path": "audit/scan.sh",
+      "sha256": "c5c2fd5d8da9a483de110c80ba8e00025419cbd0eb6f7f738de6ff0e19529699"
+    },
+    {
+      "path": "audit/schema.sql",
+      "sha256": "34704af2f3dbed9e6271745c6aeeca94fc4d9f7d98a4b62f346c7ab2fa930512"
+    }
+  ]
+}
