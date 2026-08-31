@@ -65,8 +65,11 @@ async function getAuthSecret(timeoutMs = 2000) {
 self.addEventListener('fetch', (event) => {
     const url = new URL(event.request.url);
 
-    // Intercept video streaming requests to add Authorization header
-    if (url.pathname.match(/^\/api\/Asset\/[^/]+\/Asset$/)) {
+    // Intercept video streaming requests to add Authorization header.
+    // The origin check is load-bearing: a service worker sees every request its
+    // controlled pages make, cross-origin included, so matching on the path alone
+    // would attach the auth secret to any host that happens to serve this path.
+    if (url.origin === self.location.origin && url.pathname.match(/^\/api\/Asset\/[^/]+\/Asset$/)) {
         event.respondWith(
             (async () => {
                 const secret = await getAuthSecret();
