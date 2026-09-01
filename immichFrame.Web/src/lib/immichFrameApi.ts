@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * ImmichFrame.WebApi
  * 1.0
@@ -237,68 +236,79 @@ export type IWeather = {
     description?: string | null;
     iconId?: string | null;
 };
-export function getAssets({ clientIdentifier }: {
+export function getAssets({ clientIdentifier, profile }: {
     clientIdentifier?: string;
+    profile?: string;
 } = {}, opts?: Oazapfts.RequestOpts) {
     return oazapfts.fetchJson<{
         status: 200;
         data: AssetResponseDto[];
     }>(`/api/Asset${QS.query(QS.explode({
-        clientIdentifier
+        clientIdentifier,
+        profile
     }))}`, {
         ...opts
     });
 }
-export function getAssetInfo(id: string, { clientIdentifier }: {
+export function getAssetInfo(id: string, { clientIdentifier, profile }: {
     clientIdentifier?: string;
+    profile?: string;
 } = {}, opts?: Oazapfts.RequestOpts) {
     return oazapfts.fetchJson<{
         status: 200;
         data: AssetResponseDto;
     }>(`/api/Asset/${encodeURIComponent(id)}/AssetInfo${QS.query(QS.explode({
-        clientIdentifier
+        clientIdentifier,
+        profile
     }))}`, {
         ...opts
     });
 }
-export function getAssetFaces(id: string, { clientIdentifier }: {
+export function getAssetFaces(id: string, { clientIdentifier, profile }: {
     clientIdentifier?: string;
+    profile?: string;
 } = {}, opts?: Oazapfts.RequestOpts) {
     return oazapfts.fetchJson<{
         status: 200;
         data: AssetFaceResponseDto[];
     }>(`/api/Asset/${encodeURIComponent(id)}/AssetFaces${QS.query(QS.explode({
-        clientIdentifier
+        clientIdentifier,
+        profile
     }))}`, {
         ...opts
     });
 }
-export function getAlbumInfo(id: string, { clientIdentifier }: {
+export function getAlbumInfo(id: string, { clientIdentifier, profile }: {
     clientIdentifier?: string;
+    profile?: string;
 } = {}, opts?: Oazapfts.RequestOpts) {
     return oazapfts.fetchJson<{
         status: 200;
         data: AlbumResponseDto[];
     }>(`/api/Asset/${encodeURIComponent(id)}/AlbumInfo${QS.query(QS.explode({
-        clientIdentifier
+        clientIdentifier,
+        profile
     }))}`, {
         ...opts
     });
 }
-export function getImage(id: string, { clientIdentifier }: {
+export function getImage(id: string, { clientIdentifier, profile }: {
     clientIdentifier?: string;
+    profile?: string;
 } = {}, opts?: Oazapfts.RequestOpts) {
     return oazapfts.fetchBlob<{
         status: 200;
         data: Blob;
     }>(`/api/Asset/${encodeURIComponent(id)}/Image${QS.query(QS.explode({
-        clientIdentifier
+        clientIdentifier,
+        profile
     }))}`, {
         ...opts
     });
 }
-export function getAsset(id: string, { clientIdentifier, assetType }: {
+export function getAsset(id: string, { clientIdentifier, profile, assetType }: {
     clientIdentifier?: string;
+    profile?: string;
     assetType?: AssetTypeEnum;
 } = {}, opts?: Oazapfts.RequestOpts) {
     return oazapfts.fetchBlob<{
@@ -312,43 +322,50 @@ export function getAsset(id: string, { clientIdentifier, assetType }: {
         data: ProblemDetails;
     }>(`/api/Asset/${encodeURIComponent(id)}/Asset${QS.query(QS.explode({
         clientIdentifier,
+        profile,
         assetType
     }))}`, {
         ...opts
     });
 }
-export function getRandomImageAndInfo({ clientIdentifier }: {
+export function getRandomImageAndInfo({ clientIdentifier, profile }: {
     clientIdentifier?: string;
+    profile?: string;
 } = {}, opts?: Oazapfts.RequestOpts) {
     return oazapfts.fetchJson<{
         status: 200;
         data: ImageResponse;
     }>(`/api/Asset/RandomImageAndInfo${QS.query(QS.explode({
-        clientIdentifier
+        clientIdentifier,
+        profile
     }))}`, {
         ...opts
     });
 }
-export function getAppointments({ clientIdentifier }: {
+export function getAppointments({ clientIdentifier, profile }: {
     clientIdentifier?: string;
+    profile?: string;
 } = {}, opts?: Oazapfts.RequestOpts) {
     return oazapfts.fetchJson<{
         status: 200;
         data: IAppointment[];
     }>(`/api/Calendar${QS.query(QS.explode({
-        clientIdentifier
+        clientIdentifier,
+        profile
     }))}`, {
         ...opts
     });
 }
-export function getConfig({ clientIdentifier }: {
+export function getConfig({ clientIdentifier, profile }: {
     clientIdentifier?: string;
+    profile?: string;
 } = {}, opts?: Oazapfts.RequestOpts) {
     return oazapfts.fetchJson<{
         status: 200;
         data: ClientSettingsDto;
     }>(`/api/Config${QS.query(QS.explode({
-        clientIdentifier
+        clientIdentifier,
+        profile
     }))}`, {
         ...opts
     });
@@ -361,14 +378,16 @@ export function getVersion(opts?: Oazapfts.RequestOpts) {
         ...opts
     });
 }
-export function getWeather({ clientIdentifier }: {
+export function getWeather({ clientIdentifier, profile }: {
     clientIdentifier?: string;
+    profile?: string;
 } = {}, opts?: Oazapfts.RequestOpts) {
     return oazapfts.fetchJson<{
         status: 200;
         data: IWeather;
     }>(`/api/Weather${QS.query(QS.explode({
-        clientIdentifier
+        clientIdentifier,
+        profile
     }))}`, {
         ...opts
     });

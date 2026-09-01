@@ -17,8 +17,13 @@ namespace ImmichFrame.WebApi.Controllers
             _settings = settings;
         }
 
+        // 'profile' exists on GetConfig only so Swashbuckle emits it as a query parameter
+        // and the generated client can send it. It is deliberately never read here: DI has
+        // already resolved the profile from the query string before the action body runs,
+        // and a second resolution path could silently diverge. GetVersion takes none - no
+        // profile can vary the assembly version.
         [HttpGet(Name = "GetConfig")]
-        public ClientSettingsDto GetConfig(string clientIdentifier = "")
+        public ClientSettingsDto GetConfig(string clientIdentifier = "", string profile = "")
         {
             var sanitizedClientIdentifier = clientIdentifier.SanitizeString();
             _logger.LogDebug("Config requested by '{sanitizedClientIdentifier}'", sanitizedClientIdentifier);
