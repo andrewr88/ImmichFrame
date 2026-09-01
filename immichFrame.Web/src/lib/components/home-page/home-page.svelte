@@ -3,6 +3,7 @@
 	import ProgressBar from '$lib/components/elements/progress-bar.svelte';
 	import { slideshowStore } from '$lib/stores/slideshow.store';
 	import { clientIdentifierStore, authSecretStore } from '$lib/stores/persist.store';
+	import { profileStore } from '$lib/stores/profile.store';
 	import { onDestroy, onMount, setContext, tick } from 'svelte';
 	import OverlayControls from '../elements/overlay-controls.svelte';
 	import AssetComponent from '../elements/asset-component.svelte';
@@ -132,7 +133,10 @@
 
 	async function loadAssets() {
 		try {
-			let assetRequest = await api.getAssets({ clientIdentifier: $clientIdentifierStore });
+			let assetRequest = await api.getAssets({
+				clientIdentifier: $clientIdentifierStore,
+				profile: $profileStore
+			});
 
 			if (assetRequest.status != 200) {
 				if (assetRequest.status == 401) {
@@ -360,12 +364,14 @@
 			assetUrl = api.getAssetStreamUrl(
 				assetResponse.id,
 				$clientIdentifierStore,
-				assetResponse.type
+				assetResponse.type,
+				$profileStore
 			);
 		} else {
 			// Preload images as blobs
 			const req = await api.getAsset(assetResponse.id, {
 				clientIdentifier: $clientIdentifierStore,
+				profile: $profileStore,
 				assetType: assetResponse.type
 			});
 			if (req.status != 200) {
@@ -377,7 +383,8 @@
 		let album: api.AlbumResponseDto[] | null = null;
 		if ($configStore.showAlbumName) {
 			const albumReq = await api.getAlbumInfo(assetResponse.id, {
-				clientIdentifier: $clientIdentifierStore
+				clientIdentifier: $clientIdentifierStore,
+				profile: $profileStore
 			});
 			album = albumReq.data ?? [];
 		}
@@ -385,7 +392,8 @@
 		// if the people array is already populated, there is no need to call the API again
 		if ($configStore.showPeopleDesc && (assetResponse.people ?? []).length == 0) {
 			const assetInfoRequest = await api.getAssetInfo(assetResponse.id, {
-				clientIdentifier: $clientIdentifierStore
+				clientIdentifier: $clientIdentifierStore,
+				profile: $profileStore
 			});
 			assetResponse.people = assetInfoRequest.data.people;
 		}
@@ -393,7 +401,8 @@
 		let faces: api.AssetFaceResponseDto[] = [];
 		if (!isVideoAsset(assetResponse) && ($configStore.imageZoom || $configStore.imagePan)) {
 			const facesRequest = await api.getAssetFaces(assetResponse.id, {
-				clientIdentifier: $clientIdentifierStore
+				clientIdentifier: $clientIdentifierStore,
+				profile: $profileStore
 			});
 			faces = facesRequest.data;
 		}

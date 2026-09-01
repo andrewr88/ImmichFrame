@@ -52,9 +52,15 @@ export const setBearer = () => {
 	defaults.headers['Authorization'] = "Bearer " + get(authSecretStore);
 };
 
-export const getAssetStreamUrl = (id: string, clientIdentifier?: string, assetType?: number) => {
+export const getAssetStreamUrl = (
+	id: string,
+	clientIdentifier?: string,
+	assetType?: number,
+	profile?: string
+) => {
 	const params = new URLSearchParams();
 	if (clientIdentifier) params.set('clientIdentifier', clientIdentifier);
+	if (profile) params.set('profile', profile);
 	if (assetType !== undefined) params.set('assetType', String(assetType));
 	const query = params.toString();
 	return `/api/Asset/${encodeURIComponent(id)}/Asset${query ? '?' + query : ''}`;
