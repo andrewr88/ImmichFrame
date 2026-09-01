@@ -188,6 +188,58 @@ ImmichFrame can be configured to access multiple Immich accounts, on the same or
 
 Images will be drawn from each account proportionally based on the total number of images present in each account (not included filtering, this is not yet implemented).
 
+### Configuration Profiles
+One ImmichFrame instance can serve several named configurations at once — a kitchen frame and a bedroom frame from the same container, each with its own accounts, timings and colours.
+
+A browser picks a profile from the URL path: `https://frame.example.com/kitchen`. The API picks one with a query parameter: `?profile=kitchen`. A URL that names no profile gets your default configuration, exactly as before — if you declare no profiles, nothing changes.
+
+#### Declaring a profile
+`Profiles` is a top-level key, alongside `General` and `Accounts`. Each profile only names the settings it overrides:
+
+```yaml
+General:
+  Interval: 45
+  ShowClock: true
+
+Accounts:
+  - ImmichServerUrl: 'http://immich:2283'
+    ApiKey: 'super-secret-api-key'
+
+Profiles:
+  kitchen:
+    General:
+      Interval: 20
+      PrimaryColor: '#ff8800'
+  bedroom:
+    General:
+      ShowClock: false
+      ImageZoom: false
+```
+
+That gives you three configurations: your default one at `/`, plus `/kitchen` and `/bedroom`. Both profiles inherit the account above and every setting they do not mention.
+
+#### How a profile is merged
+A profile is merged over your default configuration key by key:
+
+- Nested sections such as `General` are merged, so a profile only has to name the settings it changes.
+- Everything else replaces the default value outright — **including lists, `Accounts` among them**. A profile that names `Accounts` replaces the whole account list rather than adding to it, because there is no unambiguous way to merge two lists. If a profile needs your usual accounts plus one more, list all of them in that profile.
+
+#### Profile names
+- 1 to 64 characters, using `A-Z`, `a-z`, `0-9`, `-` and `_`.
+- `api`, `static`, `swagger` and `default` are reserved. The first three are paths ImmichFrame already serves, so a profile named after one of them could never be opened at `/{profile}` in a browser, and `default` always refers to the configuration outside the `Profiles` block. ImmichFrame will not start if a profile uses one of these names.
+- Names are matched case-insensitively, so `/kitchen` and `/Kitchen` reach the same profile. Stick to one spelling anyway: your browser remembers a profile's authentication secret under the name exactly as it appears in the URL, so the other spelling will ask you for the secret again. Two profiles whose names differ only in case are rejected on startup.
+
+#### Authentication per profile
+A profile can override `AuthenticationSecret` under its own `General`, so each frame can have its own secret. The browser stores each profile's secret separately, so you authenticate once per profile rather than once for the whole instance.
+
+A profile may also set `AuthenticationSecret: null`, which makes that profile unauthenticated even when your default configuration has a secret. This is allowed on purpose — it lets a frame on your own network skip the prompt — but be deliberate about it: anyone who can reach `/{profile}` then sees everything that profile is configured to show, without a secret.
+
+#### Unknown profiles
+A URL naming a profile that is not configured returns a 404. It never falls back to your default configuration, so a mistyped frame URL fails visibly instead of quietly showing the wrong photos.
+
+#### Profiles need a settings file
+Profiles can only be declared in `Settings.json`, `Settings.yml` or `Settings.yaml`. Environment variables are flat and can only ever describe one configuration, so an installation configured entirely through environment variables gets the default configuration and nothing else.
+
 ### API Key Permissions
 For full ImmichFrame functionality, the API key being used needs the following permissions:
 

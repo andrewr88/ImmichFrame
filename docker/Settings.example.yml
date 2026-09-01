@@ -57,3 +57,20 @@ Accounts:
     Tags:
       - Vacation
       - Travel/Europe
+
+# Optional. Serve more than one configuration from a single ImmichFrame instance.
+# Each profile is reached at its own URL - /kitchen, /bedroom - and only names the
+# settings it overrides; everything else is inherited from above.
+# Nested sections such as General are merged key by key, but anything else replaces
+# the value above outright, lists included: a profile that names Accounts replaces the
+# whole account list rather than adding to it.
+# Names may use A-Z, a-z, 0-9, '-' and '_' (1-64 characters). 'api', 'static',
+# 'swagger' and 'default' are reserved.
+# Profiles:
+#   kitchen:
+#     General:
+#       Interval: 20
+#       PrimaryColor: '#ff8800'
+#       # Overrides the AuthenticationSecret above for this profile only.
+#       # Set it to null to leave this profile unauthenticated.
+#       AuthenticationSecret: 'kitchen-secret'

@@ -64,5 +64,13 @@
         "Travel/Europe"
       ]
     }
-  ]
+  ],
+  "Profiles": {
+    "kitchen": {
+      "General": {
+        "Interval": 20,
+        "PrimaryColor": "#ff8800"
+      }
+    }
+  }
 }
