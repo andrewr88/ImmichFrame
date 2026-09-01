@@ -4,6 +4,7 @@
 	import { format } from 'date-fns';
 	import { configStore } from '$lib/stores/config.store';
 	import { clientIdentifierStore } from '$lib/stores/persist.store';
+	import { profileStore } from '$lib/stores/profile.store';
 
 	api.init();
 
@@ -36,7 +37,8 @@
 
 	async function GetAppointments() {
 		let appointmentRequest = await api.getAppointments({
-			clientIdentifier: $clientIdentifierStore
+			clientIdentifier: $clientIdentifierStore,
+			profile: $profileStore
 		});
 		if (appointmentRequest.status == 200) {
 			appointments = appointmentRequest.data;

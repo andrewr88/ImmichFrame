@@ -5,6 +5,7 @@
 	import * as locale from 'date-fns/locale';
 	import { configStore } from '$lib/stores/config.store';
 	import { clientIdentifierStore } from '$lib/stores/persist.store';
+	import { profileStore } from '$lib/stores/profile.store';
 
 	api.init();
 
@@ -46,7 +47,10 @@
 
 	async function getWeather() {
 		try {
-			const weatherRequest = await api.getWeather({ clientIdentifier: $clientIdentifierStore });
+			const weatherRequest = await api.getWeather({
+				clientIdentifier: $clientIdentifierStore,
+				profile: $profileStore
+			});
 			if (weatherRequest.status === 200) {
 				weather = weatherRequest.data;
 			} else {
