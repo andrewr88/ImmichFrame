@@ -34,8 +34,12 @@ namespace ImmichFrame.WebApi.Controllers
             _settings = settings;
         }
 
+        // 'profile' exists on the actions below only so Swashbuckle emits it as a query
+        // parameter and the generated client can send it. It is deliberately never read
+        // here: DI has already resolved the profile from the query string before an
+        // action body runs, and a second resolution path could silently diverge.
         [HttpGet(Name = "GetAssets")]
-        public async Task<List<AssetResponseDto>> GetAssets(string clientIdentifier = "")
+        public async Task<List<AssetResponseDto>> GetAssets(string clientIdentifier = "", string profile = "")
         {
             var sanitizedClientIdentifier = clientIdentifier.SanitizeString();
             _logger.LogDebug("Assets requested by '{sanitizedClientIdentifier}'", sanitizedClientIdentifier);
@@ -43,7 +47,7 @@ namespace ImmichFrame.WebApi.Controllers
         }
 
         [HttpGet("{id}/AssetInfo", Name = "GetAssetInfo")]
-        public async Task<AssetResponseDto> GetAssetInfo(Guid id, string clientIdentifier = "")
+        public async Task<AssetResponseDto> GetAssetInfo(Guid id, string clientIdentifier = "", string profile = "")
         {
             var sanitizedClientIdentifier = clientIdentifier.SanitizeString();
             _logger.LogDebug("AssetInfo '{id}' requested by '{sanitizedClientIdentifier}'", id, sanitizedClientIdentifier);
@@ -52,7 +56,7 @@ namespace ImmichFrame.WebApi.Controllers
         }
 
         [HttpGet("{id}/AssetFaces", Name = "GetAssetFaces")]
-        public async Task<IEnumerable<AssetFaceResponseDto>> GetAssetFaces(Guid id, string clientIdentifier = "")
+        public async Task<IEnumerable<AssetFaceResponseDto>> GetAssetFaces(Guid id, string clientIdentifier = "", string profile = "")
         {
             var sanitizedClientIdentifier = clientIdentifier.SanitizeString();
             _logger.LogDebug("AssetFaces '{id}' requested by '{sanitizedClientIdentifier}'", id, sanitizedClientIdentifier);
@@ -61,7 +65,7 @@ namespace ImmichFrame.WebApi.Controllers
         }
 
         [HttpGet("{id}/AlbumInfo", Name = "GetAlbumInfo")]
-        public async Task<List<AlbumResponseDto>> GetAlbumInfo(Guid id, string clientIdentifier = "")
+        public async Task<List<AlbumResponseDto>> GetAlbumInfo(Guid id, string clientIdentifier = "", string profile = "")
         {
             var sanitizedClientIdentifier = clientIdentifier.SanitizeString();
             _logger.LogDebug("AlbumInfo '{id}' requested by '{sanitizedClientIdentifier}'", id, sanitizedClientIdentifier);
@@ -73,9 +77,9 @@ namespace ImmichFrame.WebApi.Controllers
         [HttpGet("{id}/Image", Name = "GetImage")]
         [Produces("image/jpeg", "image/webp")]
         [ProducesResponseType(typeof(FileStreamResult), StatusCodes.Status200OK)]
-        public async Task<IActionResult> GetImage(Guid id, string clientIdentifier = "")
+        public async Task<IActionResult> GetImage(Guid id, string clientIdentifier = "", string profile = "")
         {
-            return await GetAsset(id, clientIdentifier, AssetTypeEnum.IMAGE);
+            return await GetAsset(id, clientIdentifier, profile, assetType: AssetTypeEnum.IMAGE);
         }
 
         [HttpGet("{id}/Asset", Name = "GetAsset")]
@@ -83,7 +87,7 @@ namespace ImmichFrame.WebApi.Controllers
         [ProducesResponseType(typeof(FileStreamResult), StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(FileStreamResult), StatusCodes.Status206PartialContent)]
         [ProducesResponseType(StatusCodes.Status416RangeNotSatisfiable)]
-        public async Task<IActionResult> GetAsset(Guid id, string clientIdentifier = "", AssetTypeEnum? assetType = null)
+        public async Task<IActionResult> GetAsset(Guid id, string clientIdentifier = "", string profile = "", AssetTypeEnum? assetType = null)
         {
             var sanitizedClientIdentifier = clientIdentifier.SanitizeString();
             _logger.LogDebug("Asset '{id}' requested by '{sanitizedClientIdentifier}' (type hint: {assetType})", id, sanitizedClientIdentifier, assetType);
@@ -134,7 +138,7 @@ namespace ImmichFrame.WebApi.Controllers
 
         [HttpGet("RandomImageAndInfo", Name = "GetRandomImageAndInfo")]
         [Produces("application/json")]
-        public async Task<ImageResponse> GetRandomImageAndInfo(string clientIdentifier = "")
+        public async Task<ImageResponse> GetRandomImageAndInfo(string clientIdentifier = "", string profile = "")
         {
             var sanitizedClientIdentifier = clientIdentifier.SanitizeString();
             _logger.LogDebug("Random image requested by '{sanitizedClientIdentifier}'", sanitizedClientIdentifier);
