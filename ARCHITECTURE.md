@@ -68,17 +68,21 @@ are consumed bare by `<img src>`/`<video src>`). The chain is:
 - `UnknownProfileMiddleware` — 404s an unknown profile before anything downstream resolves it.
 - `ICurrentProfile` / `CurrentProfile` (scoped) — reads the query parameter.
 - `ProfileRegistry` (singleton) — `ConcurrentDictionary<string, Lazy<ProfileServices>>`, builds each
-  profile's object graph on first use and caches it for the process lifetime.
+  profile's object graph on first use and caches it until the configuration is swapped
+  (`SwappableConfigCatalog.Swap` replaces the catalog and drops the cache in one step).
 - `ProfileServices` — the expensive per-profile pieces: HTTP clients, asset pools, API caches, and a
   per-profile `BloomFilterAssetAccountTracker`.
 
-`Program.cs` then registers `IServerSettings`, `IGeneralSettings`, `IClientSettings`,
+`Program.cs` registers `ProfileServices` itself as **scoped**, resolved from the registry once per
+request, and then registers `IServerSettings`, `IGeneralSettings`, `IClientSettings`,
 `IServerBehaviorSettings`, `IWeatherService`, `ICalendarService`, and `IImmichFrameLogic` as
-**scoped** delegates that route through the registry, so controllers keep injecting the same
-interfaces they always have and are unaware of profiles entirely.
+**scoped** delegates reading from that one pinned instance rather than each asking the registry
+again — so a configuration swap landing mid-request cannot split a request across two
+configurations, and controllers keep injecting the same interfaces they always have, unaware of
+profiles entirely.
 
 Profile names are validated in `ConfigCatalog`: `^[A-Za-z0-9_-]{1,64}$`, case-insensitive, with
-`api`, `static`, `swagger`, and `default` reserved.
+`api`, `static`, `swagger`, `admin`, and `default` reserved.
 
 ### Asset selection: the pool hierarchy
 
