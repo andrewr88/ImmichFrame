@@ -226,7 +226,7 @@ A profile is merged over your default configuration key by key:
 
 #### Profile names
 - 1 to 64 characters, using `A-Z`, `a-z`, `0-9`, `-` and `_`.
-- `api`, `static`, `swagger` and `default` are reserved. The first three are paths ImmichFrame already serves, so a profile named after one of them could never be opened at `/{profile}` in a browser, and `default` always refers to the configuration outside the `Profiles` block. ImmichFrame will not start if a profile uses one of these names.
+- `api`, `static`, `swagger`, `admin` and `default` are reserved. The first four are paths ImmichFrame serves or keeps for itself, so a profile named after one of them could never be opened at `/{profile}` in a browser, and `default` always refers to the configuration outside the `Profiles` block. ImmichFrame will not start if a profile uses one of these names.
 - Names are matched case-insensitively, so `/kitchen` and `/Kitchen` reach the same profile. Stick to one spelling anyway: your browser remembers a profile's authentication secret under the name exactly as it appears in the URL, so the other spelling will ask you for the secret again. Two profiles whose names differ only in case are rejected on startup.
 
 #### Authentication per profile

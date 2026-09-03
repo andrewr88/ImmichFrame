@@ -177,6 +177,8 @@ public class ConfigCatalogTest
     [TestCase("api")]
     [TestCase("static")]
     [TestCase("swagger")]
+    [TestCase("admin")]
+    [TestCase("AdMiN")]
     [TestCase("default")]
     [TestCase("Default")]
     public void ReservedProfileNamesAreRejected(string name)

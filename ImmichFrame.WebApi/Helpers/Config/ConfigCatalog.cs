@@ -20,10 +20,11 @@ public partial class ConfigCatalog : IConfigCatalog
     [GeneratedRegex(@"\A[A-Za-z0-9_-]{1,64}\z")]
     private static partial Regex ValidProfileName();
 
-    // Paths the backend already serves. A profile named after one of these could never be reached
-    // at /{profile} in the browser, so reject it up front rather than let it fail mysteriously.
+    // Paths the backend already serves, plus 'admin', which the web client keeps for its
+    // configuration editor. A profile named after one of these could never be reached at /{profile}
+    // in the browser, so reject it up front rather than let it fail mysteriously.
     private static readonly HashSet<string> ReservedProfileNames =
-        new(StringComparer.OrdinalIgnoreCase) { "api", "static", "swagger", DefaultProfileName };
+        new(StringComparer.OrdinalIgnoreCase) { "api", "static", "swagger", "admin", DefaultProfileName };
 
     private readonly Dictionary<string, IServerSettings> _profiles;
 

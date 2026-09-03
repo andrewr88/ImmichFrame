@@ -58,12 +58,20 @@ var configPath = Environment.GetEnvironmentVariable("IMMICHFRAME_CONFIG_PATH") ?
         .FirstOrDefault(d => string.Equals(Path.GetFileName(d), "Config", StringComparison.OrdinalIgnoreCase))
         ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Config");
 builder.Services.AddTransient<ConfigLoader>();
-builder.Services.AddSingleton<IConfigCatalog>(srv => srv.GetRequiredService<ConfigLoader>().LoadCatalog(configPath));
+
+// Everything injects IConfigCatalog and gets the forwarding catalog, so the configuration behind it
+// can be replaced at runtime. The seed still runs on first use rather than here, so a test that
+// registers its own catalog never reads the settings file.
+builder.Services.AddSingleton(srv => new SwappableConfigCatalog(
+    () => srv.GetRequiredService<ConfigLoader>().LoadCatalog(configPath),
+    srv.GetRequiredService<ProfileRegistry>));
+builder.Services.AddSingleton<IConfigCatalog>(srv => srv.GetRequiredService<SwappableConfigCatalog>());
 
 builder.Services.AddHttpClient(); // Ensures IHttpClientFactory is available
 
-// One set of services per configuration profile, built on first use and cached for the life of
-// the process; the pools, HTTP clients and caches inside are far too expensive to rebuild.
+// One set of services per configuration profile, built on first use and cached until the
+// configuration is swapped; the pools, HTTP clients and caches inside are far too expensive to
+// rebuild per request.
 builder.Services.AddSingleton<ProfileRegistry>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentProfile, CurrentProfile>();
@@ -71,18 +79,29 @@ builder.Services.AddScoped<ICurrentProfile, CurrentProfile>();
 ProfileServices CurrentProfileServices(IServiceProvider srv) =>
     srv.GetRequiredService<ProfileRegistry>().For(srv.GetRequiredService<ICurrentProfile>().Name);
 
+// The profile's services are resolved once per request and everything below reads from that one
+// instance. Asking the registry again for each interface would let a configuration swap landing
+// mid-request serve the same request its settings from the outgoing configuration and its logic
+// from the incoming one.
+//
+// Nothing in this graph may become IDisposable: the container tracks what a factory returns and
+// disposes it when the scope ends, so a disposable ProfileServices - or a disposable member behind
+// the registrations below - would be torn down at the end of one request while every other request
+// on that profile is still using it.
+builder.Services.AddScoped<ProfileServices>(CurrentProfileServices);
+
 // Settings and services are scoped and resolve through the registry, so a request naming a
 // profile gets that profile's configuration while controllers go on asking for the same
 // interfaces they always have. Sub-settings keep delegating down the chain rather than each
 // reaching into the registry, so overriding one of them still overrides those below it.
-builder.Services.AddScoped<IServerSettings>(srv => CurrentProfileServices(srv).Settings);
+builder.Services.AddScoped<IServerSettings>(srv => srv.GetRequiredService<ProfileServices>().Settings);
 builder.Services.AddScoped<IGeneralSettings>(srv => srv.GetRequiredService<IServerSettings>().GeneralSettings);
 builder.Services.AddScoped<IClientSettings>(srv => srv.GetRequiredService<IGeneralSettings>());
 builder.Services.AddScoped<IServerBehaviorSettings>(srv => srv.GetRequiredService<IGeneralSettings>());
 
-builder.Services.AddScoped<IWeatherService>(srv => CurrentProfileServices(srv).WeatherService);
-builder.Services.AddScoped<ICalendarService>(srv => CurrentProfileServices(srv).CalendarService);
-builder.Services.AddScoped<IImmichFrameLogic>(srv => CurrentProfileServices(srv).Logic);
+builder.Services.AddScoped<IWeatherService>(srv => srv.GetRequiredService<ProfileServices>().WeatherService);
+builder.Services.AddScoped<ICalendarService>(srv => srv.GetRequiredService<ProfileServices>().CalendarService);
+builder.Services.AddScoped<IImmichFrameLogic>(srv => srv.GetRequiredService<ProfileServices>().Logic);
 
 builder.Services.AddControllers();
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
