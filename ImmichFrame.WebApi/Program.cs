@@ -6,8 +6,13 @@ using System.Reflection;
 using ImmichFrame.Core.Logic;
 using ImmichFrame.Core.Logic.AccountSelection;
 using ImmichFrame.WebApi.Helpers;
+using ImmichFrame.WebApi.Helpers.Admin;
 using ImmichFrame.WebApi.Helpers.Config;
 using ImmichFrame.WebApi.Helpers.Profiles;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 
 var builder = WebApplication.CreateBuilder(args);
 //log the version number
@@ -108,12 +113,114 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options => options.SchemaFilter<ImmichFrame.WebApi.Helpers.NoReadOnlySchemaFilter>());
 
-builder.Services.AddAuthorization(options => { options.AddPolicy("AllowAnonymous", policy => policy.RequireAssertion(context => true)); });
+// The admin surface reads its configuration from the environment only, never from
+// Settings.json/Settings.yml: the editor these values guard is what rewrites that file, so a
+// mistake there must not be able to unlock - or lock everyone out of - the editor itself.
+var adminOidcOptions = AdminOidcOptions.FromEnvironment();
+builder.Services.AddSingleton(adminOidcOptions);
+builder.Services.AddSingleton<IAuthorizationHandler, AdminAllowlistHandler>();
 
-builder.Services.AddAuthentication("ImmichFrameScheme")
+if (adminOidcOptions.TrustProxyHeaders)
+{
+    // ASP.NET ignores X-Forwarded-* unless the hop they arrived from is listed in KnownProxies or
+    // KnownNetworks, and the defaults trust only loopback - which is not where a container sees its
+    // reverse proxy - so both lists are cleared. That is exactly why this is opt-in and off by
+    // default: with it enabled and no proxy in front, any client can forge X-Forwarded-Proto and
+    // X-Forwarded-Host and so choose the scheme and host the OpenID Connect redirect_uri is built
+    // from. Turn it on only when something in front is overwriting those headers.
+    builder.Services.Configure<ForwardedHeadersOptions>(options =>
+    {
+        options.ForwardedHeaders = ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedHost;
+        options.KnownNetworks.Clear();
+        options.KnownProxies.Clear();
+    });
+}
+
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("AllowAnonymous", policy => policy.RequireAssertion(context => true));
+
+    // The scheme is named rather than inherited: the default is still ImmichFrameScheme, whose
+    // handler succeeds anonymously whenever no secret is configured, so a policy that inherited the
+    // default would treat every caller on an unsecured frame as an authenticated administrator.
+    options.AddPolicy(AdminAuthentication.AdminOnlyPolicy, policy =>
+    {
+        policy.AddAuthenticationSchemes(AdminAuthentication.CookieScheme);
+        policy.RequireAuthenticatedUser();
+        policy.AddRequirements(new AdminAllowlistRequirement());
+    });
+});
+
+var authenticationBuilder = builder.Services.AddAuthentication("ImmichFrameScheme")
     .AddScheme<AuthenticationSchemeOptions, ImmichFrameAuthenticationHandler>("ImmichFrameScheme", options => { });
 
+// Registered whether or not OpenID Connect is configured: the cookie handler has no external
+// dependency, and a scheme that always exists is what lets /api/admin/session report an
+// unconfigured surface instead of throwing on a scheme nobody registered.
+authenticationBuilder.AddCookie(AdminAuthentication.CookieScheme, options =>
+{
+    options.Cookie.Name = "immichframe.admin";
+    options.Cookie.HttpOnly = true;
+    // Lax rather than Strict. This cookie is issued at the end of a redirect chain the identity
+    // provider started, and a Strict cookie is withheld on a top-level navigation initiated from
+    // another site - so the browser would arrive back at /admin without the session it had just
+    // been given and look signed out. Lax is sent on exactly that top-level GET while still not
+    // travelling with a cross-site POST, which is what makes the sign-out endpoint not worth a CSRF
+    // token. (The handshake's own correlation cookie is a separate cookie with its own SameSite
+    // setting, OpenIdConnectOptions.CorrelationCookie; this setting does not affect it.)
+    options.Cookie.SameSite = SameSiteMode.Lax;
+    options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+    options.ExpireTimeSpan = TimeSpan.FromHours(8);
+    options.SlidingExpiration = true;
+
+    // Everything behind this scheme is an /api/admin endpoint the SPA calls with fetch, so answer
+    // with a status code instead of the cookie handler's default redirect to a login page that does
+    // not exist in this application.
+    options.Events.OnRedirectToLogin = context =>
+    {
+        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        return Task.CompletedTask;
+    };
+    options.Events.OnRedirectToAccessDenied = context =>
+    {
+        context.Response.StatusCode = StatusCodes.Status403Forbidden;
+        return Task.CompletedTask;
+    };
+});
+
+// Only when the surface is fully configured, allowlist included: a handshake that can only ever
+// mint a cookie no policy will accept is not worth being reachable.
+if (adminOidcOptions.IsEnabled)
+{
+    authenticationBuilder.AddOpenIdConnect(AdminAuthentication.OidcScheme, options =>
+    {
+        options.Authority = adminOidcOptions.Authority;
+        options.ClientId = adminOidcOptions.ClientId;
+        options.ClientSecret = adminOidcOptions.ClientSecret;
+        options.SignInScheme = AdminAuthentication.CookieScheme;
+        options.ResponseType = OpenIdConnectResponseType.Code;
+        options.UsePkce = true;
+        // Nothing here calls the identity provider on the user's behalf, so the tokens are not kept
+        // in the cookie; the claims that decide access are copied out of the id token instead.
+        options.SaveTokens = false;
+        options.GetClaimsFromUserInfoEndpoint = true;
+        options.CallbackPath = AdminAuthentication.CallbackPath;
+        options.SignedOutCallbackPath = AdminAuthentication.SignedOutCallbackPath;
+        options.RemoteSignOutPath = AdminAuthentication.RemoteSignOutPath;
+        // openid and profile are already there by default; the allowlist can also name an address.
+        options.Scope.Add("email");
+    });
+}
+
 var app = builder.Build();
+
+// First in the pipeline, before anything reads Request.Scheme or Request.Host - which is what the
+// OpenID Connect handler builds redirect_uri from. Behind a TLS-terminating proxy without this the
+// redirect_uri is built as http:// and the identity provider rejects it.
+if (adminOidcOptions.TrustProxyHeaders)
+{
+    app.UseForwardedHeaders();
+}
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
@@ -143,12 +250,22 @@ if (app.Environment.IsDevelopment())
 app.UseMiddleware<UnknownProfileMiddleware>();
 app.UseMiddleware<CustomAuthenticationMiddleware>();
 
+// Ahead of authentication and authorization: an admin endpoint on an installation with no admin
+// surface must look absent, and [Authorize] running first would answer 401 instead - telling an
+// anonymous caller that an admin API is here.
+app.UseMiddleware<AdminSurfaceMiddleware>();
+
 app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
 
 app.MapFallbackToFile("/index.html");
+
+// After every endpoint is mapped, and before the first request: the admin prefix is exempt from the
+// frame's shared-secret scheme, so an endpoint there without authorization would answer to anyone.
+// Failing to boot, naming the route, beats discovering it in production.
+AdminEndpointGuard.Validate(((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints));
 
 var immichStartupAllowed = await ImmichServerVersionChecker.CheckServerVersions(app.Services, app.Logger);
 if (!immichStartupAllowed)
