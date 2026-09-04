@@ -4,11 +4,13 @@ using NUnit.Framework;
 namespace ImmichFrame.WebApi.Tests.Helpers.Admin;
 
 /// <summary>
-/// The single riskiest decision in the admin work. <c>CustomAuthenticationMiddleware</c> runs the
-/// frame's shared-secret scheme for every request and <c>UnknownProfileMiddleware</c> 404s an
-/// unknown profile, and both step aside for this list - so a path matched here that should not be
-/// would silently unauthenticate part of the frame API. Every existing route prefix is asserted
-/// against, alongside the near-misses a naive <c>string.StartsWith</c> would let through.
+/// The single riskiest decision in the admin work. <c>UnknownProfileMiddleware</c> and
+/// <c>CurrentProfile</c> step aside for exactly this list, and
+/// <c>CustomAuthenticationMiddleware</c> steps aside for the subset of it that
+/// <c>IsFrameAuthenticationExempt</c> returns - so a path matched here that should not be would
+/// silently unauthenticate part of the frame API, or let a request dodge profile validation. Every
+/// existing route prefix is asserted against, alongside the near-misses a naive
+/// <c>string.StartsWith</c> would let through.
 /// </summary>
 [TestFixture]
 public class AdminBypassPathTests

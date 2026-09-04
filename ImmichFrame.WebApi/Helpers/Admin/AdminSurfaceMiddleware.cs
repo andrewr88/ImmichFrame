@@ -16,24 +16,39 @@ namespace ImmichFrame.WebApi.Helpers.Admin;
 /// installation that has an <c>AuthenticationSecret</c> set. Forgetting has to fail closed.
 /// </para>
 /// <para>
-/// This covers the unconfigured case only. The configured case - an admin endpoint that forgot its
-/// authorization - is refused at startup by <see cref="AdminEndpointGuard"/> instead, so that the
-/// mistake is loud rather than a 404 someone spends an afternoon debugging.
+/// It also 404s any path under the prefix that did not reach an admin endpoint at all, configured
+/// or not. The SPA fallback's <c>{*path:nonfile}</c> pattern matches <c>/api/admin/typo</c>
+/// happily, and answering an unrouted API path with the editor's HTML discloses nothing but
+/// contradicts everything else this surface is careful to say about what does and does not exist
+/// here.
+/// </para>
+/// <para>
+/// Between them these cover the unconfigured case. The configured case - an admin endpoint that
+/// forgot its authorization - is refused at startup by <see cref="AdminEndpointGuard"/> instead, so
+/// that the mistake is loud rather than a 404 someone spends an afternoon debugging.
 /// </para>
 /// </summary>
 public class AdminSurfaceMiddleware(RequestDelegate _next)
 {
     public async Task InvokeAsync(HttpContext context, AdminOidcOptions options)
     {
-        if (!options.IsEnabled && context.Request.Path.StartsWithSegments(
+        if (context.Request.Path.StartsWithSegments(
                 AdminAuthentication.ApiPathPrefix, StringComparison.OrdinalIgnoreCase))
         {
-            // Routing runs ahead of the user pipeline, so the endpoint - and its metadata - is
-            // already known here. A request under the prefix that routed nowhere carries no
-            // attribute and is hidden along with the rest.
-            var visible = context.GetEndpoint()?.Metadata.GetMetadata<AdminEndpointAttribute>()?.VisibleWhenUnconfigured is true;
+            // Routing runs ahead of the user pipeline, so the matched endpoint - and its metadata -
+            // is already known here.
+            var endpoint = context.GetEndpoint();
 
-            if (!visible)
+            // Matching the SPA fallback, or nothing at all, is not reaching an admin endpoint.
+            if (!AdminAuthentication.IsAdminEndpoint(endpoint))
+            {
+                context.Response.StatusCode = StatusCodes.Status404NotFound;
+                return;
+            }
+
+            var visible = endpoint!.Metadata.GetMetadata<AdminEndpointAttribute>()?.VisibleWhenUnconfigured is true;
+
+            if (!options.IsEnabled && !visible)
             {
                 context.Response.StatusCode = StatusCodes.Status404NotFound;
                 return;

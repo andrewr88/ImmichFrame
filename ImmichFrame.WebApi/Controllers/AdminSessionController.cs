@@ -76,8 +76,15 @@ public class AdminSessionController(AdminOidcOptions _options) : ControllerBase
     /// No CSRF token: the cookie is <c>SameSite=Lax</c>, which is not sent with a cross-site POST,
     /// and the worst a forged sign-out could achieve is signing the administrator out.
     /// </para>
+    /// <para>
+    /// <c>AllowlistNotRequired</c> is what makes that exception legal - <see cref="AdminEndpointGuard"/>
+    /// otherwise refuses to start on scheme-only authorization, because it admits every identity the
+    /// provider will authenticate. Do not copy this pair onto an endpoint that reads or writes
+    /// anything; those take <c>[Authorize(Policy = AdminAuthentication.AdminOnlyPolicy)]</c>.
+    /// </para>
     /// </summary>
     [HttpPost("logout", Name = "AdminLogout")]
     [Authorize(AuthenticationSchemes = AdminAuthentication.CookieScheme)]
+    [AdminEndpoint(AllowlistNotRequired = true)]
     public IActionResult Logout() => SignOut(AdminAuthentication.CookieScheme);
 }
