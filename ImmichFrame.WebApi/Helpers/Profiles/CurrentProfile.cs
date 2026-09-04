@@ -1,3 +1,5 @@
+using ImmichFrame.WebApi.Helpers.Admin;
+
 namespace ImmichFrame.WebApi.Helpers.Profiles;
 
 /// <summary>
@@ -26,7 +28,18 @@ public sealed class CurrentProfile(IHttpContextAccessor _httpContextAccessor) : 
             // the default configuration.
             var request = _httpContextAccessor.HttpContext?.Request;
 
-            return request?.Query[QueryParameterName].FirstOrDefault();
+            // The admin surface has no configuration profile: it administers all of them, and
+            // UnknownProfileMiddleware deliberately does not guard these paths so that
+            // /api/admin/session stays answerable whatever is on the query string. Reading the
+            // parameter here anyway would hand an unvalidated name to the registry - and the
+            // default scheme's handler resolves settings on every request, so a mistyped profile
+            // would turn the session endpoint into a 500.
+            if (request is null || AdminAuthentication.IsAdminPath(request.Path))
+            {
+                return null;
+            }
+
+            return request.Query[QueryParameterName].FirstOrDefault();
         }
     }
 }

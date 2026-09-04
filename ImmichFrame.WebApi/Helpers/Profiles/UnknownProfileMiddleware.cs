@@ -1,4 +1,5 @@
 using ImmichFrame.Core.Helpers;
+using ImmichFrame.WebApi.Helpers.Admin;
 using ImmichFrame.WebApi.Helpers.Config;
 
 namespace ImmichFrame.WebApi.Helpers.Profiles;
@@ -17,6 +18,16 @@ public class UnknownProfileMiddleware(RequestDelegate _next, ILogger<UnknownProf
 {
     public async Task InvokeAsync(HttpContext context, IConfigCatalog catalog)
     {
+        // The admin surface has no configuration profile: its endpoints resolve nothing per profile,
+        // and /api/admin/session in particular has to answer whatever is on the query string, since
+        // the SPA calls it to find out whether an admin surface exists at all. Answering the profile
+        // 404 there would make an unconfigured installation indistinguishable from a mistyped URL.
+        if (AdminAuthentication.IsAdminPath(context.Request.Path))
+        {
+            await _next(context);
+            return;
+        }
+
         var requested = context.Request.Query[CurrentProfile.QueryParameterName].FirstOrDefault();
 
         if (!string.IsNullOrWhiteSpace(requested) && !catalog.TryGet(requested, out _))
