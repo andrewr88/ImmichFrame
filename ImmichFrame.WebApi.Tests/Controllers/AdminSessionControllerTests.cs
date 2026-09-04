@@ -137,6 +137,41 @@ public class AdminSessionControllerTests
         });
     }
 
+    /// <summary>
+    /// A unit test of the exemption predicate, not of pipeline behaviour - it never enters the
+    /// pipeline, and it is named that way on purpose. The distinction it asserts has no observable
+    /// effect today: with OpenID Connect unconfigured the handshake paths match only the SPA
+    /// fallback, which carries no <c>[Authorize]</c>, so the frame handler succeeds anonymously and
+    /// they answer 200 either way. The predicate is defence in depth, and this pins its shape.
+    /// </summary>
+    [Test]
+    public void IsFrameAuthenticationExempt_ExcusesHandshakePathsOnlyWhenOidcIsEnabled()
+    {
+        Assert.Multiple(() =>
+        {
+            foreach (var path in new[] { "/signin-oidc", "/signout-oidc", "/signout-callback-oidc" })
+            {
+                Assert.That(AdminAuthentication.IsFrameAuthenticationExempt(path, oidcEnabled: true), Is.True, path);
+                Assert.That(AdminAuthentication.IsFrameAuthenticationExempt(path, oidcEnabled: false), Is.False, path);
+            }
+
+            // The API and the SPA route stay exempt either way: the session endpoint has to be able
+            // to report that the surface is off, and the editor page has to load in order to say so.
+            foreach (var path in new[] { "/api/admin/session", "/admin" })
+            {
+                Assert.That(AdminAuthentication.IsFrameAuthenticationExempt(path, oidcEnabled: true), Is.True, path);
+                Assert.That(AdminAuthentication.IsFrameAuthenticationExempt(path, oidcEnabled: false), Is.True, path);
+            }
+
+            // And the frame API is never exempt, whatever the admin surface is doing.
+            foreach (var path in new[] { "/api/Config", "/api/Calendar", "/api/adminfoo" })
+            {
+                Assert.That(AdminAuthentication.IsFrameAuthenticationExempt(path, oidcEnabled: true), Is.False, path);
+                Assert.That(AdminAuthentication.IsFrameAuthenticationExempt(path, oidcEnabled: false), Is.False, path);
+            }
+        });
+    }
+
     [Test]
     public async Task AdminEndpoints_AllowlistEmpty_RefuseEveryone()
     {

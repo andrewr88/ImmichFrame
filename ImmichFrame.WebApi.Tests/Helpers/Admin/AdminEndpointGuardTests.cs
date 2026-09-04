@@ -33,12 +33,105 @@ public class AdminEndpointGuardTests
             Throws.InvalidOperationException.With.Message.Contains("api/admin/config"));
     }
 
+    /// <summary>
+    /// The subtle half of the rule. A bare <c>[Authorize]</c> binds to the default policy against
+    /// the default scheme, which is still <c>ImmichFrameScheme</c> - so it admits any holder of the
+    /// frame's <c>AuthenticationSecret</c> (the secret on every kiosk display), and admits everyone
+    /// when no secret is configured. It looks protected and is not.
+    /// </summary>
     [Test]
-    public void Validate_AdminEndpointWithAuthorization_IsAccepted()
+    public void Validate_BareAuthorize_IsTreatedAsUnguarded()
     {
-        var authorized = AdminEndpoint("api/admin/config", new AuthorizeAttribute());
+        var bare = AdminEndpoint("api/admin/config", new AuthorizeAttribute());
 
-        Assert.That(() => AdminEndpointGuard.Validate([authorized]), Throws.Nothing);
+        Assert.That(() => AdminEndpointGuard.Validate([bare]),
+            Throws.InvalidOperationException.With.Message.Contains("api/admin/config"));
+    }
+
+    [Test]
+    public void Validate_AuthorizationNamingSomeOtherPolicyOrScheme_IsTreatedAsUnguarded()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(() => AdminEndpointGuard.Validate(
+                [AdminEndpoint("api/admin/config", new AuthorizeAttribute { Policy = "AllowAnonymous" })]),
+                Throws.InvalidOperationException);
+
+            Assert.That(() => AdminEndpointGuard.Validate(
+                [AdminEndpoint("api/admin/config", new AuthorizeAttribute { AuthenticationSchemes = "ImmichFrameScheme" })]),
+                Throws.InvalidOperationException);
+        });
+    }
+
+    [Test]
+    public void Validate_AuthorizationNamingTheAdminPolicy_IsAccepted()
+    {
+        var byPolicy = AdminEndpoint("api/admin/config",
+            new AuthorizeAttribute { Policy = AdminAuthentication.AdminOnlyPolicy });
+
+        Assert.That(() => AdminEndpointGuard.Validate([byPolicy]), Throws.Nothing);
+    }
+
+    /// <summary>
+    /// Scheme-only authorization authenticates without consulting the allowlist, so it admits every
+    /// identity the provider will authenticate - a stranger, on a provider with open registration.
+    /// Correct for sign-out and catastrophic for anything that reads or writes, so it is refused
+    /// unless the endpoint says out loud that it means it.
+    /// </summary>
+    [Test]
+    public void Validate_CookieSchemeWithoutTheAllowlistWaiver_IsTreatedAsUnguarded()
+    {
+        var schemeOnly = AdminEndpoint("api/admin/config",
+            new AuthorizeAttribute { AuthenticationSchemes = AdminAuthentication.CookieScheme });
+
+        Assert.That(() => AdminEndpointGuard.Validate([schemeOnly]),
+            Throws.InvalidOperationException.With.Message.Contains("api/admin/config"));
+    }
+
+    [Test]
+    public void Validate_CookieSchemeWithTheAllowlistWaiverDeclared_IsAccepted()
+    {
+        var declared = AdminEndpoint("api/admin/logout",
+            new AuthorizeAttribute { AuthenticationSchemes = AdminAuthentication.CookieScheme },
+            new AdminEndpointAttribute { AllowlistNotRequired = true });
+        // A scheme list is comma separated when more than one is named.
+        var declaredWithList = AdminEndpoint("api/admin/other",
+            new AuthorizeAttribute { AuthenticationSchemes = $"SomethingElse,{AdminAuthentication.CookieScheme}" },
+            new AdminEndpointAttribute { AllowlistNotRequired = true });
+
+        Assert.That(() => AdminEndpointGuard.Validate([declared, declaredWithList]), Throws.Nothing);
+    }
+
+    [Test]
+    public void Validate_AllowlistWaiverDoesNotExcuseAbsentOrForeignAuthorization()
+    {
+        // The waiver drops the allowlist, not authorization: a bare [Authorize] binds to the frame's
+        // scheme, and the waiver must not launder that into an admin guard.
+        var flaggedButBare = AdminEndpoint("api/admin/config",
+            new AuthorizeAttribute(),
+            new AdminEndpointAttribute { AllowlistNotRequired = true });
+        var flaggedButNaked = AdminEndpoint("api/admin/other",
+            new AdminEndpointAttribute { AllowlistNotRequired = true });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(() => AdminEndpointGuard.Validate([flaggedButBare]), Throws.InvalidOperationException);
+            Assert.That(() => AdminEndpointGuard.Validate([flaggedButNaked]), Throws.InvalidOperationException);
+        });
+    }
+
+    /// <summary>
+    /// Class-level and action-level attributes both land in the endpoint's metadata, and either may
+    /// be the one that names the admin policy, so every <c>IAuthorizeData</c> has to be considered.
+    /// </summary>
+    [Test]
+    public void Validate_AdminAuthorizationAlongsideABareOne_IsAccepted()
+    {
+        var endpoint = AdminEndpoint("api/admin/config",
+            new AuthorizeAttribute(),
+            new AuthorizeAttribute { Policy = AdminAuthentication.AdminOnlyPolicy });
+
+        Assert.That(() => AdminEndpointGuard.Validate([endpoint]), Throws.Nothing);
     }
 
     [Test]
@@ -79,7 +172,7 @@ public class AdminEndpointGuardTests
         [
             AdminEndpoint("api/admin/config"),
             AdminEndpoint("api/admin/albums"),
-            AdminEndpoint("api/admin/ok", new AuthorizeAttribute())
+            AdminEndpoint("api/admin/ok", new AuthorizeAttribute { Policy = AdminAuthentication.AdminOnlyPolicy })
         ]))!.Message;
 
         Assert.Multiple(() =>
@@ -99,11 +192,75 @@ public class AdminEndpointGuardTests
     [Test]
     public void Host_RefusesToStartWhenAnAdminEndpointHasNoAuthorization()
     {
-        using var factory = ForgetfulFactory();
+        using var factory = HostWith(typeof(ForgottenAdminEndpoint));
 
         var exception = Assert.Throws<InvalidOperationException>(() => factory.CreateClient());
 
         Assert.That(exception!.Message, Does.Contain(ForgottenAdminEndpoint.Route));
+    }
+
+    /// <summary>
+    /// The regression that matters most: this endpoint boots and serves happily without the guard,
+    /// handing the configuration editor to any holder of the frame secret - or, on an installation
+    /// with no secret set, to anyone at all.
+    /// </summary>
+    [Test]
+    public void Host_RefusesToStartWhenAnAdminEndpointCarriesOnlyABareAuthorize()
+    {
+        using var factory = HostWith(typeof(BareAuthorizeAdminEndpoint));
+
+        var exception = Assert.Throws<InvalidOperationException>(() => factory.CreateClient());
+
+        Assert.That(exception!.Message, Does.Contain(BareAuthorizeAdminEndpoint.Route));
+    }
+
+    /// <summary>
+    /// Copying sign-out - the only in-repo example of admin authorization that is not the policy -
+    /// onto a config endpoint is the mistake this refuses. Without the guard the host boots and the
+    /// endpoint answers to any identity the provider authenticates.
+    /// </summary>
+    [Test]
+    public void Host_RefusesToStartWhenAnAdminEndpointHasCookieSchemeButNoAllowlistWaiver()
+    {
+        using var factory = HostWith(typeof(SchemeOnlyAdminEndpoint));
+
+        var exception = Assert.Throws<InvalidOperationException>(() => factory.CreateClient());
+
+        Assert.That(exception!.Message, Does.Contain(SchemeOnlyAdminEndpoint.Route));
+    }
+
+    [Test]
+    public void Host_RefusesToStartWhenTheAllowlistWaiverIsPairedWithABareAuthorize()
+    {
+        using var factory = HostWith(typeof(FlaggedButBarelyAuthorizedAdminEndpoint));
+
+        var exception = Assert.Throws<InvalidOperationException>(() => factory.CreateClient());
+
+        Assert.That(exception!.Message, Does.Contain(FlaggedButBarelyAuthorizedAdminEndpoint.Route));
+    }
+
+    /// <summary>
+    /// And the real sign-out endpoint, which declares the waiver, must not trip any of this - the
+    /// whole application boots in every other fixture, but assert it here where the rule lives.
+    /// </summary>
+    [Test]
+    public async Task Host_StartsWithTheRealLogoutEndpointDeclaringTheWaiver()
+    {
+        using var factory = AdminSessionControllerTests.CreateFactory(new AdminOidcOptions());
+
+        var response = await factory.CreateClient().GetAsync("/api/admin/session");
+
+        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+    }
+
+    [Test]
+    public void Host_RefusesToStartWhenAnAdminEndpointNamesSomeOtherPolicy()
+    {
+        using var factory = HostWith(typeof(ForeignPolicyAdminEndpoint));
+
+        var exception = Assert.Throws<InvalidOperationException>(() => factory.CreateClient());
+
+        Assert.That(exception!.Message, Does.Contain(ForeignPolicyAdminEndpoint.Route));
     }
 
     /// <summary>
@@ -120,7 +277,7 @@ public class AdminEndpointGuardTests
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
     }
 
-    private static WebApplicationFactory<Program> ForgetfulFactory()
+    private static WebApplicationFactory<Program> HostWith(Type hiddenEndpoint)
     {
         var versionHandler = new Mock<HttpMessageHandler>().WithServerVersion();
 
@@ -134,7 +291,7 @@ public class AdminEndpointGuardTests
 
                     services.AddControllers()
                         .ConfigureApplicationPartManager(manager =>
-                            manager.FeatureProviders.Add(new ForgottenAdminEndpointProvider()));
+                            manager.FeatureProviders.Add(new HiddenAdminEndpointProvider(hiddenEndpoint)));
                 });
             });
     }

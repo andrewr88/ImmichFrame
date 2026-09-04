@@ -31,6 +31,25 @@ public sealed class AdminEndpointAttribute : Attribute
     public bool Anonymous { get; init; }
 
     /// <summary>
+    /// This endpoint is guarded by admin <em>authentication</em> alone - a valid admin cookie - and
+    /// deliberately does not require the caller to be on the allowlist.
+    /// <para>
+    /// True for exactly one: signing out. Ending your own session is not a privileged act, and
+    /// gating it on the allowlist strands a signed-in non-administrator whose polling of the session
+    /// endpoint keeps renewing the sliding cookie.
+    /// </para>
+    /// <para>
+    /// It is a flag rather than something <see cref="AdminEndpointGuard"/> infers from the
+    /// authorization attribute because <c>[Authorize(AuthenticationSchemes = CookieScheme)]</c> is a
+    /// fail-open shape for anything else: it admits every identity the provider will authenticate,
+    /// which on a provider with open registration is a stranger. Sign-out is the exception, so
+    /// sign-out is what has to say so - visibly, at the call site, and greppable - instead of the
+    /// shape being blessed everywhere because one endpoint needed it.
+    /// </para>
+    /// </summary>
+    public bool AllowlistNotRequired { get; init; }
+
+    /// <summary>
     /// This endpoint answers even while the admin surface is unconfigured, instead of 404ing with
     /// the rest of the prefix.
     /// <para>
