@@ -50,6 +50,27 @@ internal sealed class JsonConfigDocument(string _json) : IConfigDocument
         }
     }
 
+    public JsonObject DeclaredOverrides(string? profileName)
+    {
+        // Freshly parsed, like Bind, so the caller is handed a detached tree it may keep or mutate
+        // without the document seeing it.
+        var root = Parse();
+
+        if (string.IsNullOrEmpty(profileName))
+        {
+            root.Remove(ProfilesKey);
+            return root;
+        }
+
+        if (!TryFindProfile(root, profileName, out var declared))
+        {
+            throw new ProfileNotFoundException($"No configuration profile named '{profileName}' is configured.");
+        }
+
+        // 'empty: null' is a declared profile that overrides nothing, not a missing one.
+        return declared?.DeepClone() as JsonObject ?? [];
+    }
+
     private JsonObject Parse()
     {
         JsonNode? root;

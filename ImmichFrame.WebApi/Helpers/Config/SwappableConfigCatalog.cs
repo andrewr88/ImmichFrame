@@ -41,10 +41,10 @@ public sealed class SwappableConfigCatalog(Func<IConfigCatalog> _seed, Func<Prof
     /// <para>
     /// The one rough edge: a request whose profile the replacement no longer declares, admitted by
     /// <see cref="UnknownProfileMiddleware"/> before the swap and resolving its services after it,
-    /// fails with an unhandled <see cref="Core.Exceptions.ProfileNotFoundException"/>. Nothing in
-    /// the pipeline maps that to anything better, so the client sees a 500 in either environment -
-    /// only the body differs, Development adding the developer exception page. Mapping it to a 404
-    /// belongs with the first callers of this method, not here.
+    /// fails with a <see cref="Core.Exceptions.ProfileNotFoundException"/> thrown from dependency
+    /// injection, well outside MVC's exception filters. <see cref="ProfileNotFoundMiddleware"/> - added
+    /// with the configuration editor, the first caller of this method - catches it in the pipeline and
+    /// answers 404, which is what that request deserves. Mapping it belongs there rather than here.
     /// </para>
     /// </summary>
     public void Swap(IConfigCatalog replacement)

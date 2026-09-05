@@ -38,6 +38,19 @@
         public ProfileNotFoundException(string message) : base(message) { }
         public ProfileNotFoundException(string message, Exception innerException) : base(message, innerException) { }
     }
+    /// <summary>
+    /// A configuration save that was refused before anything was written, for a reason the operator
+    /// can act on: the file changed underneath the editor, there is no file to write, the file is in
+    /// the old schema, or the directory is not writable. Distinct from
+    /// <see cref="SettingsNotValidException"/>, which means the configuration itself is wrong.
+    /// </summary>
+    public class ConfigSaveRefusedException : ImmichFrameException
+    {
+        public ConfigSaveRefusedException() : base() { }
+        public ConfigSaveRefusedException(string message) : base(message) { }
+        public ConfigSaveRefusedException(string message, Exception innerException) : base(message, innerException) { }
+    }
+
     public class SettingsNotValidException : ImmichFrameException
     {
         public SettingsNotValidException() : base() { }

@@ -89,7 +89,12 @@ public partial class ConfigCatalog : IConfigCatalog
         }
     }
 
-    private static void ValidateProfileName(string name)
+    /// <summary>
+    /// The profile-name rules, exposed so that the admin editor rejects a bad name with the same
+    /// message the loader would, rather than growing a second copy of the pattern and the reserved
+    /// list that would drift from this one.
+    /// </summary>
+    internal static void ValidateProfileName(string name)
     {
         if (!ValidProfileName().IsMatch(name))
         {
