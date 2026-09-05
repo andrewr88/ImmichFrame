@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using ImmichFrame.Core.Exceptions;
 using YamlDotNet.Core;
 using YamlDotNet.RepresentationModel;
@@ -53,6 +54,100 @@ internal sealed class YamlConfigDocument(string _yaml) : IConfigDocument
         {
             throw new SettingsNotValidException($"Problem with parsing the settings: {ex.Message}", ex);
         }
+    }
+
+    public JsonObject DeclaredOverrides(string? profileName)
+    {
+        // Freshly parsed, like Bind, so the caller is handed a detached tree it may keep or mutate
+        // without the document seeing it.
+        var root = Parse();
+
+        if (string.IsNullOrEmpty(profileName))
+        {
+            if (TryFindChild(root, ProfilesKey, StringComparison.Ordinal, out var profilesKey, out _))
+            {
+                root.Children.Remove(profilesKey!);
+            }
+
+            return ToJson(root);
+        }
+
+        if (!TryFindProfile(root, profileName, out var overrides))
+        {
+            throw new ProfileNotFoundException($"No configuration profile named '{profileName}' is configured.");
+        }
+
+        // 'empty:' is a declared profile that overrides nothing, not a missing one.
+        return overrides is YamlMappingNode mapping ? ToJson(mapping) : [];
+    }
+
+    /// <summary>
+    /// Projects a YAML node onto the JSON node model, so that one caller can inspect either format.
+    /// <para>
+    /// Every scalar becomes a JSON string, including numbers and booleans: YAML's representation
+    /// model carries no resolved type, and guessing one here would turn a deliberately quoted
+    /// '10' into a number. <see cref="IConfigDocument.DeclaredOverrides"/> documents that
+    /// consequence - this projection answers which keys are declared, not what they bind to.
+    /// </para>
+    /// </summary>
+    private static JsonObject ToJson(YamlMappingNode mapping)
+    {
+        RefuseAnchors(mapping);
+
+        var result = new JsonObject();
+
+        foreach (var (key, value) in mapping.Children)
+        {
+            if (key is not YamlScalarNode { Value: { } name }) continue;
+
+            result[name] = ToJson(value);
+        }
+
+        return result;
+    }
+
+    private static JsonNode? ToJson(YamlNode node)
+    {
+        RefuseAnchors(node);
+
+        return node switch
+        {
+            YamlMappingNode mapping => ToJson(mapping),
+            YamlSequenceNode sequence => new JsonArray(sequence.Children.Select(ToJson).ToArray()),
+            // A plain empty, '~' or 'null' scalar is YAML's null; quoted, the same characters are a
+            // string the user meant to write.
+            YamlScalarNode { Style: ScalarStyle.Plain, Value: null or "" or "~" or "null" } => null,
+            YamlScalarNode { Value: { } value } => JsonValue.Create(value),
+            _ => null
+        };
+    }
+
+    /// <summary>
+    /// Refuses a document that uses YAML anchors, rather than quietly flattening one.
+    /// <para>
+    /// <see cref="YamlStream"/> resolves an alias to the very node the anchor named, so an aliased
+    /// mapping is indistinguishable here from one written out longhand. Projecting it would report
+    /// every inherited value as a key the profile declares, and saving would then write them all
+    /// literally: the anchor vanishes and the profile silently becomes an explicit override of
+    /// settings it used to share. That is the same drift the declared-key machinery exists to
+    /// prevent, so the editor says it cannot edit this file instead of mangling it. Losing comments
+    /// was an accepted trade; losing the structure of the configuration is not.
+    /// </para>
+    /// <para>
+    /// Checked on the aliased node rather than on the document, because the node an alias resolves to
+    /// carries the anchor name wherever it appears - so both the definition and every use are caught,
+    /// whichever subtree is being projected.
+    /// </para>
+    /// </summary>
+    private static void RefuseAnchors(YamlNode node)
+    {
+        if (node.Anchor.IsEmpty) return;
+
+        throw new SettingsNotValidException(
+            $"The settings file uses the YAML anchor '&{node.Anchor}'. The configuration editor cannot " +
+            "read or write a file that shares nodes between sections, because it cannot tell an aliased " +
+            "value from one the section declares itself. Write the anchored values out in full to edit " +
+            "this file here.");
     }
 
     /// <summary>

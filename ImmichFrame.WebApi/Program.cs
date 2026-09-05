@@ -64,13 +64,26 @@ var configPath = Environment.GetEnvironmentVariable("IMMICHFRAME_CONFIG_PATH") ?
         ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Config");
 builder.Services.AddTransient<ConfigLoader>();
 
+// The one place the configuration directory is named. Everything that reads or writes the settings
+// file resolves it from here, so a test - or anything else - that moves it moves all of them.
+builder.Services.AddSingleton(new ConfigLocation(configPath));
+
 // Everything injects IConfigCatalog and gets the forwarding catalog, so the configuration behind it
 // can be replaced at runtime. The seed still runs on first use rather than here, so a test that
 // registers its own catalog never reads the settings file.
+//
+// The directory comes from ConfigLocation rather than from the captured local, so that the catalog
+// is seeded from the same file the admin editor writes to. Two independent readings of the path
+// would let an override move one and not the other, and the editor would then convert one file
+// using another file's API keys.
 builder.Services.AddSingleton(srv => new SwappableConfigCatalog(
-    () => srv.GetRequiredService<ConfigLoader>().LoadCatalog(configPath),
+    () => srv.GetRequiredService<ConfigLoader>().LoadCatalog(srv.GetRequiredService<ConfigLocation>().Directory),
     srv.GetRequiredService<ProfileRegistry>));
 builder.Services.AddSingleton<IConfigCatalog>(srv => srv.GetRequiredService<SwappableConfigCatalog>());
+
+// Singleton because it serialises saves on one lock: the version token it hands out is only
+// meaningful if no second save can slip between a read and the write it authorises.
+builder.Services.AddSingleton<AdminConfigService>();
 
 builder.Services.AddHttpClient(); // Ensures IHttpClientFactory is available
 
@@ -245,6 +258,11 @@ if (app.Environment.IsDevelopment())
 }
 
 // app.UseHttpsRedirection();
+// Outside everything that resolves a profile, including UnknownProfileMiddleware's own catalog
+// lookup: a configuration saved through the admin editor can drop a profile out from under a
+// request that was already admitted, and that is a 404, not a 500.
+app.UseMiddleware<ProfileNotFoundMiddleware>();
+
 // Ahead of authentication: the auth handler resolves the profile's settings, so an unknown
 // profile has to be turned away before it gets there.
 app.UseMiddleware<UnknownProfileMiddleware>();

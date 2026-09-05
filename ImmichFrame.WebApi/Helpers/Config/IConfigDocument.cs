@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 
 namespace ImmichFrame.WebApi.Helpers.Config;
 
@@ -28,4 +29,25 @@ internal interface IConfigDocument
     /// binds the base configuration; otherwise that profile is merged over the base first.
     /// </summary>
     T Bind<T>(string? profileName) where T : IConfigSettable, new();
+
+    /// <summary>
+    /// What a profile actually declares, as opposed to what it resolves to. A null or empty
+    /// <paramref name="profileName"/> returns the base document without its <c>Profiles</c> section;
+    /// otherwise it returns that profile's own subtree, empty when the profile declares nothing.
+    /// <para>
+    /// This is the half of the document <see cref="Bind{T}"/> deliberately throws away, and the
+    /// admin editor needs both: which keys a profile overrides is what tells an inherited value from
+    /// an explicit one on screen, and it is what lets a profile be written back without turning
+    /// every value it inherits into an override of its own.
+    /// </para>
+    /// <para>
+    /// A <see cref="JsonObject"/> rather than each format's own node type, so that one caller can
+    /// read either. Be clear about the cost: scalars from a YAML document arrive as JSON
+    /// <em>strings</em> whatever they would bind to, because YAML's representation model does not
+    /// resolve types. Read this to find out which keys are declared and to read declared strings -
+    /// never to bind settings, and never to write a file from.
+    /// </para>
+    /// </summary>
+    /// <exception cref="Core.Exceptions.ProfileNotFoundException">No profile of that name is declared.</exception>
+    JsonObject DeclaredOverrides(string? profileName);
 }
