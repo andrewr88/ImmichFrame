@@ -20,9 +20,11 @@
 		entry: EditableEntry;
 		/** The configuration this one inherits from, or null for the default configuration itself. */
 		inheritFrom: EditableEntry | null;
+		/** The loaded configuration's version token, which the Immich pickers ask against. */
+		version: string;
 	}
 
-	let { entry, inheritFrom }: Props = $props();
+	let { entry, inheritFrom, version }: Props = $props();
 
 	// The default configuration has nothing above it, so its unset keys fall back to the setting's
 	// built-in default rather than to another configuration.
@@ -179,6 +181,8 @@
 				<AccountEditor
 					{account}
 					{index}
+					profile={entry.name}
+					{version}
 					onRemove={() => (entry.accounts = entry.accounts.filter((_, other) => other !== index))}
 				/>
 			{/each}
