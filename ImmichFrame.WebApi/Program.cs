@@ -87,6 +87,21 @@ builder.Services.AddSingleton<AdminConfigService>();
 
 builder.Services.AddHttpClient(); // Ensures IHttpClientFactory is available
 
+// The configuration editor's Immich picker fetches from whatever server an administrator names -
+// including one still being typed into the form - so unlike the frame's own client this one is
+// bounded on every axis. An authenticated administrator choosing the target is the point, not the
+// risk; a typo turning ImmichFrame into an unbounded fetcher of somebody else's network is.
+builder.Services.AddHttpClient(AdminImmichAccounts.HttpClientName,
+        client => client.Timeout = AdminImmichAccounts.RequestTimeout)
+    // Redirects are not followed. Following one lets the named host hand the request - and the
+    // X-API-KEY header on it - to a host the administrator never named.
+    .ConfigurePrimaryHttpMessageHandler(AdminImmichAccounts.CreatePrimaryHandler)
+    .AddHttpMessageHandler(() => new ResponseSizeLimitHandler(AdminImmichAccounts.MaxResponseBytes));
+
+// Singleton, like the AdminConfigService it resolves saved accounts through: it holds no per-request
+// state, and its HttpClients come from IHttpClientFactory.
+builder.Services.AddSingleton<AdminImmichAccounts>();
+
 // One set of services per configuration profile, built on first use and cached until the
 // configuration is swapped; the pools, HTTP clients and caches inside are far too expensive to
 // rebuild per request.
