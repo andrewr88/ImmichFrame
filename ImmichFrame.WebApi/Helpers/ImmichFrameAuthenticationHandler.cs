@@ -30,7 +30,12 @@ public class ImmichFrameAuthenticationHandler : AuthenticationHandler<Authentica
         var endpoint = Context.GetEndpoint();
         var authorizeAttribute = endpoint?.Metadata?.GetMetadata<IAuthorizeData>();
 
-        if (authenticationSecret == null || authorizeAttribute == null)
+        // Whitespace is "no secret configured", not a secret. Anything narrower makes the empty
+        // string a working credential and locks out every real client: the header parse below
+        // trims "Bearer " down to "", which then compares equal to the configured secret, while a
+        // frame sending its actual token is refused. A settings file can reach that state by hand,
+        // so the check belongs here rather than only in whatever wrote the file.
+        if (string.IsNullOrWhiteSpace(authenticationSecret) || authorizeAttribute == null)
         {
             // No auth is required
             var claims = new[] { new Claim(ClaimTypes.NameIdentifier, "anonymous") };
