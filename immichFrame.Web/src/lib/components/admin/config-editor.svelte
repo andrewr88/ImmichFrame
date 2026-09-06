@@ -3,7 +3,9 @@
 	import * as api from '$lib/immichFrameApi';
 	import {
 		newProfile,
+		problemDetail,
 		profileNameError,
+		statusOf,
 		toEditable,
 		toUpdate,
 		validationErrors,
@@ -53,42 +55,6 @@
 
 	onMount(load);
 
-	/**
-	 * oazapfts types a response as the single status the OpenAPI document declares but returns
-	 * whatever the server actually answered, so every refusal arrives here as a value rather than a
-	 * throw. `src/routes/[config]/+page.ts` widens the same way for its 404.
-	 */
-	function statusOf(response: { status: number }): number {
-		return response.status;
-	}
-
-	/** The server writes these messages for an operator, so they are shown as they arrive. */
-	function detailOf(data: unknown, fallback: string): string {
-		if (!data || typeof data !== 'object') return fallback;
-
-		const problem = data as { detail?: unknown; title?: unknown; errors?: unknown };
-
-		if (typeof problem.detail === 'string' && problem.detail.trim()) return problem.detail;
-
-		// A request the controller never sees carries its messages somewhere else. Model binding
-		// fails before the action runs and [ApiController] answers with a ValidationProblemDetails,
-		// which has a title and an `errors` map and no `detail` at all - and that is exactly what a
-		// mistyped album or person UUID produces while those fields are raw text entry.
-		const messages =
-			problem.errors && typeof problem.errors === 'object'
-				? Object.entries(problem.errors as Record<string, unknown>).flatMap(([field, value]) =>
-						(Array.isArray(value) ? value : [value])
-							.filter((message): message is string => typeof message === 'string')
-							.map((message) => (field && field !== '$' ? `${field}: ${message}` : message))
-					)
-				: [];
-
-		if (messages.length > 0) return messages.join(' ');
-		if (typeof problem.title === 'string' && problem.title.trim()) return problem.title;
-
-		return fallback;
-	}
-
 	async function load() {
 		loading = true;
 		loadError = '';
@@ -106,7 +72,7 @@
 			if (status === 403) return onForbidden();
 
 			if (status !== 200) {
-				loadError = detailOf(
+				loadError = problemDetail(
 					response.data,
 					`The configuration could not be read (HTTP ${status}).`
 				);
@@ -154,7 +120,7 @@
 			}
 
 			saveStale = status === 409;
-			saveError = detailOf(response.data, `The configuration was not saved (HTTP ${status}).`);
+			saveError = problemDetail(response.data, `The configuration was not saved (HTTP ${status}).`);
 		} catch {
 			saveError = 'The configuration was not saved. Is ImmichFrame still running?';
 		} finally {
@@ -280,7 +246,11 @@
 
 	{#if current}
 		<fieldset disabled={readOnly}>
-			<EntryEditor entry={current} inheritFrom={current.isDefault ? null : config.default} />
+			<EntryEditor
+				entry={current}
+				inheritFrom={current.isDefault ? null : config.default}
+				version={config.version}
+			/>
 		</fieldset>
 	{/if}
 

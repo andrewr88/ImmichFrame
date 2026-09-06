@@ -188,10 +188,20 @@ export const accountFields: Record<AccountProp, FieldSpec> = {
 	},
 	imagesFromDate: { label: 'Images from date', kind: 'date' },
 	imagesUntilDate: { label: 'Images until date', kind: 'date' },
-	albums: { label: 'Albums', kind: 'lines', help: 'One album UUID per line.' },
-	excludedAlbums: { label: 'Excluded albums', kind: 'lines', help: 'One album UUID per line.' },
-	people: { label: 'People', kind: 'lines', help: 'One person UUID per line.' },
-	tags: { label: 'Tags', kind: 'lines', help: 'One full tag path per line, e.g. Travel/Europe.' },
+	// The four picked fields keep 'lines' as their kind: it is what the manual fallback renders, and
+	// what a value written by hand is still parsed as when Immich cannot be reached.
+	albums: { label: 'Albums', kind: 'lines', help: 'Only these albums are shown. Stored as ids.' },
+	excludedAlbums: {
+		label: 'Excluded albums',
+		kind: 'lines',
+		help: 'Photos in these albums are never shown. Stored as ids.'
+	},
+	people: { label: 'People', kind: 'lines', help: 'Only photos of these people. Stored as ids.' },
+	tags: {
+		label: 'Tags',
+		kind: 'lines',
+		help: 'Only photos with these tags, stored as the full path, e.g. Travel/Europe.'
+	},
 	rating: { label: 'Rating', kind: 'integer', help: 'Exact star rating, -1 to 5. Blank for any.' }
 };
 
@@ -239,6 +249,12 @@ export interface EditableAccount {
 	/** The administrator is typing a key rather than keeping the stored one. */
 	entering: boolean;
 	apiKey: string;
+	/**
+	 * The server URL this account was read with, kept so an edit to it can be noticed. A stored API
+	 * key belongs to the server it was stored against, so once the URL in the form has moved on, the
+	 * stored key is no longer a credential for what the form describes.
+	 */
+	savedServerUrl: string | null;
 }
 
 export interface EditableEntry {
@@ -272,7 +288,8 @@ function toAccount(dto: AdminAccountSettingsDto, declared: boolean): EditableAcc
 		values: { ...dto, apiKey: undefined },
 		hasStoredKey: declared && !fromFile && dto.hasApiKey === true && !!dto.id,
 		entering: declared && !fromFile && dto.hasApiKey !== true,
-		apiKey: ''
+		apiKey: '',
+		savedServerUrl: dto.immichServerUrl ?? null
 	};
 }
 
@@ -336,7 +353,9 @@ export function newAccount(values: AdminAccountSettingsDto = {}): EditableAccoun
 		values: { ...values, id: undefined, apiKey: undefined },
 		hasStoredKey: false,
 		entering: true,
-		apiKey: ''
+		apiKey: '',
+		// No handle and no stored key, so there is nothing for a URL edit to disagree with.
+		savedServerUrl: null
 	};
 }
 
@@ -417,6 +436,42 @@ export function toUpdate(config: EditableConfig): AdminConfigUpdateDto {
 		profiles: config.profiles.map(toEntryDto),
 		convertLegacySchema: config.convertLegacySchema
 	};
+}
+
+/**
+ * oazapfts types a response as the single status the OpenAPI document declares but returns whatever
+ * the server actually answered, so every refusal arrives as a value rather than a throw.
+ * `src/routes/[config]/+page.ts` widens the same way for its 404.
+ */
+export function statusOf(response: { status: number }): number {
+	return response.status;
+}
+
+/** The server writes these messages for an operator, so they are shown as they arrive. */
+export function problemDetail(data: unknown, fallback: string): string {
+	if (!data || typeof data !== 'object') return fallback;
+
+	const problem = data as { detail?: unknown; title?: unknown; errors?: unknown };
+
+	if (typeof problem.detail === 'string' && problem.detail.trim()) return problem.detail;
+
+	// A request the controller never sees carries its messages somewhere else. Model binding fails
+	// before the action runs and [ApiController] answers with a ValidationProblemDetails, which has
+	// a title and an `errors` map and no `detail` at all - and that is exactly what a mistyped album
+	// or person UUID produces, which the pickers narrow the chances of but do not remove.
+	const messages =
+		problem.errors && typeof problem.errors === 'object'
+			? Object.entries(problem.errors as Record<string, unknown>).flatMap(([field, value]) =>
+					(Array.isArray(value) ? value : [value])
+						.filter((message): message is string => typeof message === 'string')
+						.map((message) => (field && field !== '$' ? `${field}: ${message}` : message))
+				)
+			: [];
+
+	if (messages.length > 0) return messages.join(' ');
+	if (typeof problem.title === 'string' && problem.title.trim()) return problem.title;
+
+	return fallback;
 }
 
 export function profileNameError(name: string, existing: string[]): string | null {
