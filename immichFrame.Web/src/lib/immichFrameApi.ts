@@ -12,6 +12,124 @@ export const defaults: Oazapfts.Defaults<Oazapfts.CustomHeaders> = {
 };
 const oazapfts = Oazapfts.runtime(defaults);
 export const servers = {};
+export type AdminConfigSourceDto = {
+    format?: string | null;
+    path?: string | null;
+    legacySchema?: boolean;
+    editable?: boolean;
+    notEditableReason?: string | null;
+};
+export type AdminGeneralSettingsDto = {
+    interval?: number | null;
+    transitionDuration?: number | null;
+    downloadImages?: boolean | null;
+    renewImagesDuration?: number | null;
+    showClock?: boolean | null;
+    clockFormat?: string | null;
+    clockDateFormat?: string | null;
+    showPhotoDate?: boolean | null;
+    showProgressBar?: boolean | null;
+    photoDateFormat?: string | null;
+    showImageDesc?: boolean | null;
+    showPeopleDesc?: boolean | null;
+    showTagsDesc?: boolean | null;
+    showAlbumName?: boolean | null;
+    showImageLocation?: boolean | null;
+    imageLocationFormat?: string | null;
+    primaryColor?: string | null;
+    secondaryColor?: string | null;
+    style?: string | null;
+    baseFontSize?: string | null;
+    showWeatherDescription?: boolean | null;
+    weatherIconUrl?: string | null;
+    imageZoom?: boolean | null;
+    imagePan?: boolean | null;
+    imageFill?: boolean | null;
+    playAudio?: boolean | null;
+    layout?: string | null;
+    language?: string | null;
+    webcalendars?: string[] | null;
+    refreshAlbumPeopleInterval?: number | null;
+    weatherLatLong?: string | null;
+    unitSystem?: string | null;
+    weatherApiKey?: string | null;
+    webhook?: string | null;
+    authenticationSecret?: string | null;
+    hasWeatherApiKey?: boolean;
+    hasWebhook?: boolean;
+    hasAuthenticationSecret?: boolean;
+};
+export type AdminAccountSettingsDto = {
+    id?: string | null;
+    immichServerUrl?: string | null;
+    apiKey?: string | null;
+    hasApiKey?: boolean;
+    apiKeyFromFile?: boolean;
+    apiKeyFile?: string | null;
+    showMemories?: boolean | null;
+    showFavorites?: boolean | null;
+    showArchived?: boolean | null;
+    showVideos?: boolean | null;
+    imagesFromDays?: number | null;
+    imagesFromDate?: string | null;
+    imagesUntilDate?: string | null;
+    albums?: string[] | null;
+    excludedAlbums?: string[] | null;
+    people?: string[] | null;
+    tags?: string[] | null;
+    rating?: number | null;
+};
+export type AdminConfigEntryDto = {
+    name?: string | null;
+    declaredKeys?: string[] | null;
+    general?: AdminGeneralSettingsDto;
+    accounts?: AdminAccountSettingsDto[] | null;
+};
+export type AdminConfigDto = {
+    version?: string | null;
+    source?: AdminConfigSourceDto;
+    "default"?: AdminConfigEntryDto;
+    profiles?: AdminConfigEntryDto[] | null;
+};
+export type AdminConfigUpdateDto = {
+    version?: string | null;
+    "default"?: AdminConfigEntryDto;
+    profiles?: AdminConfigEntryDto[] | null;
+    convertLegacySchema?: boolean;
+};
+export type AdminImmichAccountRefDto = {
+    profile?: string | null;
+    accountId?: string | null;
+    version?: string | null;
+    serverUrl?: string | null;
+    apiKey?: string | null;
+};
+export type AdminImmichAlbumDto = {
+    id?: string;
+    albumName?: string | null;
+    assetCount?: number;
+};
+export type AdminImmichPersonDto = {
+    id?: string;
+    name?: string | null;
+};
+export type AdminImmichPeopleDto = {
+    people?: AdminImmichPersonDto[] | null;
+    total?: number;
+    truncated?: boolean;
+};
+export type AdminImmichTagDto = {
+    id?: string;
+    value?: string | null;
+    name?: string | null;
+};
+export type AdminSessionDto = {
+    configured?: boolean;
+    authenticated?: boolean;
+    isAdmin?: boolean;
+    subject?: string | null;
+    email?: string | null;
+};
 export type ExifResponseDto = {
     city?: string | null;
     country?: string | null;
@@ -236,6 +354,93 @@ export type IWeather = {
     description?: string | null;
     iconId?: string | null;
 };
+export function getAdminConfig(opts?: Oazapfts.RequestOpts) {
+    return oazapfts.fetchJson<{
+        status: 200;
+        data: AdminConfigDto;
+    }>("/api/admin/config", {
+        ...opts
+    });
+}
+export function saveAdminConfig(adminConfigUpdateDto?: AdminConfigUpdateDto, opts?: Oazapfts.RequestOpts) {
+    return oazapfts.fetchJson<{
+        status: 200;
+        data: AdminConfigDto;
+    }>("/api/admin/config", oazapfts.json({
+        ...opts,
+        method: "PUT",
+        body: adminConfigUpdateDto
+    }));
+}
+export function getAdminImmichAlbums(adminImmichAccountRefDto?: AdminImmichAccountRefDto, opts?: Oazapfts.RequestOpts) {
+    return oazapfts.fetchJson<{
+        status: 200;
+        data: AdminImmichAlbumDto[];
+    }>("/api/admin/immich/albums", oazapfts.json({
+        ...opts,
+        method: "POST",
+        body: adminImmichAccountRefDto
+    }));
+}
+export function getAdminImmichPeople(adminImmichAccountRefDto?: AdminImmichAccountRefDto, opts?: Oazapfts.RequestOpts) {
+    return oazapfts.fetchJson<{
+        status: 200;
+        data: AdminImmichPeopleDto;
+    }>("/api/admin/immich/people", oazapfts.json({
+        ...opts,
+        method: "POST",
+        body: adminImmichAccountRefDto
+    }));
+}
+export function getAdminImmichTags(adminImmichAccountRefDto?: AdminImmichAccountRefDto, opts?: Oazapfts.RequestOpts) {
+    return oazapfts.fetchJson<{
+        status: 200;
+        data: AdminImmichTagDto[];
+    }>("/api/admin/immich/tags", oazapfts.json({
+        ...opts,
+        method: "POST",
+        body: adminImmichAccountRefDto
+    }));
+}
+export function getAdminImmichPersonThumbnail(id: string, { accountId, version, profile }: {
+    accountId?: string;
+    version?: string;
+    profile?: string;
+} = {}, opts?: Oazapfts.RequestOpts) {
+    return oazapfts.fetchBlob<{
+        status: 200;
+        data: Blob;
+    }>(`/api/admin/immich/people/${encodeURIComponent(id)}/thumbnail${QS.query(QS.explode({
+        accountId,
+        version,
+        profile
+    }))}`, {
+        ...opts
+    });
+}
+export function getAdminSession(opts?: Oazapfts.RequestOpts) {
+    return oazapfts.fetchJson<{
+        status: 200;
+        data: AdminSessionDto;
+    }>("/api/admin/session", {
+        ...opts
+    });
+}
+export function adminLogin({ returnUrl }: {
+    returnUrl?: string;
+} = {}, opts?: Oazapfts.RequestOpts) {
+    return oazapfts.fetchText(`/api/admin/login${QS.query(QS.explode({
+        returnUrl
+    }))}`, {
+        ...opts
+    });
+}
+export function adminLogout(opts?: Oazapfts.RequestOpts) {
+    return oazapfts.fetchText("/api/admin/logout", {
+        ...opts,
+        method: "POST"
+    });
+}
 export function getAssets({ clientIdentifier, profile }: {
     clientIdentifier?: string;
     profile?: string;

@@ -275,6 +275,193 @@ public class AdminConfigControllerTests
         });
     }
 
+    /// <summary>
+    /// Clearing a secret has to remove it, not write it as <c>""</c>.
+    /// <para>
+    /// The two read back differently everywhere they are used: null is "not configured", while an
+    /// empty string is a configured secret. For <c>AuthenticationSecret</c> that difference is an
+    /// outright lockout - the frame's handler goes on demanding a bearer token, and the only token
+    /// equal to <c>""</c> is the one no client sends - so the editor must not be able to produce it.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task SaveConfig_ClearedSecrets_AreRemovedRatherThanWrittenEmpty()
+    {
+        WriteSettings("Settings.json", SettingsJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var config = await GetConfig(client);
+
+        // The empty string is how the API documents "clear this", as opposed to the placeholder's
+        // "keep what is stored".
+        config.Default.General.AuthenticationSecret = string.Empty;
+        config.Default.General.WeatherApiKey = "   ";
+        config.Default.General.Webhook = AdminSecret.Placeholder;
+
+        var response = await Put(client, config);
+        var saved = JsonNode.Parse(File.ReadAllText(SettingsPath("Settings.json")));
+        var general = saved?["General"] as JsonObject;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(general!.ContainsKey(nameof(GeneralSettings.AuthenticationSecret)), Is.False,
+                "a cleared secret must leave no key behind, not an empty one");
+            Assert.That(general.ContainsKey(nameof(GeneralSettings.WeatherApiKey)), Is.False,
+                "whitespace is not a secret either");
+            Assert.That((string?)general[nameof(GeneralSettings.Webhook)],
+                Is.EqualTo("https://hook.example.com/base"),
+                "the secret that was left alone still has to survive");
+        });
+    }
+
+    /// <summary>
+    /// A profile's third state: <c>AuthenticationSecret: null</c> overrides an inherited secret with
+    /// none, which <c>docs/getting-started/configuration.md</c> documents as deliberate - it is how a
+    /// frame on a trusted network skips the prompt. Dropping the key instead would hand the profile
+    /// the default's secret back, so the editor would be unable to express something hand-editing can.
+    /// </summary>
+    [Test]
+    public async Task SaveConfig_ProfileWithNoSecret_WritesNullRatherThanDroppingTheKey()
+    {
+        WriteSettings("Settings.json", SettingsJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var config = await GetConfig(client);
+
+        var response = await Put(client, WithNoSecretOn(config, "kitchen"));
+        var general = KitchenGeneral();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(general.ContainsKey(nameof(GeneralSettings.AuthenticationSecret)), Is.True,
+                "dropping the key would give the profile the default's secret back");
+            Assert.That(general[nameof(GeneralSettings.AuthenticationSecret)], Is.Null,
+                "and it has to be null, never the empty string");
+        });
+    }
+
+    /// <summary>
+    /// The capability that null is for: the profile is reachable without a token while the default
+    /// configuration still demands one.
+    /// </summary>
+    [Test]
+    public async Task SaveConfig_ProfileWithNoSecret_LeavesThatProfileUnauthenticated()
+    {
+        WriteSettings("Settings.json", SettingsJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var config = await GetConfig(client);
+
+        var response = await Put(client, WithNoSecretOn(config, "kitchen"));
+        var profile = await client.GetAsync("/api/Calendar?profile=kitchen");
+        var fallback = await client.GetAsync("/api/Calendar");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(profile.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(fallback.StatusCode, Is.EqualTo(HttpStatusCode.Unauthorized),
+                "the default configuration keeps its secret");
+        });
+    }
+
+    /// <summary>
+    /// Round-tripping that profile unchanged has to leave the null where it is. The editor sends the
+    /// masking placeholder back for a secret it never received, and resolving that against a stored
+    /// null must not be mistaken for "there is nothing here, so drop the key".
+    /// </summary>
+    [Test]
+    public async Task SaveConfig_ProfileWithAStoredNullSecret_KeepsItThroughAnUneditedRoundTrip()
+    {
+        WriteSettings("Settings.json",
+            SettingsJson.Replace("\"Interval\": 10,", "\"Interval\": 10,\n            \"AuthenticationSecret\": null,"));
+
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var config = await GetConfig(client);
+
+        Assume.That(config.Profiles.Single(profile => profile.Name == "kitchen").DeclaredKeys,
+            Does.Contain("General.AuthenticationSecret"), "the fixture has to start out declaring it");
+
+        var response = await Put(client, config);
+        var general = KitchenGeneral();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(general.ContainsKey(nameof(GeneralSettings.AuthenticationSecret)), Is.True);
+            Assert.That(general[nameof(GeneralSettings.AuthenticationSecret)], Is.Null);
+        });
+    }
+
+    /// <summary>
+    /// And on the default configuration, where null and absent say the same thing, no secret still
+    /// means no key. Neither level may write the empty string: it is the one value that reads back as
+    /// "authentication is on" while matching only the bearer token nobody sends.
+    /// </summary>
+    [Test]
+    public async Task SaveConfig_NoSecretOnTheDefault_RemovesTheKeyInstead()
+    {
+        WriteSettings("Settings.json", SettingsJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var config = await GetConfig(client);
+        config.Default.General.AuthenticationSecret = string.Empty;
+        config.Default.General.WeatherApiKey = "   ";
+
+        var response = await Put(client, WithNoSecretOn(config, "kitchen"));
+        var root = JsonNode.Parse(File.ReadAllText(SettingsPath("Settings.json")));
+        var general = (root?["General"] as JsonObject)!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(general.ContainsKey(nameof(GeneralSettings.AuthenticationSecret)), Is.False);
+            Assert.That(general.ContainsKey(nameof(GeneralSettings.WeatherApiKey)), Is.False,
+                "whitespace is not a secret either");
+            Assert.That(general[nameof(GeneralSettings.Webhook)]?.GetValue<string>(),
+                Is.EqualTo("https://hook.example.com/base"),
+                "the secret that was left alone still has to survive");
+            // ContainsKey, not a null check on the value: a JsonObject indexer answers null for a
+            // key that is not there, so the weaker form could not tell the profile's explicit null
+            // apart from the key having been dropped like the default's.
+            Assert.That(KitchenGeneral().ContainsKey(nameof(GeneralSettings.AuthenticationSecret)), Is.True,
+                "the profile in the same save keeps its explicit null");
+        });
+    }
+
+    /// <summary>
+    /// What the editor does when the administrator picks "no secret" on a profile: the key joins that
+    /// profile's declared keys and carries the empty string, which is how <see cref="AdminSecret"/>
+    /// documents "not the stored one".
+    /// </summary>
+    private static AdminConfigUpdateDto WithNoSecretOn(AdminConfigDto config, string profileName)
+    {
+        var profiles = config.Profiles
+            .Select(entry =>
+            {
+                if (entry.Name != profileName) return entry;
+
+                entry.General.AuthenticationSecret = string.Empty;
+
+                return entry with { DeclaredKeys = [.. entry.DeclaredKeys, "General.AuthenticationSecret"] };
+            })
+            .ToList();
+
+        return new AdminConfigUpdateDto(config.Version, config.Default, profiles);
+    }
+
+    private JsonObject KitchenGeneral() =>
+        (JsonNode.Parse(File.ReadAllText(SettingsPath("Settings.json")))
+            ?["Profiles"]?["kitchen"]?["General"] as JsonObject)!;
+
     [Test]
     public async Task SaveConfig_InvalidConfiguration_IsRejectedWithTheFileUntouched()
     {
