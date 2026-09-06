@@ -5,6 +5,378 @@
     "version": "1.0"
   },
   "paths": {
+    "/api/admin/config": {
+      "get": {
+        "tags": [
+          "AdminConfig"
+        ],
+        "operationId": "GetAdminConfig",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminConfigDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminConfigDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminConfigDto"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "AdminConfig"
+        ],
+        "operationId": "SaveAdminConfig",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminConfigUpdateDto"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminConfigUpdateDto"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminConfigUpdateDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminConfigDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminConfigDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminConfigDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/immich/albums": {
+      "post": {
+        "tags": [
+          "AdminImmich"
+        ],
+        "operationId": "GetAdminImmichAlbums",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminImmichAccountRefDto"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminImmichAccountRefDto"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminImmichAccountRefDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminImmichAlbumDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminImmichAlbumDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminImmichAlbumDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/immich/people": {
+      "post": {
+        "tags": [
+          "AdminImmich"
+        ],
+        "operationId": "GetAdminImmichPeople",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminImmichAccountRefDto"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminImmichAccountRefDto"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminImmichAccountRefDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminImmichPeopleDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminImmichPeopleDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminImmichPeopleDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/immich/tags": {
+      "post": {
+        "tags": [
+          "AdminImmich"
+        ],
+        "operationId": "GetAdminImmichTags",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminImmichAccountRefDto"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminImmichAccountRefDto"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminImmichAccountRefDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminImmichTagDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminImmichTagDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminImmichTagDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/immich/people/{id}/thumbnail": {
+      "get": {
+        "tags": [
+          "AdminImmich"
+        ],
+        "operationId": "GetAdminImmichPersonThumbnail",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "accountId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "profile",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/webp": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/session": {
+      "get": {
+        "tags": [
+          "AdminSession"
+        ],
+        "operationId": "GetAdminSession",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminSessionDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminSessionDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminSessionDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/login": {
+      "get": {
+        "tags": [
+          "AdminSession"
+        ],
+        "operationId": "AdminLogin",
+        "parameters": [
+          {
+            "name": "returnUrl",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/admin/logout": {
+      "post": {
+        "tags": [
+          "AdminSession"
+        ],
+        "operationId": "AdminLogout",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
     "/api/Asset": {
       "get": {
         "tags": [
@@ -657,6 +1029,479 @@
   },
   "components": {
     "schemas": {
+      "AdminAccountSettingsDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "nullable": true
+          },
+          "immichServerUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "apiKey": {
+            "type": "string",
+            "nullable": true
+          },
+          "hasApiKey": {
+            "type": "boolean"
+          },
+          "apiKeyFromFile": {
+            "type": "boolean"
+          },
+          "apiKeyFile": {
+            "type": "string",
+            "nullable": true
+          },
+          "showMemories": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "showFavorites": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "showArchived": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "showVideos": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "imagesFromDays": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "imagesFromDate": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "imagesUntilDate": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "albums": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "nullable": true
+          },
+          "excludedAlbums": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "nullable": true
+          },
+          "people": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "nullable": true
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "rating": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "AdminConfigDto": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "string",
+            "nullable": true
+          },
+          "source": {
+            "$ref": "#/components/schemas/AdminConfigSourceDto"
+          },
+          "default": {
+            "$ref": "#/components/schemas/AdminConfigEntryDto"
+          },
+          "profiles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminConfigEntryDto"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "AdminConfigEntryDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "declaredKeys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "general": {
+            "$ref": "#/components/schemas/AdminGeneralSettingsDto"
+          },
+          "accounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminAccountSettingsDto"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "AdminConfigSourceDto": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string",
+            "nullable": true
+          },
+          "path": {
+            "type": "string",
+            "nullable": true
+          },
+          "legacySchema": {
+            "type": "boolean"
+          },
+          "editable": {
+            "type": "boolean"
+          },
+          "notEditableReason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "AdminConfigUpdateDto": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "string",
+            "nullable": true
+          },
+          "default": {
+            "$ref": "#/components/schemas/AdminConfigEntryDto"
+          },
+          "profiles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminConfigEntryDto"
+            },
+            "nullable": true
+          },
+          "convertLegacySchema": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "AdminGeneralSettingsDto": {
+        "type": "object",
+        "properties": {
+          "interval": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "transitionDuration": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "downloadImages": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "renewImagesDuration": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "showClock": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "clockFormat": {
+            "type": "string",
+            "nullable": true
+          },
+          "clockDateFormat": {
+            "type": "string",
+            "nullable": true
+          },
+          "showPhotoDate": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "showProgressBar": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "photoDateFormat": {
+            "type": "string",
+            "nullable": true
+          },
+          "showImageDesc": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "showPeopleDesc": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "showTagsDesc": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "showAlbumName": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "showImageLocation": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "imageLocationFormat": {
+            "type": "string",
+            "nullable": true
+          },
+          "primaryColor": {
+            "type": "string",
+            "nullable": true
+          },
+          "secondaryColor": {
+            "type": "string",
+            "nullable": true
+          },
+          "style": {
+            "type": "string",
+            "nullable": true
+          },
+          "baseFontSize": {
+            "type": "string",
+            "nullable": true
+          },
+          "showWeatherDescription": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "weatherIconUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "imageZoom": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "imagePan": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "imageFill": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "playAudio": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "layout": {
+            "type": "string",
+            "nullable": true
+          },
+          "language": {
+            "type": "string",
+            "nullable": true
+          },
+          "webcalendars": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "refreshAlbumPeopleInterval": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "weatherLatLong": {
+            "type": "string",
+            "nullable": true
+          },
+          "unitSystem": {
+            "type": "string",
+            "nullable": true
+          },
+          "weatherApiKey": {
+            "type": "string",
+            "nullable": true
+          },
+          "webhook": {
+            "type": "string",
+            "nullable": true
+          },
+          "authenticationSecret": {
+            "type": "string",
+            "nullable": true
+          },
+          "hasWeatherApiKey": {
+            "type": "boolean"
+          },
+          "hasWebhook": {
+            "type": "boolean"
+          },
+          "hasAuthenticationSecret": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "AdminImmichAccountRefDto": {
+        "type": "object",
+        "properties": {
+          "profile": {
+            "type": "string",
+            "nullable": true
+          },
+          "accountId": {
+            "type": "string",
+            "nullable": true
+          },
+          "version": {
+            "type": "string",
+            "nullable": true
+          },
+          "serverUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "apiKey": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "AdminImmichAlbumDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "albumName": {
+            "type": "string",
+            "nullable": true
+          },
+          "assetCount": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "AdminImmichPeopleDto": {
+        "type": "object",
+        "properties": {
+          "people": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminImmichPersonDto"
+            },
+            "nullable": true
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "AdminImmichPersonDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "AdminImmichTagDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "value": {
+            "type": "string",
+            "nullable": true
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "AdminSessionDto": {
+        "type": "object",
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "authenticated": {
+            "type": "boolean"
+          },
+          "isAdmin": {
+            "type": "boolean"
+          },
+          "subject": {
+            "type": "string",
+            "nullable": true
+          },
+          "email": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "AlbumResponseDto": {
         "required": [
           "albumName",

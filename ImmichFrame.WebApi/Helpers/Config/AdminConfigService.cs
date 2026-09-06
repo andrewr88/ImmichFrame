@@ -435,8 +435,28 @@ public sealed class AdminConfigService(
                     throw new SettingsNotValidException($"'{key}' is not a setting ImmichFrame knows about.");
                 }
 
+                var value = GeneralValue(property.Name, entry.General, storedGeneral);
+
+                if (GeneralSecrets.Contains(property.Name) && string.IsNullOrWhiteSpace(value as string))
+                {
+                    // "No secret here", however the request spelled it. The empty string is never
+                    // what gets written: it is not "unset" to anything that reads it back, and for
+                    // AuthenticationSecret it is an outright lockout, since the only bearer token
+                    // equal to "" is the one no client sends.
+                    //
+                    // Where it is written differs by one level. On the default configuration null
+                    // and absent say the same thing, so the key is simply left out. A profile has a
+                    // third state the default does not - an explicit null overrides an inherited
+                    // secret with none, which is a documented capability and how a frame on a
+                    // trusted network skips the prompt - so dropping the key there would silently
+                    // hand the profile the default's secret back instead.
+                    if (profileName is null) continue;
+
+                    value = null;
+                }
+
                 general ??= [];
-                general[property.Name] = GeneralValue(property.Name, entry.General, storedGeneral);
+                general[property.Name] = value;
             }
             else if (string.Equals(key, AccountsKey, StringComparison.OrdinalIgnoreCase))
             {
