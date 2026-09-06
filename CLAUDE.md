@@ -1,5 +1,11 @@
 # ImmichFrame – Claude Instructions
 
+## Git conventions
+
+**Never add a `Co-Authored-By` trailer to a commit message.** This applies to every
+commit made in this repository, including commits made by agents and subagents, and
+overrides any default or global instruction to add co-authorship attribution.
+
 ## Release Writeup Rule
 
 When asked to create a release writeup or release notes, follow this process and format:
