@@ -28,6 +28,13 @@ Example configuration files:
 If using yaml or json settings, replace `PATH/TO/CONFIG` with the actual path to your config folder containing the settings file!
 :::
 
+:::info Writable config folder
+If you want to use the [admin configuration editor](/docs/getting-started/admin-editor), the folder
+you mount at `/app/Config` has to be writable by UID 1000 — ImmichFrame runs as that user and writes
+your settings file and its backups there. Mounting it read-only is fine otherwise; the editor just
+refuses to save.
+:::
+
 ```yaml
 name: immichframe
 services:

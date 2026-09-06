@@ -149,6 +149,15 @@ Basic authentication can be added via `AuthenticationSecret`. It is **NOT** reco
 
 If this is enabled, the web api required the `Authorization`-Header with `Bearer [MYSECRET]`.
 
+An empty or whitespace-only `AuthenticationSecret` means no authentication at all, exactly as if you
+had left the setting out. This changed: an empty value used to be enforced, which refused every
+frame sending its real secret while letting through any request that sent an empty bearer token. If
+you meant to secure your installation, set a real secret rather than an empty one.
+
+The configuration editor at `/admin` is not covered by this secret — it has its own sign-in through
+an OpenID Connect provider, and is off unless you configure one. See
+[Admin configuration editor](/docs/getting-started/admin-editor).
+
 ### Filtering on Albums or People
 You can get the UUIDs from the URL of the album/person. For this URL: `https://demo.immich.app/albums/85c85b29-c95d-4a8b-90f7-c87da1d518ba` this is the UUID: `85c85b29-c95d-4a8b-90f7-c87da1d518ba`
 
@@ -192,6 +201,8 @@ Images will be drawn from each account proportionally based on the total number 
 One ImmichFrame instance can serve several named configurations at once — a kitchen frame and a bedroom frame from the same container, each with its own accounts, timings and colours.
 
 A browser picks a profile from the URL path: `https://frame.example.com/kitchen`. The API picks one with a query parameter: `?profile=kitchen`. A URL that names no profile gets your default configuration, exactly as before — if you declare no profiles, nothing changes.
+
+Profiles can be edited in a browser instead of by hand — including creating and deleting them — with the [admin configuration editor](/docs/getting-started/admin-editor).
 
 #### Declaring a profile
 `Profiles` is a top-level key, alongside `General` and `Accounts`. Each profile only names the settings it overrides:
