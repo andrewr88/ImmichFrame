@@ -1,0 +1,21 @@
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+    # The devcontainer CLI replaces the entrypoint with its own keep-alive wrapper and
+    # chains the features' entrypoints into it (docker-outside-of-docker's socat proxy
+    # among them). This command is the fallback for a bare `docker compose up`.
+    command: ["sleep", "infinity"]
+    volumes:
+      - ..:/workspace:cached
+      # docker-outside-of-docker. The feature declares this same bind in its own metadata
+      # and the CLI injects it through a generated compose file, but Compose merges volume
+      # lists by target path so the duplicate collapses rather than conflicting - and
+      # stating it here keeps a bare `docker compose up` behaving the same way.
+      #
+      # The target is docker-host.sock, not docker.sock: the feature's init script puts a
+      # socat proxy on the latter so the non-root remote user can reach the host daemon
+      # without being in the host's docker group. Mounting the socket straight onto
+      # /var/run/docker.sock would shadow that proxy.
+      - /var/run/docker.sock:/var/run/docker-host.sock

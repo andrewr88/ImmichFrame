@@ -25,6 +25,38 @@ else
     echo "==> Skipping Claude state symlink (not in a container)"
 fi
 
+# The host's ~/.ssh is bind-mounted read-only (see docker-compose.override.yml), so ssh cannot
+# append a host key on first use and every fresh `git fetch` over SSH would fail the host-key
+# check. Pre-populate a writable known_hosts; GIT_SSH_COMMAND in devcontainer.json lists it
+# first, so new keys land there, and the read-only ~/.ssh/known_hosts second, so anything
+# already trusted on the host machine is trusted in here without re-scanning.
+KNOWN_HOSTS="$HOME/.local/ssh/known_hosts"
+if [ ! -s "$KNOWN_HOSTS" ]; then
+    mkdir -p "$(dirname "$KNOWN_HOSTS")"
+    if ssh-keyscan -t rsa,ecdsa,ed25519 github.com 2>/dev/null > "$KNOWN_HOSTS"; then
+        chmod 600 "$KNOWN_HOSTS"
+        echo "==> Wrote GitHub host keys to $KNOWN_HOSTS"
+    else
+        # No network at postCreate is not worth failing the whole setup over; the file just
+        # stays empty and ssh falls back to prompting on first connect.
+        rm -f "$KNOWN_HOSTS"
+        echo "==> WARNING: ssh-keyscan failed; $KNOWN_HOSTS not seeded"
+    fi
+fi
+
+# Route git's HTTPS auth through gh, using the credentials bind-mounted from the host at
+# ~/.config/gh. Best-effort: this writes to ~/.gitconfig, which is mounted read-only, so it
+# fails when the host has not already run it - in which case the host's own gh helper lines
+# are what the mount carries in anyway.
+gh auth setup-git 2>/dev/null || echo "==> Skipping gh auth setup-git (already configured on the host, or gh not logged in)"
+
+# RTK, the token-optimising CLI proxy. Its config and data are bind-mounted from the host, so
+# this only has to initialise a machine that has never run it.
+if command -v rtk >/dev/null 2>&1; then
+    echo "==> Initialising rtk"
+    rtk init --global || true
+fi
+
 echo "==> Restoring .NET dependencies"
 # Also generates the Immich API client, which the Core project builds from an OpenAPI spec.
 dotnet restore ImmichFrame.sln
