@@ -3,6 +3,16 @@
 An isolated, repeatable dev environment for ImmichFrame. Open the repo in VS Code and pick
 **Reopen in Container**, or run `devcontainer up --workspace-folder .` with the devcontainer CLI.
 
+The container is defined by Docker Compose across two files, the same split every other
+devcontainer on this machine uses:
+
+| File | Holds |
+| ---- | ----- |
+| `docker-compose.yml` | what the repo needs — the image build, the workspace bind at `/workspace`, the Docker socket |
+| `docker-compose.override.yml` | what the developer's machine provides — git identity, SSH keys, `gh` auth, rtk state |
+
+The repo is mounted at **`/workspace`**, not `/workspaces/ImmichFrame`.
+
 ## What's inside
 
 | Tool       | Version | Why                                                          |
@@ -15,6 +25,32 @@ An isolated, repeatable dev environment for ImmichFrame. Open the repo in VS Cod
 
 Docker is wired to the **host** daemon rather than a nested one, so images you build inside the
 container land in your normal `docker images` list.
+
+## What's mounted from the host
+
+`docker-compose.override.yml` binds your own credentials and config in, so git, `gh` and rtk
+behave inside the container exactly as they do outside it:
+
+| Host | Container | Mode |
+| ---- | --------- | ---- |
+| `~/.gitconfig` | `/home/vscode/.gitconfig` | read-only |
+| `~/.ssh` | `/home/vscode/.ssh` | read-only |
+| `~/.config/gh` | `/home/vscode/.config/gh` | read-write |
+| `~/.config/rtk`, `~/.local/share/rtk` | same paths under `/home/vscode` | read-write |
+
+`~/.ssh` is read-only on purpose — nothing in here can rewrite your keys. The cost is that ssh
+cannot append a host key on first use, so `post-create.sh` seeds a writable
+`~/.local/ssh/known_hosts` with GitHub's keys and `GIT_SSH_COMMAND` (in `devcontainer.json`)
+tells ssh to read both files, the writable one first.
+
+`setup-host.sh` runs on the **host** before the container starts. It pre-creates those paths,
+because Docker otherwise invents a missing bind source as a root-owned directory — which for
+`~/.gitconfig` would leave a directory where your host's git expects a file. It also installs
+the Shift+Enter keybinding for Claude Code into VS Code/Cursor, matching the other repos here.
+
+Claude Code's own state is **not** mounted from the host: `post-create.sh` symlinks it into the
+gitignored `.claude-data/` inside the workspace, so it survives rebuilds without sharing a
+session with the host.
 
 ## First run
 
@@ -66,3 +102,11 @@ make api            # regenerate the TS API client — needs `make dev` running 
   feature down with it. Removing that source has to happen in a Dockerfile, because features are
   layered on top of the built image. Everything else the container needs is either already in the
   base image (.NET 8, make, git, gcc) or arrives as a feature.
+- The Docker socket bind is written out in `docker-compose.yml` even though the
+  `docker-outside-of-docker` feature declares the same bind itself. Compose merges volume lists
+  by target path, so the duplicate collapses rather than conflicting, and a bare
+  `docker compose up` — no devcontainer CLI in the loop — then behaves the same way. The target
+  is `/var/run/docker-host.sock`: the feature puts a socat proxy on `/var/run/docker.sock` so the
+  non-root `vscode` user can reach the host daemon.
+- Changing the mounts in `docker-compose.override.yml` needs a container **rebuild**, not a
+  restart — bind mounts are fixed at create time.

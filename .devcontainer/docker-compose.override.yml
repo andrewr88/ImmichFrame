@@ -1,0 +1,12 @@
+services:
+  app:
+    volumes:
+      # Git configuration (name, email, aliases)
+      - ${HOME}/.gitconfig:/home/vscode/.gitconfig:ro
+      # SSH keys for git operations (read-only)
+      - ${HOME}/.ssh:/home/vscode/.ssh:ro
+      # GitHub CLI auth
+      - ${HOME}/.config/gh:/home/vscode/.config/gh
+      # RTK config and data
+      - ${HOME}/.config/rtk:/home/vscode/.config/rtk
+      - ${HOME}/.local/share/rtk:/home/vscode/.local/share/rtk

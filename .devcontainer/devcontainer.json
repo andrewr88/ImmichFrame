@@ -1,11 +1,16 @@
 {
   "name": "ImmichFrame",
-  // Thin layer over mcr.microsoft.com/devcontainers/dotnet:1-8.0-bookworm that drops a
-  // broken apt source; see the Dockerfile. The tag floats within .NET 8 - pin it to a
-  // digest if you want builds reproducible across months rather than across machines.
-  "build": {
-    "dockerfile": "Dockerfile"
-  },
+  // Compose rather than a bare Dockerfile so the host's git identity, SSH keys, gh auth and
+  // rtk state can be bound in through docker-compose.override.yml - the same split every
+  // other devcontainer on this machine uses. docker-compose.yml holds what the repo needs;
+  // the override holds what the developer's machine provides.
+  //
+  // The image itself is a thin layer over mcr.microsoft.com/devcontainers/dotnet:1-8.0-bookworm
+  // that drops a broken apt source; see the Dockerfile. The tag floats within .NET 8 - pin it
+  // to a digest if you want builds reproducible across months rather than across machines.
+  "dockerComposeFile": ["docker-compose.yml", "docker-compose.override.yml"],
+  "service": "app",
+  "workspaceFolder": "/workspace",
 
   "features": {
     // Node 22 to match the frontend build stage in the production Dockerfile.
@@ -15,7 +20,8 @@
     },
     "ghcr.io/devcontainers/features/github-cli:1": {},
     // Talks to the host's Docker daemon, so `make docker-prod` and `make docker-build-prod`
-    // work from inside the container without nesting a second daemon.
+    // work from inside the container without nesting a second daemon. The socket bind it
+    // needs is spelled out in docker-compose.yml.
     "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
   },
 
@@ -39,17 +45,26 @@
   // derived from the host-side folder name so this container keeps one stable identity across
   // rebuilds, rather than minting a fresh random one and publishing under a shared device row.
   "remoteEnv": {
+    // Unset whatever the host shell exports; a host-tuned NODE_OPTIONS (--max-old-space-size,
+    // a loader path that does not exist here) otherwise breaks every npm command in here.
+    "NODE_OPTIONS": null,
     "TINES_TOKEN": "${localEnv:TINES_TOKEN}",
     "TINES_URL": "${localEnv:TINES_URL}",
     "TINES_DEFAULT_WORKDIR": "${containerWorkspaceFolder}",
     "TINES_DEVICE_ID": "${localWorkspaceFolderBasename}-devcontainer",
-    "TINES_DEVICE_NAME": "ImmichFrame"
+    "TINES_DEVICE_NAME": "ImmichFrame",
+    // ~/.ssh is bind-mounted read-only, so ssh cannot append a host key on first use. The
+    // writable file listed first is where new keys land; the read-only one from the host is
+    // listed second so anything already trusted out there is trusted in here. post-create.sh
+    // seeds the first file.
+    "GIT_SSH_COMMAND": "ssh -o UserKnownHostsFile=\"/home/vscode/.local/ssh/known_hosts /home/vscode/.ssh/known_hosts\""
   },
 
   // Keep the container running once the editor disconnects, so the Tines agent stays alive
   // and keeps reporting.
   "shutdownAction": "none",
 
+  "initializeCommand": "sh .devcontainer/setup-host.sh",
   "postCreateCommand": "./.devcontainer/post-create.sh",
   "waitFor": "postCreateCommand",
 
