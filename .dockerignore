@@ -39,3 +39,7 @@ ImmichFrame.Android/
 ImmichFrame.Desktop/
 Makefile
 PrivacyPolicy.md
+
+# Claude Code state, symlinked here from ~ by .devcontainer/post-create.sh. Holds
+# credentials and session transcripts; nothing the build needs.
+.claude-data/
