@@ -461,7 +461,7 @@ ImmichFrame.WebApi/Config/Settings.json
 ## Per-project Claude state, symlinked into the devcontainer (see .devcontainer/post-create.sh)
 .claude-data/
 
-## Per-developer Claude Code settings; .claude/skills/ is shared and tracked
+## Per-developer Claude Code settings; .claude/skills/ and .claude/agents/ are shared and tracked
 .claude/settings.local.json
 
 ## Audit findings database (audit/schema.sql is the tracked source of truth)

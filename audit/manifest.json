@@ -1,7 +1,27 @@
 {
   "kit": "omnispoon-agent-kit",
-  "version": "46284224d8f44a7ff0c8452b6ed20eaefb560d66aff6e0c3cb08bfb921786442",
+  "version": "4fa477a2cc931d184a69f7577bf7d77db5dc1ecdc7fbfb23d276a657baf1b72b",
   "files": [
+    {
+      "path": ".claude/agents/code-reviewer.md",
+      "sha256": "8e881d530b4b107abfc36d1e235aa137cbad0ced990d685676ed23cd4d94e40c"
+    },
+    {
+      "path": ".claude/agents/code-reviewerer.md",
+      "sha256": "2f98257112026c5872b9a28e68abf875e07b2fc59cbef6c78d38745108182a27"
+    },
+    {
+      "path": ".claude/agents/developer.md",
+      "sha256": "e5c37941ac70d858f074d77def10013c3b5928a2e3e66984f45a8fc4cec947b3"
+    },
+    {
+      "path": ".claude/agents/diff-summarizer.md",
+      "sha256": "95a2bbd298ae5544bd665a34c6a8aa27773978316a22356d2427d0bc85e277f1"
+    },
+    {
+      "path": ".claude/agents/repo-scout.md",
+      "sha256": "4e2cac9de1748223bff2051eb6a1cccf75c562441987d0251cd9bb2a516deb8c"
+    },
     {
       "path": ".claude/skills/_shared/concurrency.md",
       "sha256": "0dd45c554c4c9e9cc3b4615d68ef47a3b4080c8b26372bebecf2f45b12642f0b"
@@ -52,7 +72,7 @@
     },
     {
       "path": "audit/INTEGRATION.md",
-      "sha256": "472dc3c2295b2bc170d6423da069b5bfb28a2847ab4ba23d6827dc8805c6ee1f"
+      "sha256": "7d8a4a600435d30740d9a7106db297d14d191ee07ce2cb6fe6bc8f4099bc1db0"
     },
     {
       "path": "audit/README.md",
