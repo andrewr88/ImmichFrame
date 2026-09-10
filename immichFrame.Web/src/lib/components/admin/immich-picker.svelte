@@ -2,7 +2,6 @@
 	import { untrack } from 'svelte';
 	import type { FieldSpec } from './admin-config';
 	import {
-		loadPickerList,
 		personThumbnailUrl,
 		pickedValues,
 		pickerNouns,
@@ -13,6 +12,7 @@
 		type PickerList,
 		type PickerSource
 	} from './immich-picker';
+	import { cachedPickerList, dropPickerList, pickerList } from './picker-cache';
 	import SettingField from './setting-field.svelte';
 
 	interface Props {
@@ -48,9 +48,20 @@
 	let query = $state('');
 	let loading = $state(false);
 	let message = $state('');
-	let list = $state<PickerList | null>(null);
+	/**
+	 * What another picker on this page has already read from these same credentials, if anything.
+	 * Taken here rather than awaited, so a picker created after the read has landed - a profile
+	 * section expanded, an account added back - draws its rows named on their first frame.
+	 */
+	const alreadyRead = untrack(() => {
+		const result = values.length > 0 ? cachedPickerList(kind, source) : undefined;
+
+		return result?.ok ? { list: result.list, source: sourceKey(source) } : null;
+	});
+
+	let list = $state<PickerList | null>(alreadyRead?.list ?? null);
 	/** What the list in hand was read with, so it can be dropped when that stops being true. */
-	let listSource = $state<string | null>(null);
+	let listSource = $state<string | null>(alreadyRead?.source ?? null);
 	/** The credentials this picker has already seen, so a change to them can be noticed. */
 	let seenSource = $state<string | null>(null);
 
@@ -99,6 +110,42 @@
 		});
 	});
 
+	// Runs once, on creation. Everything it reads is untracked deliberately: the server URL is bound
+	// on input, so re-priming whenever the credentials change would be a request per keystroke. A
+	// picker whose account is edited goes back to bare ids until the panel is opened, as before.
+	$effect(() => {
+		untrack(prime);
+	});
+
+	/**
+	 * The names for what is already configured, without the administrator opening anything: `list`
+	 * was filled only by `load()`, so every configured entry on a freshly loaded page rendered as
+	 * the raw identifier the settings file holds.
+	 *
+	 * Quieter than `load()` on purpose. Nobody asked for this read, so a failed one changes nothing
+	 * on screen - no message, no text box opened by itself, and no spinner, which belongs to the
+	 * panel - and the page reads exactly as it does today with Immich unreachable.
+	 */
+	async function prime() {
+		// Nothing to put a name to, or nowhere to ask: neither is worth a request.
+		if (values.length === 0 || source.kind === 'blocked') return;
+
+		const current = key;
+		const started = request;
+		const result = await pickerList(kind, source);
+
+		// A read the administrator asked for supersedes this one whichever answers first: it went out
+		// later, and it is the one the panel is waiting on.
+		if (started !== request) return;
+
+		// Same rule as `load()`: an answer about the server that was named when the request went out
+		// says nothing about the one named now.
+		if (current !== sourceKey(source) || !result.ok) return;
+
+		list = result.list;
+		listSource = current;
+	}
+
 	function reset() {
 		list = null;
 		listSource = null;
@@ -123,7 +170,13 @@
 		loading = true;
 		message = '';
 
-		const result = await loadPickerList(kind, source);
+		// Dropped rather than read through: this is the administrator asking Immich again, and what
+		// the cache is for is sparing the *first* read of a list several pickers share, not
+		// answering this one. The read still goes through it so that the fresh answer is what any
+		// later picker on the page starts from.
+		dropPickerList(kind, source);
+
+		const result = await pickerList(kind, source);
 
 		// Only the newest read may speak. A superseded one clearing the spinner would report the
 		// request still in flight behind it as finished, and offer to start a third.
