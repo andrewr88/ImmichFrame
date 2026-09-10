@@ -170,10 +170,21 @@ orchestration skills — `architect`, `developer`, `code-reviewer`,
 point to the audit system above. `repo-scout` reads and writes `ARCHITECTURE.md`
 at the repo root.
 
+Five of those skills are accompanied by an agent definition under
+`.claude/agents/` — `developer`, `code-reviewer`, `code-reviewerer`,
+`repo-scout`, `diff-summarizer` — which registers the skill as a spawnable
+subagent and carries whatever pins upstream set in its frontmatter: `developer`
+pins both `model: opus` and `effort: max`, `code-reviewer` and `code-reviewerer`
+pin `model` only, and `repo-scout` and `diff-summarizer` pin neither, so those
+two spawn at the default subagent model. Where a `model` pin exists, a
+call-level `model` argument silently overrides it; there is no call-level effort
+argument. There is no `architect` definition: that skill runs as the main
+session rather than as a subagent.
+
 Provenance: replicated from https://onedev.sharpspoon.io/agent-kit; the file
 list and SHA-256s it was verified against are in `audit/manifest.json`.
 
-**Kit verification is 20 of 21 files.** `audit/THREAT_MODEL.md` is the known
+**Kit verification is 25 of 26 files.** `audit/THREAT_MODEL.md` is the known
 exception: the kit ships it owned by the consuming repo and *expected to
 diverge* (its own preamble and `audit/ADAPTERS.md:12` both say so), it has been
 rewritten from Go idioms to C#/TypeScript, and sweeps append newly-found classes
@@ -186,5 +197,5 @@ genuine upstream revision of the threat model still be spotted. Verify with:
 jq -r '.files[] | "\(.sha256)  \(.path)"' audit/manifest.json | sha256sum -c -
 ```
 
-20 `OK` plus a `FAILED` on `audit/THREAT_MODEL.md` is the expected result; a
+25 `OK` plus a `FAILED` on `audit/THREAT_MODEL.md` is the expected result; a
 failure on any other file means the kit has drifted and should be investigated.

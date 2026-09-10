@@ -37,4 +37,12 @@ further setup: six orchestration skills — `architect`, `developer`,
 invokable slash command (e.g. `/developer`, `/sweep`); `/sweep` drives the audit
 phases (`audit/audit.sh sweep` etc.).
 
+Five matching agent definitions live under `.claude/agents/` — `developer`,
+`code-reviewer`, `code-reviewerer`, `repo-scout`, `diff-summarizer` — and
+register as subagents, so the skills above can be spawned by `subagent_type`.
+There is no `architect` agent: it runs as the main session. The definitions
+carry the source repo's model pins; if a spawn fails because your account lacks
+that model, the kit README at
+https://onedev.sharpspoon.io/agent-kit/~raw/main/README.md explains what to edit.
+
 ---
