@@ -24,7 +24,9 @@ ENV APP_VERSION=$VERSION
 RUN dotnet publish --runtime linux-${TARGETARCH} --self-contained false -p:AssemblyVersion=$VERSION -o /app
 
 # Stage 3: Build frontend with Node.js
-FROM node:22-alpine AS build-node
+# Pinned to the build platform: this stage's output is architecture-independent
+# static assets, so pinning keeps it off QEMU emulation on cross-platform builds
+FROM --platform=$BUILDPLATFORM node:22-alpine AS build-node
 
 USER node
 WORKDIR /app
