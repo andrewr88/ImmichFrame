@@ -457,6 +457,13 @@ $RECYCLE.BIN/
 ## Ignore Settings file
 ImmichFrame/Settings.json
 ImmichFrame.WebApi/Config/Settings.json
+ImmichFrame.WebApi/Config/Settings.yml
+ImmichFrame.WebApi/Config/Settings.yaml
+
+ImmichFrame/Settings.json.*.bak
+ImmichFrame.WebApi/Config/Settings.json.*.bak
+ImmichFrame.WebApi/Config/Settings.yml.*.bak
+ImmichFrame.WebApi/Config/Settings.yaml.*.bak
 
 ## Per-project Claude state, symlinked into the devcontainer (see .devcontainer/post-create.sh)
 .claude-data/
