@@ -1,18 +1,22 @@
 using ImmichFrame.Core.Helpers;
 using ImmichFrame.Core.Interfaces;
-using ImmichFrame.WebApi.Models;
 using Microsoft.AspNetCore.Authentication;
 using System.Reflection;
 using ImmichFrame.Core.Logic;
 using ImmichFrame.Core.Logic.AccountSelection;
+using ImmichFrame.WebApi.Database;
 using ImmichFrame.WebApi.Helpers;
 using ImmichFrame.WebApi.Helpers.Admin;
 using ImmichFrame.WebApi.Helpers.Config;
 using ImmichFrame.WebApi.Helpers.Profiles;
+using ImmichFrame.WebApi.Services;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
 //log the version number
@@ -65,19 +69,21 @@ var configPath = Environment.GetEnvironmentVariable("IMMICHFRAME_CONFIG_PATH") ?
 builder.Services.AddTransient<ConfigLoader>();
 
 // The one place the configuration directory is named. Everything that reads or writes the settings
-// file resolves it from here, so a test - or anything else - that moves it moves all of them.
+// resolves it from here, so a test - or anything else - that moves it moves all of them.
 builder.Services.AddSingleton(new ConfigLocation(configPath));
+
+// Settings live in a SQLite database in the configuration directory. An existing Settings.json or
+// Settings.yml is imported into it once, on first run; after that the database is the source of
+// truth and the file is ignored. ConfigLoader stays the reader for that one import.
+builder.Services.AddDbContextFactory<SettingsDbContext>((srv, options) =>
+    options.UseSqlite($"Data Source={Path.Combine(srv.GetRequiredService<ConfigLocation>().Directory, "immichframe.db")}"));
+builder.Services.AddSingleton<SettingsService>();
 
 // Everything injects IConfigCatalog and gets the forwarding catalog, so the configuration behind it
 // can be replaced at runtime. The seed still runs on first use rather than here, so a test that
-// registers its own catalog never reads the settings file.
-//
-// The directory comes from ConfigLocation rather than from the captured local, so that the catalog
-// is seeded from the same file the admin editor writes to. Two independent readings of the path
-// would let an override move one and not the other, and the editor would then convert one file
-// using another file's API keys.
+// registers its own catalog never touches the database.
 builder.Services.AddSingleton(srv => new SwappableConfigCatalog(
-    () => srv.GetRequiredService<ConfigLoader>().LoadCatalog(srv.GetRequiredService<ConfigLocation>().Directory),
+    () => srv.GetRequiredService<SettingsService>().LoadCatalog(),
     srv.GetRequiredService<ProfileRegistry>));
 builder.Services.AddSingleton<IConfigCatalog>(srv => srv.GetRequiredService<SwappableConfigCatalog>());
 
@@ -109,34 +115,30 @@ builder.Services.AddSingleton<ProfileRegistry>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentProfile, CurrentProfile>();
 
-ProfileServices CurrentProfileServices(IServiceProvider srv) =>
-    srv.GetRequiredService<ProfileRegistry>().For(srv.GetRequiredService<ICurrentProfile>().Name);
-
-// The profile's services are resolved once per request and everything below reads from that one
-// instance. Asking the registry again for each interface would let a configuration swap landing
-// mid-request serve the same request its settings from the outgoing configuration and its logic
-// from the incoming one.
-//
-// Nothing in this graph may become IDisposable: the container tracks what a factory returns and
-// disposes it when the scope ends, so a disposable ProfileServices - or a disposable member behind
-// the registrations below - would be torn down at the end of one request while every other request
-// on that profile is still using it.
-builder.Services.AddScoped<ProfileServices>(CurrentProfileServices);
+// The profile's services are resolved once per request, through a holder rather than directly.
+// ProfileServices is IDisposable and belongs to the registry, not to the request: the container
+// disposes whatever a scoped factory returns, so registering it here would tear a profile's pools
+// down at the end of one request while every other request on that profile still used them.
+// ProfileScope is not disposable, so there is nothing for the container to take ownership of.
+builder.Services.AddScoped<ProfileScope>();
 
 // Settings and services are scoped and resolve through the registry, so a request naming a
 // profile gets that profile's configuration while controllers go on asking for the same
 // interfaces they always have. Sub-settings keep delegating down the chain rather than each
 // reaching into the registry, so overriding one of them still overrides those below it.
-builder.Services.AddScoped<IServerSettings>(srv => srv.GetRequiredService<ProfileServices>().Settings);
+builder.Services.AddScoped<IServerSettings>(srv => srv.GetRequiredService<ProfileScope>().Services.Settings);
 builder.Services.AddScoped<IGeneralSettings>(srv => srv.GetRequiredService<IServerSettings>().GeneralSettings);
 builder.Services.AddScoped<IClientSettings>(srv => srv.GetRequiredService<IGeneralSettings>());
 builder.Services.AddScoped<IServerBehaviorSettings>(srv => srv.GetRequiredService<IGeneralSettings>());
 
-builder.Services.AddScoped<IWeatherService>(srv => srv.GetRequiredService<ProfileServices>().WeatherService);
-builder.Services.AddScoped<ICalendarService>(srv => srv.GetRequiredService<ProfileServices>().CalendarService);
-builder.Services.AddScoped<IImmichFrameLogic>(srv => srv.GetRequiredService<ProfileServices>().Logic);
+builder.Services.AddScoped<IWeatherService>(srv => srv.GetRequiredService<ProfileScope>().Services.WeatherService);
+builder.Services.AddScoped<ICalendarService>(srv => srv.GetRequiredService<ProfileScope>().Services.CalendarService);
+builder.Services.AddScoped<IImmichFrameLogic>(srv => srv.GetRequiredService<ProfileScope>().Services.Logic);
 
-builder.Services.AddControllers();
+builder.Services.AddControllers()
+      .AddJsonOptions(options =>
+          options.JsonSerializerOptions.Converters.Add(
+              new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)));
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options => options.SchemaFilter<ImmichFrame.WebApi.Helpers.NoReadOnlySchemaFilter>());
@@ -300,12 +302,31 @@ app.MapFallbackToFile("/index.html");
 // Failing to boot, naming the route, beats discovering it in production.
 AdminEndpointGuard.Validate(((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints));
 
-var immichStartupAllowed = await ImmichServerVersionChecker.CheckServerVersions(app.Services, app.Logger);
-if (!immichStartupAllowed)
+// Migrates the settings database and imports an existing Settings.json/yml on first run, so the
+// catalog below is seeded from the database rather than from the file. Skipped when a test has
+// registered its own IConfigCatalog: there is then nothing to import and no SQLite file to create.
+if (app.Services.GetService<SwappableConfigCatalog>() is not null)
 {
-    app.Logger.LogCritical("ImmichFrame cannot start: Immich server requirements are not satisfied (see log above). Shutting down.");
-    Environment.Exit(1);
+    await app.Services.GetRequiredService<SettingsService>().InitializeAsync();
 }
+
+// Deliberately not awaited: an unreachable Immich server must not delay startup, otherwise
+// the admin UI needed to fix that very server stays unreachable too.
+_ = Task.Run(async () =>
+{
+    try
+    {
+        var immichServersOk = await ImmichServerVersionChecker.CheckServerVersions(app.Services, app.Logger);
+        if (!immichServersOk)
+        {
+            app.Logger.LogCritical("One or more Immich servers are unreachable or unsupported (see log above). The slideshow may not work — fix the account settings via the admin UI at /admin.");
+        }
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogCritical("Immich server version check failed: {Message}", ex.Message);
+    }
+});
 
 app.Run();
 

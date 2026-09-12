@@ -48,5 +48,29 @@ public sealed class ProfileRegistry(IConfigCatalog _catalog, IServiceProvider _r
     /// from whatever the catalog now says. Called when the catalog is replaced - see
     /// <see cref="Config.SwappableConfigCatalog.Swap"/>, which is the only thing that should.
     /// </summary>
-    public void Invalidate() => _byProfile.Clear();
+    public void Invalidate()
+    {
+        // Swapped out entry by entry rather than cleared in one go, so each dropped graph can be
+        // disposed. MultiImmichFrameLogicDelegate and PooledImmichFrameLogic became IDisposable
+        // upstream - the asset pools hold API caches that do not go away on their own - so dropping
+        // the reference and leaving it to the collector is no longer enough.
+        foreach (var key in _byProfile.Keys.ToList())
+        {
+            if (!_byProfile.TryRemove(key, out var services)) continue;
+
+            // Only a Lazy that actually ran built anything to dispose. Asking an unevaluated one for
+            // its Value here would construct a whole profile graph purely in order to tear it down.
+            if (!services.IsValueCreated) continue;
+
+            try
+            {
+                services.Value.Dispose();
+            }
+            catch (Exception)
+            {
+                // A profile that failed to build has nothing to release, and a swap must not fail
+                // because an outgoing graph objected to being torn down.
+            }
+        }
+    }
 }
