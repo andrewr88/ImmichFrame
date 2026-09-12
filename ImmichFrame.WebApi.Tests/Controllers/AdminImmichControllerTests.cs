@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using ImmichFrame.Core.Api;
 using ImmichFrame.WebApi.Helpers.Admin;
+using ImmichFrame.WebApi.Services;
 using ImmichFrame.WebApi.Helpers.Config;
 using ImmichFrame.WebApi.Models;
 using ImmichFrame.WebApi.Tests.Mocks;
@@ -552,16 +553,21 @@ public class AdminImmichControllerTests
     }
 
     [Test]
-    public async Task Albums_WhenTheFileHasMovedUnderTheRunningConfiguration_AreRefusedRatherThanServedFromTheWrongServer()
+    public async Task Albums_WhenTheStoreHasMovedUnderTheRunningConfiguration_AreRefusedRatherThanServedFromTheWrongServer()
     {
         var handler = Immich();
         using var factory = CreateFactory(handler);
         var client = factory.CreateClient();
 
-        // Hand-edited since startup, with no restart: the read below sees this file - so its version
-        // token and its handles are perfectly current - while the catalog still holds the account the
-        // host booted with. The position resolves, and resolves to a different server.
-        File.WriteAllText(Path.Combine(_directory, "Settings.json"), SettingsJson.Replace(SavedHost, "moved-immich.example.com"));
+        // Written straight to the store rather than through the editor, because going through the
+        // editor swaps the catalog in the same breath and the two could never disagree. This is the
+        // divergence that is actually left once the settings file stopped being read: a second
+        // process against the same database file, which writes the row this process then reads while
+        // its own catalog still holds what it booted with. The position resolves, and resolves to a
+        // different server.
+        var store = factory.Services.GetRequiredService<SettingsService>();
+        var current = store.Read();
+        store.Save(current.Text.Replace(SavedHost, "moved-immich.example.com"), current.Format, current.Version);
 
         var saved = await SavedAccount(client);
         var response = await Post(client, AlbumsUrl, saved);
@@ -569,11 +575,11 @@ public class AdminImmichControllerTests
 
         Assert.Multiple(() =>
         {
-            // Not a stale-version refusal: the handle is from a read of the file as it is now.
+            // Not a stale-version refusal: the handle is from a read of the store as it is now.
             Assert.That(problem, Does.Not.Contain("changed since the editor loaded it"));
 
             Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
-            Assert.That(problem, Does.Contain("no longer matches the settings file"));
+            Assert.That(problem, Does.Contain("no longer matches the stored settings"));
         });
 
         // The whole point: the editor is showing moved-immich, so listing saved-immich's albums would
@@ -644,7 +650,7 @@ public class AdminImmichControllerTests
     }
 
     [Test]
-    public async Task ApiKey_StoredWithACharacterAHeaderCannot_PointsAtTheFileRatherThanTheForm()
+    public async Task ApiKey_StoredWithACharacterAHeaderCannot_PointsAtTheStoredSettingsRatherThanTheForm()
     {
         var handler = Immich();
         using var factory = CreateFactory(handler);
@@ -668,7 +674,7 @@ public class AdminImmichControllerTests
             // The distinguishing half. An administrator looking at a key that is already in the
             // settings file is not looking at a form, so "copy it again from Immich" is advice about
             // somewhere they are not.
-            Assert.That(problem, Does.Contain("Fix it in the settings file"));
+            Assert.That(problem, Does.Contain("Fix it in the admin editor"));
             Assert.That(problem, Does.Not.Contain("Copy it again from Immich"));
         });
     }

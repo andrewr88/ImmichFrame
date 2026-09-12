@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using ImmichFrame.WebApi.Helpers.Admin;
 using ImmichFrame.WebApi.Helpers.Config;
+using ImmichFrame.WebApi.Services;
 using ImmichFrame.WebApi.Models;
 using ImmichFrame.WebApi.Tests.Mocks;
 using Microsoft.AspNetCore.Authentication;
@@ -296,7 +297,7 @@ public class AdminConfigControllerTests
         config.Profiles.Single(profile => profile.Name == "kitchen").General.Interval = 99;
 
         var response = await Put(client, config);
-        var saved = JsonNode.Parse(File.ReadAllText(SettingsPath("Settings.json")));
+        var saved = JsonNode.Parse(StoredText(factory));
 
         Assert.Multiple(() =>
         {
@@ -329,7 +330,7 @@ public class AdminConfigControllerTests
         config.Default.General.AuthenticationSecret = AdminSecret.Placeholder;
 
         var response = await Put(client, config);
-        var saved = JsonNode.Parse(File.ReadAllText(SettingsPath("Settings.json")));
+        var saved = JsonNode.Parse(StoredText(factory));
 
         Assert.Multiple(() =>
         {
@@ -366,7 +367,7 @@ public class AdminConfigControllerTests
         config.Default.General.Webhook = AdminSecret.Placeholder;
 
         var response = await Put(client, config);
-        var saved = JsonNode.Parse(File.ReadAllText(SettingsPath("Settings.json")));
+        var saved = JsonNode.Parse(StoredText(factory));
         var general = saved?["General"] as JsonObject;
 
         Assert.Multiple(() =>
@@ -398,7 +399,7 @@ public class AdminConfigControllerTests
         var config = await GetConfig(client);
 
         var response = await Put(client, WithNoSecretOn(config, "kitchen"));
-        var general = KitchenGeneral();
+        var general = KitchenGeneral(factory);
 
         Assert.Multiple(() =>
         {
@@ -456,7 +457,7 @@ public class AdminConfigControllerTests
             Does.Contain("General.AuthenticationSecret"), "the fixture has to start out declaring it");
 
         var response = await Put(client, config);
-        var general = KitchenGeneral();
+        var general = KitchenGeneral(factory);
 
         Assert.Multiple(() =>
         {
@@ -483,7 +484,7 @@ public class AdminConfigControllerTests
         config.Default.General.WeatherApiKey = "   ";
 
         var response = await Put(client, WithNoSecretOn(config, "kitchen"));
-        var root = JsonNode.Parse(File.ReadAllText(SettingsPath("Settings.json")));
+        var root = JsonNode.Parse(StoredText(factory));
         var general = (root?["General"] as JsonObject)!;
 
         Assert.Multiple(() =>
@@ -498,7 +499,7 @@ public class AdminConfigControllerTests
             // ContainsKey, not a null check on the value: a JsonObject indexer answers null for a
             // key that is not there, so the weaker form could not tell the profile's explicit null
             // apart from the key having been dropped like the default's.
-            Assert.That(KitchenGeneral().ContainsKey(nameof(GeneralSettings.AuthenticationSecret)), Is.True,
+            Assert.That(KitchenGeneral(factory).ContainsKey(nameof(GeneralSettings.AuthenticationSecret)), Is.True,
                 "the profile in the same save keeps its explicit null");
         });
     }
@@ -524,18 +525,19 @@ public class AdminConfigControllerTests
         return new AdminConfigUpdateDto(config.Version, config.Default, profiles);
     }
 
-    private JsonObject KitchenGeneral() =>
-        (JsonNode.Parse(File.ReadAllText(SettingsPath("Settings.json")))
+    private static JsonObject KitchenGeneral(WebApplicationFactory<Program> factory) =>
+        (JsonNode.Parse(StoredText(factory))
             ?["Profiles"]?["kitchen"]?["General"] as JsonObject)!;
 
     [Test]
-    public async Task SaveConfig_InvalidConfiguration_IsRejectedWithTheFileUntouched()
+    public async Task SaveConfig_InvalidConfiguration_IsRejectedWithTheStoredDocumentUntouched()
     {
         WriteSettings("Settings.json", SettingsJson);
         using var factory = CreateFactory();
         var client = factory.CreateClient();
 
-        var before = File.ReadAllText(SettingsPath("Settings.json"));
+        var before = StoredText(factory);
+        var versionBefore = StoredVersion(factory);
 
         var config = await GetConfig(client);
         // Neither an ApiKey nor an ApiKeyFile: ValidateAndInitialize refuses it, locally, without
@@ -549,32 +551,43 @@ public class AdminConfigControllerTests
         {
             Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
             Assert.That(problem, Does.Contain("ApiKey"), "the operator has to be told what is wrong");
-            Assert.That(File.ReadAllText(SettingsPath("Settings.json")), Is.EqualTo(before),
-                "a rejected configuration must never reach the file");
-            Assert.That(Directory.EnumerateFiles(_directory), Has.Exactly(1).Items,
-                "and must leave no backup or temporary file behind either");
+            Assert.That(StoredText(factory), Is.EqualTo(before),
+                "a rejected configuration must never reach the store");
+
+            // The version is the editor's concurrency token, so a refused save must not consume one:
+            // bumping it here would make every other open editor's token stale over a write that
+            // never happened. This replaced a check that the atomic file write left no .tmp or .bak
+            // behind - there is no file write left to leave debris.
+            Assert.That(StoredVersion(factory), Is.EqualTo(versionBefore),
+                "and must not consume a version");
         });
     }
 
     [Test]
-    public async Task SaveConfig_StaleVersionToken_Is409WithTheFileUntouched()
+    public async Task SaveConfig_StaleVersionToken_Is409WithTheStoredDocumentUntouched()
     {
         WriteSettings("Settings.json", SettingsJson);
         using var factory = CreateFactory();
         var client = factory.CreateClient();
 
-        var config = await GetConfig(client);
+        // Loaded into one editor, and then not saved yet.
+        var stale = await GetConfig(client);
 
-        // Somebody else - a second administrator, or a hand edit - got there first.
-        File.WriteAllText(SettingsPath("Settings.json"), SettingsJson.Replace("\"Interval\": 45", "\"Interval\": 46"));
-        var before = File.ReadAllText(SettingsPath("Settings.json"));
+        // Somebody else got there first. A second save through the API rather than an edit to the
+        // settings file: the file stopped being the source of truth when the database took over, so
+        // a hand edit to it is no longer a way to make an open editor stale - only another save is.
+        var winner = await GetConfig(client);
+        winner.Default.General.Interval = 46;
+        var first = await Put(client, winner);
 
-        var response = await Put(client, config);
+        var before = StoredText(factory);
+        var response = await Put(client, stale);
 
         Assert.Multiple(() =>
         {
+            Assert.That(first.StatusCode, Is.EqualTo(HttpStatusCode.OK), "the first save wins");
             Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Conflict));
-            Assert.That(File.ReadAllText(SettingsPath("Settings.json")), Is.EqualTo(before));
+            Assert.That(StoredText(factory), Is.EqualTo(before));
         });
     }
 
@@ -626,7 +639,7 @@ public class AdminConfigControllerTests
         };
 
         var response = await Put(client, config);
-        var saved = JsonNode.Parse(File.ReadAllText(SettingsPath("Settings.json")));
+        var saved = JsonNode.Parse(StoredText(factory));
         var hallway = await FrameInterval(client, "/api/Config?profile=hallway");
         var gone = await client.GetAsync("/api/Config?profile=living-room");
 
@@ -649,7 +662,7 @@ public class AdminConfigControllerTests
         using var factory = CreateFactory();
         var client = factory.CreateClient();
 
-        var before = File.ReadAllText(SettingsPath("Settings.json"));
+        var before = StoredText(factory);
 
         var config = await GetConfig(client);
         config = config with
@@ -666,7 +679,7 @@ public class AdminConfigControllerTests
         Assert.Multiple(() =>
         {
             Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
-            Assert.That(File.ReadAllText(SettingsPath("Settings.json")), Is.EqualTo(before));
+            Assert.That(StoredText(factory), Is.EqualTo(before));
         });
     }
 
@@ -681,7 +694,7 @@ public class AdminConfigControllerTests
         config.Profiles.Single(profile => profile.Name == "kitchen").General.Interval = 99;
 
         var response = await Put(client, config);
-        var saved = File.ReadAllText(SettingsPath("Settings.yml"));
+        var saved = StoredText(factory);
         var after = await FrameInterval(client, "/api/Config?profile=kitchen");
 
         Assert.Multiple(() =>
@@ -697,53 +710,72 @@ public class AdminConfigControllerTests
     }
 
     [Test]
-    public async Task SaveConfig_LegacySchemaFile_NeedsExplicitConsentAndThenConverts()
+    public async Task SaveConfig_LegacySchemaFile_IsConvertedOnImportAndNeedsNoConsent()
     {
+        // This replaced a test that required AdminConfigUpdateDto.ConvertLegacySchema before a v1
+        // file could be saved. The consent existed because saving rewrote the file in place and that
+        // was not reversible. Nothing rewrites the file now: it is read once, converted on the way
+        // into the database, and left alone, so there is nothing to consent to.
         WriteSettings("Settings.json", SettingsV1Json);
         using var factory = CreateFactory();
         var client = factory.CreateClient();
 
-        var config = await GetConfig(client);
-        var refused = await Put(client, config);
+        var onImport = JsonNode.Parse(StoredText(factory));
 
-        var converted = await Put(client, Update(config) with { ConvertLegacySchema = true });
-        var saved = JsonNode.Parse(File.ReadAllText(SettingsPath("Settings.json")));
+        var config = await GetConfig(client);
+        var saved = await Put(client, Update(config));
 
         Assert.Multiple(() =>
         {
-            Assert.That(config.Source.LegacySchema, Is.True);
-            Assert.That(refused.StatusCode, Is.EqualTo(HttpStatusCode.Conflict),
-                "rewriting a v1 file in the current schema is not something to do silently");
+            // Converted before the editor ever saw it.
+            Assert.That(onImport?["General"], Is.Not.Null, "the stored document is current-schema");
+            Assert.That((string?)onImport?["Accounts"]?[0]?["ApiKey"], Is.EqualTo("base-api-key"));
+            Assert.That(config.Source.LegacySchema, Is.False,
+                "the editor is never handed a v1 document any more");
 
-            Assert.That(converted.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(saved?["General"], Is.Not.Null);
-            Assert.That((string?)saved?["Accounts"]?[0]?["ApiKey"], Is.EqualTo("base-api-key"));
+            Assert.That(saved.StatusCode, Is.EqualTo(HttpStatusCode.OK), "and saves without consent");
+
+            // The file it came from is untouched, which is what makes the conversion safe to do
+            // without asking.
+            Assert.That(File.ReadAllText(SettingsPath("Settings.json")), Is.EqualTo(SettingsV1Json));
         });
     }
 
     [Test]
-    [Platform("Unix")]
-    public async Task SaveConfig_ReadOnlyConfigurationDirectory_Is409WithTheFileUntouched()
+    public void ReadOnlyConfigurationDirectory_FailsToStartAndNamesTheDirectory()
     {
+        // This replaced a test that took the write bit off mid-run and expected the save to 409. It
+        // cannot work that way any more, and not because the contract got weaker: SQLite already has
+        // the database file open by then, so chmod on the directory does not stop the write and the
+        // save genuinely succeeds.
+        //
+        // The contract moved to startup instead, which is where the problem now surfaces: the
+        // database cannot be created or opened at all, so ImmichFrame refuses to boot rather than
+        // coming up and failing at the first save. Note the behaviour change for anyone mounting the
+        // configuration directory read-only - that used to run fine for a frame that never edits its
+        // settings, and now does not start.
         WriteSettings("Settings.json", SettingsJson);
-        using var factory = CreateFactory();
-        var client = factory.CreateClient();
-
-        var config = await GetConfig(client);
-        config.Default.General.Interval = 99;
-
-        var before = File.ReadAllText(SettingsPath("Settings.json"));
         SetMode(_directory, UnixFileMode.UserRead | UnixFileMode.UserExecute);
 
-        var response = await Put(client, config);
-        var problem = await response.Content.ReadAsStringAsync();
+        using var factory = CreateFactory();
 
-        Assert.Multiple(() =>
+        // Thrown out of Program.cs's InitializeAsync, so it surfaces when the host is first built.
+        var failure = Assert.Catch(() => factory.CreateClient());
+
+        Assert.That(Unwrap(failure), Does.Contain(_directory),
+            "the operator has to be told which directory to fix");
+    }
+
+    /// <summary>The innermost message, since the host wraps a startup failure more than once.</summary>
+    private static string Unwrap(Exception? exception)
+    {
+        var messages = new List<string>();
+        for (var current = exception; current is not null; current = current.InnerException)
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Conflict));
-            Assert.That(problem, Does.Contain(_directory), "the operator has to be told which directory");
-            Assert.That(File.ReadAllText(SettingsPath("Settings.json")), Is.EqualTo(before));
-        });
+            messages.Add(current.Message);
+        }
+
+        return string.Join(" | ", messages);
     }
 
     /// <summary>
@@ -770,7 +802,7 @@ public class AdminConfigControllerTests
 
         var response = await Put(client, config);
         var problem = await response.Content.ReadAsStringAsync();
-        var saved = JsonNode.Parse(File.ReadAllText(SettingsPath("Settings.json")));
+        var saved = JsonNode.Parse(StoredText(factory));
 
         Assert.Multiple(() =>
         {
@@ -779,7 +811,7 @@ public class AdminConfigControllerTests
             Assert.That(saved?["Accounts"]?[0]?.AsObject().Select(pair => pair.Key),
                 Does.Not.Contain("ApiKey"),
                 "an ApiKey beside an ApiKeyFile is exactly what the loader refuses");
-            Assert.That(File.ReadAllText(SettingsPath("Settings.json")),
+            Assert.That(StoredText(factory),
                 Does.Not.Contain(AdminSecret.Placeholder));
         });
     }
@@ -832,7 +864,7 @@ public class AdminConfigControllerTests
         config = config with { Default = config.Default with { Accounts = [survivor] } };
 
         var response = await Put(client, config);
-        var saved = JsonNode.Parse(File.ReadAllText(SettingsPath("Settings.json")));
+        var saved = JsonNode.Parse(StoredText(factory));
 
         Assert.Multiple(() =>
         {
@@ -863,7 +895,7 @@ public class AdminConfigControllerTests
         };
 
         var response = await Put(client, config);
-        var saved = JsonNode.Parse(File.ReadAllText(SettingsPath("Settings.json")));
+        var saved = JsonNode.Parse(StoredText(factory));
 
         Assert.Multiple(() =>
         {
@@ -889,7 +921,7 @@ public class AdminConfigControllerTests
         using var factory = CreateFactory();
         var client = factory.CreateClient();
 
-        var before = File.ReadAllText(SettingsPath("Settings.json"));
+        var before = StoredText(factory);
         var config = await GetConfig(client);
 
         if (ambiguous)
@@ -912,7 +944,7 @@ public class AdminConfigControllerTests
             Assert.That(problem,
                 ambiguous ? Does.Contain("name the same stored account") : Does.Contain("could not be matched"),
                 "and has to say which of the two it is - they are not fixed the same way");
-            Assert.That(File.ReadAllText(SettingsPath("Settings.json")), Is.EqualTo(before));
+            Assert.That(StoredText(factory), Is.EqualTo(before));
         });
     }
 
@@ -993,7 +1025,7 @@ public class AdminConfigControllerTests
         // Act
         var response = await Put(client, config);
         var body = await response.Content.ReadAsStringAsync();
-        var saved = JsonNode.Parse(File.ReadAllText(SettingsPath("Settings.json")));
+        var saved = JsonNode.Parse(StoredText(factory));
         var adopted = saved?["Profiles"]?["kitchen"]?["Accounts"]?[0];
 
         // Assert
@@ -1050,7 +1082,7 @@ public class AdminConfigControllerTests
         // Act
         var response = await Put(client, config);
         var body = await response.Content.ReadAsStringAsync();
-        var saved = JsonNode.Parse(File.ReadAllText(SettingsPath("Settings.json")));
+        var saved = JsonNode.Parse(StoredText(factory));
 
         // Assert
         Assert.Multiple(() =>
@@ -1110,7 +1142,7 @@ public class AdminConfigControllerTests
         // Act
         var response = await Put(client, config);
         var body = await response.Content.ReadAsStringAsync();
-        var saved = JsonNode.Parse(File.ReadAllText(SettingsPath("Settings.json")));
+        var saved = JsonNode.Parse(StoredText(factory));
 
         // Assert
         Assert.Multiple(() =>
@@ -1134,7 +1166,7 @@ public class AdminConfigControllerTests
         using var factory = CreateFactory();
         var client = factory.CreateClient();
 
-        var before = File.ReadAllText(SettingsPath("Settings.json"));
+        var before = StoredText(factory);
         var config = await GetConfig(client);
 
         // Well-formed and of the right shape, but issued by no read of this document.
@@ -1150,7 +1182,7 @@ public class AdminConfigControllerTests
             Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
             Assert.That(problem, Does.Contain("could not be matched"));
             Assert.That(problem, Does.Contain("server-x"), "the message has to name the account to retype");
-            Assert.That(File.ReadAllText(SettingsPath("Settings.json")), Is.EqualTo(before));
+            Assert.That(StoredText(factory), Is.EqualTo(before));
         });
     }
 
@@ -1170,10 +1202,10 @@ public class AdminConfigControllerTests
 
         // Act
         var first = await Put(client, await GetConfig(client));
-        var afterFirst = File.ReadAllText(SettingsPath("Settings.json"));
+        var afterFirst = StoredText(factory);
 
         var second = await Put(client, await GetConfig(client));
-        var afterSecond = File.ReadAllText(SettingsPath("Settings.json"));
+        var afterSecond = StoredText(factory);
 
         var saved = JsonNode.Parse(afterSecond);
 
@@ -1211,7 +1243,7 @@ public class AdminConfigControllerTests
 
         var config = await GetConfig(client);
         var response = await Put(client, config);
-        var saved = JsonNode.Parse(File.ReadAllText(SettingsPath("Settings.json")));
+        var saved = JsonNode.Parse(StoredText(factory));
 
         Assert.Multiple(() =>
         {
@@ -1266,7 +1298,7 @@ public class AdminConfigControllerTests
 
         // Act
         var response = await Put(client, config);
-        var saved = JsonNode.Parse(File.ReadAllText(SettingsPath("Settings.json")));
+        var saved = JsonNode.Parse(StoredText(factory));
 
         // Assert
         Assert.Multiple(() =>
@@ -1303,7 +1335,7 @@ public class AdminConfigControllerTests
         // Act
         var response = await Put(client, config);
         var body = await response.Content.ReadFromJsonAsync<AdminConfigDto>(Camel);
-        var saved = JsonNode.Parse(File.ReadAllText(SettingsPath("Settings.json")));
+        var saved = JsonNode.Parse(StoredText(factory));
 
         // Assert
         Assert.Multiple(() =>
@@ -1332,7 +1364,7 @@ public class AdminConfigControllerTests
         using var factory = CreateFactory();
         var client = factory.CreateClient();
 
-        var before = File.ReadAllText(SettingsPath("Settings.json"));
+        var before = StoredText(factory);
         var config = await GetConfig(client);
         config.Default.Accounts[1].Label = duplicate;
 
@@ -1346,7 +1378,7 @@ public class AdminConfigControllerTests
             Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
             Assert.That((string?)problem?["detail"], Does.Contain(duplicate.Trim()),
                 "the message has to name the label that is doubled up");
-            Assert.That(File.ReadAllText(SettingsPath("Settings.json")), Is.EqualTo(before),
+            Assert.That(StoredText(factory), Is.EqualTo(before),
                 "and nothing may be written");
         });
     }
@@ -1371,7 +1403,7 @@ public class AdminConfigControllerTests
         // Act
         var response = await Put(client, config);
         var body = await response.Content.ReadAsStringAsync();
-        var saved = JsonNode.Parse(File.ReadAllText(SettingsPath("Settings.json")));
+        var saved = JsonNode.Parse(StoredText(factory));
 
         // Assert
         Assert.Multiple(() =>
@@ -1399,7 +1431,7 @@ public class AdminConfigControllerTests
 
         // Act
         var converted = await Put(client, Update(config) with { ConvertLegacySchema = true });
-        var saved = JsonNode.Parse(File.ReadAllText(SettingsPath("Settings.json")));
+        var saved = JsonNode.Parse(StoredText(factory));
 
         // Assert
         Assert.Multiple(() =>
@@ -1449,28 +1481,26 @@ public class AdminConfigControllerTests
     /// announce that this installation is configured from environment variables - and answer 500.
     /// </summary>
     [Test]
-    public async Task Config_SettingsFileNoLongerParses_Is409OnBothActionsAndNotReportedAsEnvironment()
+    public async Task Config_SettingsFileDoesNotParseAtImport_StartsUnconfiguredRatherThanRefusing()
     {
-        WriteSettings("Settings.json", SettingsJson);
+        // This replaced a test that hand-edited the settings file after startup and expected both
+        // editor actions to 409. The file is read exactly once now, to import it, and ignored
+        // afterwards - so it can no longer move under a running host and there is no such conflict
+        // to report. What is left worth pinning is the import itself failing: a file that parses as
+        // neither schema must not take the host down with it, because the editor that fixes it is
+        // served by this very process.
+        WriteSettings("Settings.json", "{ \"General\": { \"Interval\": 45, } }");
         using var factory = CreateFactory();
         var client = factory.CreateClient();
 
-        var config = await GetConfig(client);
-
-        // Hand-edited into something neither schema can read, after the host booted.
-        File.WriteAllText(SettingsPath("Settings.json"), "{ \"General\": { \"Interval\": 45, } }");
-
         var read = await Send(client, HttpMethod.Get, ConfigUrl);
-        var readProblem = await read.Content.ReadAsStringAsync();
-        var save = await Put(client, config);
+        var config = await GetConfig(client);
 
         Assert.Multiple(() =>
         {
-            Assert.That(read.StatusCode, Is.EqualTo(HttpStatusCode.Conflict));
-            Assert.That(save.StatusCode, Is.EqualTo(HttpStatusCode.Conflict));
-            Assert.That(readProblem, Does.Contain("Settings.json"));
-            Assert.That(readProblem, Does.Not.Contain("environment variables"),
-                "an unreadable file is not an installation configured from the environment");
+            Assert.That(read.StatusCode, Is.EqualTo(HttpStatusCode.OK), "the editor still answers");
+            Assert.That(config.Source.Editable, Is.True, "and can be used to configure the instance");
+            Assert.That(config.Default.Accounts, Is.Empty, "nothing was imported from the broken file");
         });
     }
 
@@ -1495,7 +1525,7 @@ public class AdminConfigControllerTests
         {
             Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Conflict));
             Assert.That(problem, Does.Contain("anchor"));
-            Assert.That(File.ReadAllText(SettingsPath("Settings.yml")), Is.EqualTo(AnchoredYaml));
+            Assert.That(StoredText(factory), Is.EqualTo(AnchoredYaml));
         });
     }
 
@@ -1513,7 +1543,7 @@ public class AdminConfigControllerTests
         using var factory = CreateFactory();
         var client = factory.CreateClient();
 
-        var before = File.ReadAllText(SettingsPath("Settings.json"));
+        var before = StoredText(factory);
         var config = await GetConfig(client);
 
         config = config with
@@ -1531,7 +1561,7 @@ public class AdminConfigControllerTests
             Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
             Assert.That(problem, Does.Contain("at least one Immich account"));
             Assert.That(problem, Does.Not.Contain("Object reference"));
-            Assert.That(File.ReadAllText(SettingsPath("Settings.json")), Is.EqualTo(before));
+            Assert.That(StoredText(factory), Is.EqualTo(before));
         });
     }
 
@@ -1551,7 +1581,7 @@ public class AdminConfigControllerTests
         config.Default.Accounts[0].Tags = ["Kücheneinweihung", "日本"];
 
         var response = await Put(client, config);
-        var saved = File.ReadAllText(SettingsPath("Settings.json"));
+        var saved = StoredText(factory);
 
         Assert.Multiple(() =>
         {
@@ -1568,9 +1598,13 @@ public class AdminConfigControllerTests
     /// next restart would then load <em>instead</em> of the environment would be worse than refusing.
     /// </summary>
     [Test]
-    public async Task SaveConfig_ConfigurationCameFromEnvironmentVariables_Is409()
+    public async Task SaveConfig_EnvironmentVariablesAreNotImported_AndTheEditorConfiguresFromScratch()
     {
-        // No settings file in the directory at all, so ConfigLoader falls through to the environment.
+        // This replaced a test that asserted a 409 and an uneditable editor. The environment
+        // fallback was removed upstream when the database became the source of truth, so these
+        // variables now configure nothing at all: the instance comes up unconfigured, and the point
+        // of the admin editor on a fresh install is that it can configure one. Refusing here would
+        // leave an installation that used to work with no way back in.
         var url = Environment.GetEnvironmentVariable("ImmichServerUrl");
         var key = Environment.GetEnvironmentVariable("ApiKey");
         Environment.SetEnvironmentVariable("ImmichServerUrl", "http://mock-immich-server.com");
@@ -1582,19 +1616,39 @@ public class AdminConfigControllerTests
             var client = factory.CreateClient();
 
             var config = await GetConfig(client);
-            var response = await Put(client, config);
-            var problem = await response.Content.ReadAsStringAsync();
+
+            // Nothing was imported, so there is nothing to inherit: the editor opens on an empty
+            // default configuration rather than on the environment's values.
+            var accountsBefore = config.Default.Accounts.Count;
+
+            var configured = config with
+            {
+                Default = config.Default with
+                {
+                    DeclaredKeys = [.. config.Default.DeclaredKeys, "Accounts"],
+                    Accounts =
+                    [
+                        new AdminAccountSettingsDto
+                        {
+                            ImmichServerUrl = "http://mock-immich-server.com",
+                            ApiKey = "typed-in-the-editor"
+                        }
+                    ]
+                }
+            };
+
+            var response = await Put(client, configured);
+            var saved = JsonNode.Parse(StoredText(factory));
 
             Assert.Multiple(() =>
             {
-                Assert.That(config.Source.Format, Is.EqualTo("environment"));
-                Assert.That(config.Source.Editable, Is.False);
-                Assert.That(config.Source.NotEditableReason, Is.Not.Null);
+                Assert.That(accountsBefore, Is.Zero, "the environment configures nothing");
+                Assert.That(config.Source.Editable, Is.True, "a fresh install has to be configurable");
+                Assert.That(config.Source.NotEditableReason, Is.Null);
 
-                Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Conflict));
-                Assert.That(problem, Does.Contain("environment variables"));
-                Assert.That(Directory.EnumerateFileSystemEntries(_directory), Is.Empty,
-                    "refusing means writing nothing, not creating the file the editor wishes were there");
+                Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+                Assert.That((string?)saved?["Accounts"]?[0]?["ApiKey"], Is.EqualTo("typed-in-the-editor"),
+                    "and what the editor saves is what is stored, not the environment's key");
             });
         }
         finally
@@ -1687,6 +1741,22 @@ public class AdminConfigControllerTests
 
     private static UnixFileMode? ModeOf(string path) =>
         OperatingSystem.IsWindows() ? null : File.GetUnixFileMode(path);
+
+    /// <summary>
+    /// The settings document as the store now holds it. This replaced reading the settings file
+    /// back: the database is the source of truth, the file is read once on import and never
+    /// rewritten, so what a save produced is here rather than on disk.
+    /// </summary>
+    private static string StoredText(WebApplicationFactory<Program> factory) =>
+        factory.Services.GetRequiredService<SettingsService>().Read().Text;
+
+    /// <summary>The stored row's version - the token the editor round-trips as its concurrency check.</summary>
+    private static long StoredVersion(WebApplicationFactory<Program> factory) =>
+        factory.Services.GetRequiredService<SettingsService>().Read().Version;
+
+    /// <summary>The format the stored document is written in - a YAML import stays YAML.</summary>
+    private static ConfigFormat StoredFormat(WebApplicationFactory<Program> factory) =>
+        factory.Services.GetRequiredService<SettingsService>().Read().Format;
 
     private string SettingsPath(string name) => Path.Combine(_directory, name);
 
