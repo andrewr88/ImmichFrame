@@ -104,10 +104,43 @@ provider.
 - Every general setting, as a list of rows. Each row is either **Overridden** — declared by the
   configuration you are editing — or shows where its value comes from instead: the default
   configuration, or ImmichFrame's built-in default.
-- Immich accounts, including per-account filters. Albums, people and tags are chosen from lists read
-  out of your Immich server, so you pick by name instead of pasting identifiers. There is a text
-  fallback for each of them, so a picker that cannot reach Immich never stops you editing.
+- Your Immich accounts, in a section of their own above the profile tabs: one row per account for
+  the whole settings file, holding its label, server URL, API key and API key file.
+- Which of those accounts each configuration shows photos from, and what it shows from each:
+  albums, people, tags, rating and date range, plus whether memories, favourites, archived photos
+  and videos are included. Assigning an account to a configuration never asks you for its API key.
+- Albums, people and tags are chosen from lists read out of your Immich server, so you pick by name
+  instead of pasting identifiers, and what is already configured is named as soon as the page loads
+  rather than only after you open a picker. There is a text fallback for each of them, so a picker
+  that cannot reach Immich never stops you editing.
 - Profiles: create them, delete them, and give each one its own overrides.
+
+## Immich accounts
+
+Accounts are edited in a section of their own, above the profile tabs, rather than inside whichever
+configuration you happen to have open. There is one row per account for the whole settings file,
+because which Immich server an account is on, and which key it uses, belong to the account rather
+than to the configurations that mention it. Editing a row therefore changes that account everywhere
+it is used, and the row tells you which configurations those are.
+
+A configuration assigns accounts rather than describing them. The default configuration always uses
+at least one. A profile either inherits that list — staying sparse, and following later changes to
+the default configuration's accounts — or overrides it, which gives you a tick box per account and,
+under each one you tick, what that profile shows from it. A profile that has been inheriting and
+then takes the list over starts with exactly the accounts it had, already ticked, each with the API
+key already stored for it, so you never retype a key you are already using.
+
+Two accounts are the same account when their labels match, compared ignoring letter case and
+surrounding spaces — that is how a profile says it means the default configuration's account — while
+two accounts with no label are matched on their Immich server URL instead. That makes
+[`Label`](/docs/getting-started/configuration#full-configuration-reference) what keeps two separate
+logins on one Immich server distinct, and the editor never invents one for you: an account you leave
+unlabelled is written without a label.
+
+Removing an account takes it out of every configuration that used it, and its API key with it. You
+are asked first, and told which profiles lose it — including profiles that were inheriting it rather
+than declaring it themselves, which are the ones you would not think to check. Nothing changes on
+disk until you save.
 
 ## What the editor will not do
 
@@ -136,6 +169,25 @@ setting removed in an upgrade — is not shown, and is dropped when the file is 
 stores that profile's authentication secret under, so a rename would log every frame on it out and
 point it at a 404. You can create and delete profiles instead. Deleting asks first and names the URL
 that will stop working.
+
+**Guess which account is which when two of them are indistinguishable.** Two accounts in one
+configuration whose labels match, compared ignoring letter case and surrounding spaces, are marked
+**Duplicate label** as soon as they clash; two with no label at all on the same Immich server are
+caught when you save, since which is which would otherwise depend on the order they happen to be
+listed in. Either way both rows are kept and you are asked for labels that differ, rather than one
+being folded into the other — a single row standing for two accounts would write one account's
+server URL or API key over the other's the first time you edited it.
+
+**Save an account that one configuration stores a key for and another reads from an API key file.**
+The settings file is describing one account two different ways, and only one of them can be written,
+so the other configuration would be left with neither a key nor a key file. The editor names that
+configuration and the path it reads from, and asks you to make the two agree: give the account that
+key file path, so every configuration reads the key from the file, or replace its key to store one
+in the settings file instead.
+
+**Remove the last account from the default configuration.** Every profile inherits that list unless
+it declares one of its own, and ImmichFrame cannot serve an image without an account, so both the
+removal and a save that would leave the default configuration using none are refused.
 
 ## Saving
 
@@ -170,10 +222,12 @@ ImmichFrame refuses a configuration that names both a key file and a key. Clear 
 to type a key instead. An account you have added but not yet saved cannot browse Immich from a key
 file — ImmichFrame reads that file when the configuration is saved, so save first and then pick.
 
-If you make a profile declare its own accounts, having inherited them until then, you have to enter
-an API key for each one before saving. That profile has no stored key of its own to keep, and the
-editor was never given the one it was inheriting — it only ever learns whether a key is set, never
-what it is.
+Giving a profile its own account list does not make you type those keys again. The editor only ever
+learns whether a key is set, never what it is, so the copying happens on the server: ImmichFrame
+takes each key from the account it is already stored against, wherever in the settings file that is,
+and writes it into the profile's list without it passing through your browser. The only account you
+have to type a key for is one the settings file holds no key for anywhere — most often one you have
+just added.
 
 For the authentication secret on a profile, the editor also offers "no secret" as a distinct choice
 from inheriting: it writes `AuthenticationSecret: null`, which overrides your default secret with
