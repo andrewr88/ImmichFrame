@@ -244,7 +244,11 @@ public class AdminAccountSettingsDto
     /// </para>
     /// <para>
     /// Null on an account a profile is inheriting rather than declaring, and on one the editor has
-    /// just added: neither has a stored key to keep, so both have to be given one outright.
+    /// just added. Only the second of those has no key to keep: an inherited account is another
+    /// entry's, and carries that entry's handle there. A handle resolves against every entry in the
+    /// document on save, so an entry adopting an account it never declared sends the handle of an
+    /// entry that did - in practice the default configuration's - and keeps that account's stored
+    /// key without it ever reaching the browser.
     /// </para>
     /// </summary>
     public string? Id { get; set; }

@@ -12,6 +12,7 @@
 		type EditableConfig,
 		type EditableEntry
 	} from './admin-config';
+	import AccountsSection from './accounts-section.svelte';
 	import EntryEditor from './entry-editor.svelte';
 
 	interface Props {
@@ -200,6 +201,13 @@
 		{/if}
 	</div>
 
+	<!-- Above the tab strip, because an Immich account belongs to the configuration as a whole rather
+	     than to whichever tab happens to be selected: the same account is used by the default
+	     configuration and by any number of profiles, and is one set of credentials in all of them. -->
+	<fieldset disabled={readOnly}>
+		<AccountsSection {config} />
+	</fieldset>
+
 	<div class="mb-4 flex flex-wrap items-center gap-2">
 		{#each entries as entry, index (entry.name + index)}
 			<button
@@ -248,6 +256,7 @@
 		<fieldset disabled={readOnly}>
 			<EntryEditor
 				entry={current}
+				accounts={config.accounts}
 				inheritFrom={current.isDefault ? null : config.default}
 				version={config.version}
 			/>
