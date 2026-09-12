@@ -137,6 +137,31 @@ public class AdminConfigControllerTests
         }
         """;
 
+    /// <summary>
+    /// Two Immich logins on one server, which is the setup a label is for: the URLs are identical,
+    /// the API keys never reach the browser, and so nothing else in the file tells these two
+    /// accounts apart. The second is deliberately unlabelled - an account without a label has to
+    /// keep not having one.
+    /// </summary>
+    private const string LabelledAccountsJson = """
+        {
+          "General": {
+            "Interval": 45
+          },
+          "Accounts": [
+            {
+              "Label": "Mum's photos",
+              "ImmichServerUrl": "http://server-x.example.com",
+              "ApiKey": "key-mum"
+            },
+            {
+              "ImmichServerUrl": "http://server-x.example.com",
+              "ApiKey": "key-dad"
+            }
+          ]
+        }
+        """;
+
     private const string ApiKeyFileJson = """
         {
           "General": {
@@ -1172,7 +1197,7 @@ public class AdminConfigControllerTests
     }
 
     /// <summary>
-    /// Accounts have to stay as sparse as everything else. Writing all fifteen settings out would
+    /// Accounts have to stay as sparse as everything else. Writing all sixteen settings out would
     /// freeze today's built-in defaults into the file, so a later change to one of them would stop
     /// reaching any installation that had used the editor - the same drift the declared-key machinery
     /// exists to prevent, one level down.
@@ -1198,6 +1223,190 @@ public class AdminConfigControllerTests
                 Is.EquivalentTo(new[] { "ImmichServerUrl", "ApiKey", "ShowVideos" }));
             Assert.That(saved?["Accounts"]?[1]?.AsObject().Select(pair => pair.Key),
                 Is.EquivalentTo(new[] { "ImmichServerUrl", "ApiKey" }));
+        });
+    }
+
+    /// <summary>
+    /// A label is the only thing in the file that survives a reload and says which account is which,
+    /// so the read has to report it - and has to report its absence as an absence rather than
+    /// inventing one.
+    /// </summary>
+    [Test]
+    public async Task GetConfig_AccountWithALabel_ReportsItAndLeavesAnUnlabelledAccountWithout()
+    {
+        // Arrange
+        WriteSettings("Settings.json", LabelledAccountsJson);
+        using var factory = CreateFactory();
+
+        // Act
+        var config = await GetConfig(factory.CreateClient());
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(config.Default.Accounts[0].Label, Is.EqualTo("Mum's photos"));
+            Assert.That(config.Default.Accounts[1].Label, Is.Null,
+                "the two accounts are otherwise identical, so a label must not be guessed for one of them");
+        });
+    }
+
+    /// <summary>
+    /// The write half: a label is written like every other account setting - sparsely - so an
+    /// account that never had one does not acquire an empty <c>Label</c> key from a round trip.
+    /// </summary>
+    [Test]
+    public async Task SaveConfig_UneditedLabelledAccounts_KeepTheirLabelsAndGainNoNewOnes()
+    {
+        // Arrange
+        WriteSettings("Settings.json", LabelledAccountsJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var config = await GetConfig(client);
+
+        // Act
+        var response = await Put(client, config);
+        var saved = JsonNode.Parse(File.ReadAllText(SettingsPath("Settings.json")));
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That((string?)saved?["Accounts"]?[0]?["Label"], Is.EqualTo("Mum's photos"));
+            Assert.That(saved?["Accounts"]?[1]?.AsObject().ContainsKey("Label"), Is.False,
+                "an account with no label must leave no key behind");
+            Assert.That((string?)saved?["Accounts"]?[0]?["ApiKey"], Is.EqualTo("key-mum"),
+                "and the labels must not have disturbed which key belongs to which account");
+            Assert.That((string?)saved?["Accounts"]?[1]?["ApiKey"], Is.EqualTo("key-dad"));
+        });
+    }
+
+    /// <summary>
+    /// Absent, empty and whitespace-only are one state - this account has no label - in both
+    /// directions. The editor sends its form fields verbatim, so a label the administrator cleared
+    /// arrives as <c>""</c> or as the spaces left behind, and neither may be written: the next read
+    /// would report no label while the file claimed one, and two accounts "labelled" with different
+    /// runs of spaces would look distinct to any later uniqueness rule.
+    /// </summary>
+    [Test]
+    public async Task SaveConfig_LabelThatIsEmptyOrOnlyWhitespace_WritesNoLabelAtAll()
+    {
+        // Arrange
+        WriteSettings("Settings.json", LabelledAccountsJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var config = await GetConfig(client);
+        config.Default.Accounts[0].Label = "   ";
+        config.Default.Accounts[1].Label = string.Empty;
+
+        // Act
+        var response = await Put(client, config);
+        var body = await response.Content.ReadFromJsonAsync<AdminConfigDto>(Camel);
+        var saved = JsonNode.Parse(File.ReadAllText(SettingsPath("Settings.json")));
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(saved?["Accounts"]?[0]?.AsObject().ContainsKey("Label"), Is.False,
+                "clearing a label removes the key rather than writing whitespace into it");
+            Assert.That(saved?["Accounts"]?[1]?.AsObject().ContainsKey("Label"), Is.False);
+            Assert.That(body?.Default.Accounts.Select(account => account.Label), Is.All.Null);
+        });
+    }
+
+    /// <summary>
+    /// Two accounts in one list sharing a label are the same class of silent credential
+    /// misattribution the account handles exist to prevent: the editor would show one row for two
+    /// sets of credentials, and editing it would write one account's server URL or key over the
+    /// other's. Case and surrounding whitespace do not make them two accounts to anyone reading the
+    /// screen, so they do not here either.
+    /// </summary>
+    [TestCase("mum's PHOTOS", TestName = "SaveConfig_TwoAccountsLabelledAlikeButForCase_IsRefused")]
+    [TestCase("  Mum's photos  ", TestName = "SaveConfig_TwoAccountsLabelledAlikeButForWhitespace_IsRefused")]
+    public async Task SaveConfig_TwoAccountsInOneEntryWithTheSameLabel_IsRefused(string duplicate)
+    {
+        // Arrange
+        WriteSettings("Settings.json", LabelledAccountsJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var before = File.ReadAllText(SettingsPath("Settings.json"));
+        var config = await GetConfig(client);
+        config.Default.Accounts[1].Label = duplicate;
+
+        // Act
+        var response = await Put(client, config);
+        var problem = JsonNode.Parse(await response.Content.ReadAsStringAsync());
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+            Assert.That((string?)problem?["detail"], Does.Contain(duplicate.Trim()),
+                "the message has to name the label that is doubled up");
+            Assert.That(File.ReadAllText(SettingsPath("Settings.json")), Is.EqualTo(before),
+                "and nothing may be written");
+        });
+    }
+
+    /// <summary>
+    /// The opposite rule one entry down: the same label in the default configuration and in a profile
+    /// is not a collision, it is how those two entries say they mean the same account. A uniqueness
+    /// check across entries would forbid exactly the thing labels are for.
+    /// </summary>
+    [Test]
+    public async Task SaveConfig_SameLabelInTheDefaultConfigurationAndInAProfile_IsAccepted()
+    {
+        // Arrange
+        WriteSettings("Settings.json", SharedAccountsJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var config = await GetConfig(client);
+        config.Default.Accounts[0].Label = "Family";
+        config.Profiles.Single(profile => profile.Name == "studio").Accounts[0].Label = "Family";
+
+        // Act
+        var response = await Put(client, config);
+        var body = await response.Content.ReadAsStringAsync();
+        var saved = JsonNode.Parse(File.ReadAllText(SettingsPath("Settings.json")));
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK), body);
+            Assert.That((string?)saved?["Accounts"]?[0]?["Label"], Is.EqualTo("Family"));
+            Assert.That((string?)saved?["Profiles"]?["studio"]?["Accounts"]?[0]?["Label"], Is.EqualTo("Family"));
+        });
+    }
+
+    /// <summary>
+    /// A v1 file has nowhere to keep a label, and is read through an adapter that is not the current
+    /// schema's account class at all - so the read has to report no label rather than reaching for
+    /// one, and converting the file must not invent one either.
+    /// </summary>
+    [Test]
+    public async Task SaveConfig_LegacySchemaFile_ConvertsToAccountsWithNoLabels()
+    {
+        // Arrange
+        WriteSettings("Settings.json", SettingsV1Json);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var config = await GetConfig(client);
+
+        // Act
+        var converted = await Put(client, Update(config) with { ConvertLegacySchema = true });
+        var saved = JsonNode.Parse(File.ReadAllText(SettingsPath("Settings.json")));
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(config.Default.Accounts[0].Label, Is.Null);
+            Assert.That(converted.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(saved?["Accounts"]?[0]?.AsObject().ContainsKey("Label"), Is.False);
         });
     }
 

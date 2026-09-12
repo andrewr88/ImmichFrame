@@ -78,6 +78,19 @@ public class GeneralSettings : IGeneralSettings, IConfigSettable
 
 public class ServerAccountSettings : IAccountSettings, IConfigSettable
 {
+    /// <summary>
+    /// A human name for this account, purely so a person - and the configuration editor - can tell
+    /// one from another. Nothing in ImmichFrame selects, logs or routes by it.
+    /// <para>
+    /// It exists because nothing else in the file identifies an account across a reload. An API key
+    /// is never sent to the browser, and <see cref="ImmichServerUrl"/> is not an identity either:
+    /// two accounts may legitimately be two users on one Immich server. Deliberately not on
+    /// <see cref="IAccountSettings"/> - this is editor metadata that happens to live in the settings
+    /// file, and nothing in ImmichFrame.Core would ever read it.
+    /// </para>
+    /// </summary>
+    public string? Label { get; set; }
+
     public string ImmichServerUrl { get; set; } = string.Empty;
     public string ApiKey { get; set; } = string.Empty;
     public string? ApiKeyFile { get; set; } = null;

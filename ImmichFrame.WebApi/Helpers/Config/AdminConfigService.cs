@@ -366,10 +366,17 @@ public sealed class AdminConfigService(
         var settings = _catalog.Default;
 
         // Every account is declared here, so every one has a stored key the save can put back.
+        //
+        // The label has to be read off the concrete settings, because it is not on IAccountSettings
+        // and must not be put there - and this branch only has the interface. An environment
+        // configuration and a v1 file both arrive as adapters over their own schema, neither of
+        // which can express a label, so reporting none for them is the honest answer rather than a
+        // gap: the cast fails exactly when there is nothing to read.
         var accounts = settings.Accounts
             .Select((account, index) => new AdminAccountSettingsDto(account)
             {
-                Id = AccountId(version, ConfigCatalog.DefaultProfileName, index)
+                Id = AccountId(version, ConfigCatalog.DefaultProfileName, index),
+                Label = account is ServerAccountSettings stored ? NormalizedLabel(stored.Label) : null
             })
             .ToList();
 
@@ -395,10 +402,13 @@ public sealed class AdminConfigService(
         // for a later save to put back.
         var stored = declared[AccountsKey] as JsonArray;
 
-        var accounts = settings.Accounts
+        // AccountsImpl rather than Accounts: the label is not on IAccountSettings and must not be
+        // put there, and this is the one path that already knows the concrete type.
+        var accounts = settings.AccountsImpl
             .Select((account, index) => new AdminAccountSettingsDto(account)
             {
-                Id = index < (stored?.Count ?? 0) ? AccountId(version, name, index) : null
+                Id = index < (stored?.Count ?? 0) ? AccountId(version, name, index) : null,
+                Label = NormalizedLabel(account.Label)
             })
             .ToList();
 
@@ -597,6 +607,13 @@ public sealed class AdminConfigService(
     /// credential - silently, since the result validates, swaps in and refreshes the version token
     /// like any successful save. Refusing and asking for the key again is the only safe answer.
     /// </para>
+    /// <para>
+    /// Two accounts <em>in this list</em> carrying one label are refused for the same reason. A label
+    /// is what says "these two entries mean one account", so a list holding it twice would show two
+    /// sets of credentials as a single account, and editing that one row would write one account's
+    /// server URL or key over the other's. Across entries the opposite holds - a shared label is how
+    /// a profile says it means the default configuration's account - so there is no check there.
+    /// </para>
     /// </summary>
     private static List<Dictionary<string, object?>> Accounts(
         IReadOnlyList<AdminAccountSettingsDto>? accounts,
@@ -606,11 +623,25 @@ public sealed class AdminConfigService(
         var entryName = profileName ?? ConfigCatalog.DefaultProfileName;
         var where = profileName is null ? "the default configuration" : $"configuration profile '{profileName}'";
         var claimed = new HashSet<string>(StringComparer.Ordinal);
+        var labelled = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var defaults = new ServerAccountSettings();
         var result = new List<Dictionary<string, object?>>();
 
         foreach (var account in accounts ?? [])
         {
+            var label = NormalizedLabel(account.Label);
+
+            // Case-insensitively and after trimming, because "Mum" and "mum " would read as one
+            // account to anyone looking at the editor, whatever the file says.
+            if (label is not null && !labelled.Add(label))
+            {
+                throw new SettingsNotValidException(
+                    $"Two accounts in {where} are labelled '{label}'. A label is what tells one account " +
+                    "from another here, so two accounts sharing one would be edited as if they were a " +
+                    "single account - writing one account's server URL or API key over the other's. " +
+                    "Labels are compared without regard to case or surrounding spaces; rename one of them.");
+            }
+
             var ambiguous = false;
 
             // Two questions, deliberately two variables: which stored key this account is, and what
@@ -659,12 +690,12 @@ public sealed class AdminConfigService(
                 {
                     throw new SettingsNotValidException(
                         $"Two accounts in {where} name the same stored account, so ImmichFrame cannot tell " +
-                        $"which of them keeps its API key. Enter the API key for '{Label(account)}' and save again.");
+                        $"which of them keeps its API key. Enter the API key for '{Describe(account)}' and save again.");
                 }
                 else if (stored is null)
                 {
                     throw new SettingsNotValidException(
-                        $"The API key for '{Label(account)}' in {where} could not be matched to an account " +
+                        $"The API key for '{Describe(account)}' in {where} could not be matched to an account " +
                         "stored anywhere in the settings file, so there is no key to keep: either the account " +
                         "is new, or the stored account it came from is gone. Enter its API key and save again; " +
                         "ImmichFrame will not guess which stored key belongs to it.");
@@ -675,7 +706,7 @@ public sealed class AdminConfigService(
                 }
             }
 
-            result.Add(Account(account, declared, apiKey, defaults));
+            result.Add(Account(account, declared, apiKey, label, defaults));
         }
 
         return result;
@@ -685,22 +716,30 @@ public sealed class AdminConfigService(
     /// One account, written as sparsely as the rest of the file.
     /// <para>
     /// A setting is written when the account differs from the built-in defaults or when the file
-    /// already spelled it out, and left out otherwise. Materialising all fifteen would freeze today's
+    /// already spelled it out, and left out otherwise. Materialising all sixteen would freeze today's
     /// defaults into the file, so a later change to one of them would stop reaching any installation
     /// that had ever used the editor - the same silent drift that keeping profiles sparse exists to
     /// prevent, one level further down.
     /// </para>
     /// </summary>
     private static Dictionary<string, object?> Account(
-        AdminAccountSettingsDto account, JsonObject? declared, string? apiKey, ServerAccountSettings defaults)
+        AdminAccountSettingsDto account, JsonObject? declared, string? apiKey, string? label,
+        ServerAccountSettings defaults)
     {
         var entry = new Dictionary<string, object?>();
 
         foreach (var property in AccountProperties.Values)
         {
-            var value = string.Equals(property.Name, nameof(ServerAccountSettings.ApiKey), StringComparison.Ordinal)
-                ? apiKey
-                : ReadProperty(account, property.Name);
+            // Two settings the request does not supply verbatim: the API key has already been
+            // resolved against what is stored, and the label has been normalised, so that a label of
+            // spaces leaves no key behind rather than writing one the next read would report as
+            // absent.
+            var value = property.Name switch
+            {
+                nameof(ServerAccountSettings.ApiKey) => apiKey,
+                nameof(ServerAccountSettings.Label) => label,
+                _ => ReadProperty(account, property.Name)
+            };
 
             // A setting the request left out is left out of the file too, rather than written as a
             // null the loader would have to interpret.
@@ -714,8 +753,21 @@ public sealed class AdminConfigService(
         return entry;
     }
 
-    private static string Label(AdminAccountSettingsDto account) =>
+    /// <summary>
+    /// How a refusal names the account it is about. The server URL rather than
+    /// <see cref="AdminAccountSettingsDto.Label"/>, because an account can be saved without a label
+    /// and one of these messages is what an administrator gets when something is already wrong.
+    /// </summary>
+    private static string Describe(AdminAccountSettingsDto account) =>
         string.IsNullOrWhiteSpace(account.ImmichServerUrl) ? "(no server URL)" : account.ImmichServerUrl;
+
+    /// <summary>
+    /// A label as everything here compares and stores it. Absent, empty and whitespace-only are one
+    /// state - this account has no label - so they all normalise to null, and a stray space either
+    /// side of a typed name is not a second account.
+    /// </summary>
+    private static string? NormalizedLabel(string? label) =>
+        string.IsNullOrWhiteSpace(label) ? null : label.Trim();
 
     /// <summary>Whether the stored account spelled this setting out, however it cased it.</summary>
     private static bool Declares(JsonObject? declared, string name) =>

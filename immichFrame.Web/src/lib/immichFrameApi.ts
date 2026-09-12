@@ -61,6 +61,7 @@ export type AdminGeneralSettingsDto = {
 };
 export type AdminAccountSettingsDto = {
     id?: string | null;
+    label?: string | null;
     immichServerUrl?: string | null;
     apiKey?: string | null;
     hasApiKey?: boolean;

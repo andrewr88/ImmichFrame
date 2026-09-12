@@ -249,6 +249,23 @@ public class AdminAccountSettingsDto
     /// </summary>
     public string? Id { get; set; }
 
+    /// <summary>
+    /// <see cref="ServerAccountSettings.Label"/>: what this account is called, and the only thing in
+    /// the file that says two entries mean the same account. Unlike <see cref="Id"/> it survives a
+    /// reload, because it is stored rather than derived.
+    /// <para>
+    /// Absent, empty and whitespace all mean "no label" and are reported as null. Labels must differ
+    /// within one entry's account list - two accounts sharing one would be shown as a single account
+    /// - but the same label in the default configuration and in a profile is exactly how those two
+    /// entries say they mean one account, so it is not checked across entries.
+    /// </para>
+    /// <para>
+    /// Not read from <see cref="IAccountSettings"/> by the constructor: it is not on that interface,
+    /// and is populated by the read from the concrete settings instead.
+    /// </para>
+    /// </summary>
+    public string? Label { get; set; }
+
     public string? ImmichServerUrl { get; set; }
 
     /// <summary>

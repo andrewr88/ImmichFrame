@@ -1036,6 +1036,10 @@
             "type": "string",
             "nullable": true
           },
+          "label": {
+            "type": "string",
+            "nullable": true
+          },
           "immichServerUrl": {
             "type": "string",
             "nullable": true

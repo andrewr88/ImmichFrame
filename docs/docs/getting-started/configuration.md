@@ -107,7 +107,16 @@ General:
 
 # multiple accounts permitted
 Accounts:
-  - # The URL of your Immich server e.g. `http://photos.yourdomain.com` / `http://192.168.0.100:2283`.
+  - # An optional name for this account. Nothing in the slideshow uses it; it is there so that you -
+    # and the configuration editor at `/admin` - can tell one account from another, which the server
+    # URL cannot do when two family members have separate logins on the same Immich server.
+    # Give each account in the same list its own label: two sharing one would look like a single
+    # account at `/admin`, which refuses to save such a list - though ImmichFrame itself still starts
+    # if you hand-write one. Leading and trailing spaces and letter case are ignored when comparing
+    # labels. The same label in `Accounts` and in a profile's `Accounts` is fine, and is how you say
+    # both mean the same account.
+    Label: null  # string, no default
+    # The URL of your Immich server e.g. `http://photos.yourdomain.com` / `http://192.168.0.100:2283`.
     ImmichServerUrl: 'REQUIRED'  # string, required, no default
     # Read more about how to obtain an Immich API key: https://immich.app/docs/features/command-line-interface#obtain-the-api-key
     # Exactly one of ApiKey or ApiKeyFile must be set.
