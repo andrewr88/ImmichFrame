@@ -475,3 +475,11 @@ ImmichFrame.WebApi/Config/Settings.yaml.*.bak
 audit/audit.db
 audit/audit.db-wal
 audit/audit.db-shm
+
+# The settings database, wherever IMMICHFRAME_CONFIG_PATH points it. It holds the
+# configuration in the clear - Immich API keys, AuthenticationSecret, weather key -
+# so it must never be committable, and a dev run pointed at a directory inside the
+# repo would otherwise leave one staged by the next 'git add -A'.
+immichframe.db
+immichframe.db-wal
+immichframe.db-shm
