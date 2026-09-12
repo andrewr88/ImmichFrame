@@ -60,6 +60,16 @@
 	});
 
 	let list = $state<PickerList | null>(alreadyRead?.list ?? null);
+	/**
+	 * Where the quiet read that names what is already configured has got to.
+	 * <p>
+	 * Rows need all three: a raw identifier is the honest thing to draw once there is nothing better
+	 * coming, and the wrong thing to draw while an answer is on its way - a page of GUIDs that turn
+	 * into names a moment later reads as broken. 'idle' covers the cases prime() returns from without
+	 * asking anything, which is why it is the state a picker with nothing configured sits in.
+	 * </p>
+	 */
+	let priming = $state<'idle' | 'loading' | 'failed'>('idle');
 	/** What the list in hand was read with, so it can be dropped when that stops being true. */
 	let listSource = $state<string | null>(alreadyRead?.source ?? null);
 	/** The credentials this picker has already seen, so a change to them can be noticed. */
@@ -127,21 +137,44 @@
 	 * panel - and the page reads exactly as it does today with Immich unreachable.
 	 */
 	async function prime() {
-		// Nothing to put a name to, or nowhere to ask: neither is worth a request.
+		// Nothing to put a name to, or nowhere to ask: neither is worth a request. Left 'idle' rather
+		// than 'failed' - no read was attempted, so there is nothing to report having gone wrong.
 		if (values.length === 0 || source.kind === 'blocked') return;
+
+		// A list already in hand from another picker on these credentials needs no second read, and
+		// no placeholder either: its rows are named on this very frame.
+		if (list) return;
+
+		priming = 'loading';
 
 		const current = key;
 		const started = request;
 		const result = await pickerList(kind, source);
 
 		// A read the administrator asked for supersedes this one whichever answers first: it went out
-		// later, and it is the one the panel is waiting on.
-		if (started !== request) return;
+		// later, and it is the one the panel is waiting on. Its own spinner is showing, so this one
+		// stops claiming to be loading and says nothing else.
+		if (started !== request) {
+			priming = 'idle';
+			return;
+		}
 
 		// Same rule as `load()`: an answer about the server that was named when the request went out
 		// says nothing about the one named now.
-		if (current !== sourceKey(source) || !result.ok) return;
+		if (current !== sourceKey(source)) {
+			priming = 'idle';
+			return;
+		}
 
+		if (!result.ok) {
+			// Still quiet - no message, no text box, no panel - but no longer invisible. A row that
+			// went on showing a bare identifier with nothing to say why was indistinguishable from one
+			// whose names were simply slow, which is what made a failing read here so hard to notice.
+			priming = 'failed';
+			return;
+		}
+
+		priming = 'idle';
 		list = result.list;
 		listSource = current;
 	}
@@ -151,6 +184,10 @@
 		listSource = null;
 		message = '';
 		query = '';
+
+		// The mark belongs to the credentials that produced it. Kept across a change it would report
+		// the old server's failure against the new one's rows.
+		priming = 'idle';
 	}
 
 	function matchesQuery(item: PickerItem, needle: string): boolean {
@@ -169,6 +206,11 @@
 
 		loading = true;
 		message = '';
+
+		// This read supersedes the quiet one, spinner and all: a skeleton left behind would claim a
+		// second answer is still coming, and a 'names unavailable' mark left behind would report the
+		// previous failure over the top of the read now in flight.
+		priming = 'idle';
 
 		// Dropped rather than read through: this is the administrator asking Immich again, and what
 		// the cache is for is sparing the *first* read of a list several pickers share, not
@@ -247,13 +289,31 @@
 							<img class="h-8 w-8 shrink-0 rounded object-cover" src={face} alt="" loading="lazy" />
 						{/if}
 					{/if}
-					<span class="truncate text-sm text-neutral-200">{item?.label ?? value}</span>
+					{#if !item && priming === 'loading'}
+						<!-- The name is on its way, so draw the shape of one rather than the identifier it
+						     is about to replace. A person id in particular says nothing to a human, and a
+						     row of them that turns into names a moment later reads as a page that loaded
+						     wrong. -->
+						<span
+							class="h-4 w-32 animate-pulse rounded bg-neutral-800"
+							aria-label="Loading {noun.one} name"
+						></span>
+					{:else}
+						<span class="truncate text-sm text-neutral-200">{item?.label ?? value}</span>
+					{/if}
 					{#if item?.detail}
 						<span class="truncate text-xs text-neutral-500">{item.detail}</span>
 					{/if}
 					{#if list && !item}
 						<span class="shrink-0 rounded bg-amber-950 px-1 text-xs text-amber-300">
 							{partial ? 'not in the part read' : 'unmatched'}
+						</span>
+					{:else if !item && priming === 'failed'}
+						<!-- Deliberately not 'unmatched': that is a claim about this entry not being on the
+						     account, and a read that failed supports no claim about it at all. All that is
+						     known here is that the names could not be fetched. -->
+						<span class="shrink-0 rounded bg-neutral-800 px-1 text-xs text-neutral-400">
+							names unavailable
 						</span>
 					{/if}
 					<button
