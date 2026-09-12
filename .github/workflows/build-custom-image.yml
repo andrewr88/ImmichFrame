@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - custom  # Only this fork's working branch; upstream tags stay with build-docker.yml
-  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
@@ -17,9 +16,12 @@ permissions:
 
 jobs:
   publish_custom_image:
-    # workflow_dispatch can be started against any ref, and type=raw ignores the
-    # ref entirely, so a dispatch from main would repoint latest at a non-custom
-    # build. latest must only ever track custom: skip the job on any other ref.
+    # Unreachable today: on.push.branches already limits this workflow to custom,
+    # so this condition is always true and nothing currently depends on it. It
+    # stays as a standing constraint on latest, a moving tag this fork's
+    # deployments follow that type=raw applies regardless of ref: any trigger
+    # added later (a dispatch, a schedule, another branch) must not be able to
+    # repoint it at a build of something that is not custom.
     if: github.ref == 'refs/heads/custom'
     runs-on: ubuntu-latest
     steps:
