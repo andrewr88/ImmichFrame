@@ -1,3 +1,12 @@
 .env
 Settings.json
 Settings.yml
+Settings.yaml
+
+# Backups AdminConfigService writes beside the live settings file on every save through
+# /admin, named "<settings file>.<UTC timestamp>.bak". They are full copies, so they carry
+# the same Immich ApiKey and AuthenticationSecret material as the files above. Not
+# redundant with those lines: they match exact names and never the timestamped copies.
+Settings.json.*.bak
+Settings.yml.*.bak
+Settings.yaml.*.bak
