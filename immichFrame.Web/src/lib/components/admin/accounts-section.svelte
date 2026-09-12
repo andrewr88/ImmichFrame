@@ -2,6 +2,7 @@
 	import {
 		ACCOUNTS_KEY,
 		accountName,
+		entriesUsingAccount,
 		entryLabel,
 		namedEntry,
 		newAccount,
@@ -34,25 +35,9 @@
 	const button =
 		'rounded border border-neutral-600 px-2 py-0.5 text-xs text-neutral-200 hover:border-neutral-400';
 
-	/**
-	 * Which configurations show photos from this account, and would therefore be changed by an edit
-	 * to it or lose it with it.
-	 *
-	 * A profile that declares no account list is counted when the default configuration uses the
-	 * account, because that is what it is showing: inheriting is not "not using it", it is using the
-	 * default configuration's list. Counting only declared lists is what made removal report "no
-	 * configuration profile uses it" while every inheriting profile lost its photos - the silent
-	 * change this dialog exists to surface.
-	 *
-	 * A profile that declares its own list is counted on its own selections, and only the ticked
-	 * ones: an unticked selection is held for the tick being turned back on and is written nowhere.
-	 */
+	/** {@link entriesUsingAccount} against this section's configuration. */
 	function usedBy(account: EditableAccount): EditableEntry[] {
-		return entries.filter((entry) => {
-			const source = entry.declared.includes(ACCOUNTS_KEY) ? entry : config.default;
-
-			return usedSelections(source).some((selection) => selection.accountKey === account.key);
-		});
+		return entriesUsingAccount(config, account);
 	}
 
 	/**

@@ -650,6 +650,30 @@ export function setAccountUse(
 	entry.accounts = [...entry.accounts, newSelection(account.key, was?.values)];
 }
 
+/**
+ * Which configurations show photos from this account, and would therefore be changed by an edit to
+ * it or lose it with it.
+ *
+ * A profile that declares no account list is counted when the default configuration uses the
+ * account, because that is what it is showing: inheriting is not "not using it", it is using the
+ * default configuration's list. Counting only declared lists is what made removal report "no
+ * configuration profile uses it" while every inheriting profile lost its photos - the silent change
+ * the removal dialog exists to surface.
+ *
+ * A profile that declares its own list is counted on its own selections, and only the ticked ones:
+ * an unticked selection is held for the tick being turned back on and is written nowhere.
+ */
+export function entriesUsingAccount(
+	config: EditableConfig,
+	account: EditableAccount
+): EditableEntry[] {
+	return [config.default, ...config.profiles].filter((entry) => {
+		const source = entry.declared.includes(ACCOUNTS_KEY) ? entry : config.default;
+
+		return usedSelections(source).some((selection) => selection.accountKey === account.key);
+	});
+}
+
 export function usesApiKeyFile(account: EditableAccount): boolean {
 	return !!account.apiKeyFile.trim();
 }
