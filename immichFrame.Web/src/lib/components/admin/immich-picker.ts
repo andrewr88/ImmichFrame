@@ -1,5 +1,11 @@
 import * as api from '$lib/immichFrameApi';
-import { problemDetail, statusOf, usesApiKeyFile, type EditableAccount } from './admin-config';
+import {
+	problemDetail,
+	savedAccountHandle,
+	statusOf,
+	usesApiKeyFile,
+	type EditableAccount
+} from './admin-config';
 
 /** Which of the three list endpoints a picker reads. */
 export type PickerKind = 'albums' | 'people' | 'tags';
@@ -63,8 +69,11 @@ const KEY_FROM_FILE =
  * pasted out of a browser address bar always carries that slash; scheme and host are
  * case-insensitive by definition. The path is left exactly as typed, because a reverse proxy in
  * front of Immich is free to distinguish /immich from /Immich.
+ *
+ * Exported because account identity turns on the same question: whether two entries naming a server
+ * two ways name one server. A second normaliser would be a second answer to it.
  */
-function normalizedServerUrl(value: string | null | undefined): string {
+export function normalizedServerUrl(value: string | null | undefined): string {
 	const trimmed = (value ?? '').trim().replace(/\/+$/, '');
 
 	try {
@@ -87,7 +96,9 @@ function normalizedServerUrl(value: string | null | undefined): string {
  * - A key typed into the form is the account being described, whatever is stored. Inline.
  * - No typed key and a handle from the load: the stored account. Saved - and the handle resolves
  *   against the configuration *on disk*, which is why the version is the loaded one even when there
- *   are unsaved edits.
+ *   are unsaved edits, and why the handle is named with the entry it was issued for rather than with
+ *   whichever configuration is being edited. An account is the same account in every entry that uses
+ *   it, so they all browse it through the one handle - and read one list between them.
  * - No typed key and no handle - a new account, or one whose key is read from a file that has not
  *   been saved yet. There is nothing to browse with.
  *
@@ -95,12 +106,8 @@ function normalizedServerUrl(value: string | null | undefined): string {
  * that URL is edited the saved handle would list the *old* server's albums under the new address.
  * Refused rather than answered.
  */
-export function pickerSource(
-	account: EditableAccount,
-	profile: string,
-	version: string
-): PickerSource {
-	const serverUrl = account.values.immichServerUrl?.trim() ?? '';
+export function pickerSource(account: EditableAccount, version: string): PickerSource {
+	const serverUrl = account.serverUrl.trim();
 	// An account naming an ApiKeyFile has no key in the form - the server reads it from that path -
 	// so whatever is left in the input behind it is not this account's credential.
 	const typedKey = usesApiKeyFile(account) ? '' : account.apiKey.trim();
@@ -113,12 +120,14 @@ export function pickerSource(
 		return { kind: 'inline', serverUrl, apiKey: typedKey };
 	}
 
-	if (account.id) {
+	const handle = savedAccountHandle(account);
+
+	if (handle) {
 		if (normalizedServerUrl(serverUrl) !== normalizedServerUrl(account.savedServerUrl)) {
 			return { kind: 'blocked', reason: URL_CHANGED };
 		}
 
-		return { kind: 'saved', profile, accountId: account.id, version };
+		return { kind: 'saved', profile: handle.entry, accountId: handle.id, version };
 	}
 
 	return {

@@ -2,10 +2,16 @@
 	import type { AdminGeneralSettingsDto } from '$lib/immichFrameApi';
 	import {
 		ACCOUNTS_KEY,
+		accountName,
 		declaredKeyOf,
+		entryLabel,
 		generalFields,
 		generalSections,
-		newAccount,
+		newSelection,
+		setAccountUse,
+		usedSelections,
+		type AccountSelection,
+		type EditableAccount,
 		type EditableEntry,
 		type FieldValue,
 		type GeneralProp,
@@ -18,22 +24,30 @@
 
 	interface Props {
 		entry: EditableEntry;
+		/**
+		 * Every Immich account in the configuration. This section assigns them rather than describing
+		 * them: the credentials belong to the account, and are edited once, above the tabs.
+		 */
+		accounts: EditableAccount[];
 		/** The configuration this one inherits from, or null for the default configuration itself. */
 		inheritFrom: EditableEntry | null;
 		/** The loaded configuration's version token, which the Immich pickers ask against. */
 		version: string;
 	}
 
-	let { entry, inheritFrom, version }: Props = $props();
+	let { entry, accounts, inheritFrom, version }: Props = $props();
 
 	// The default configuration has nothing above it, so its unset keys fall back to the setting's
 	// built-in default rather than to another configuration.
 	let inheritLabel = $derived(inheritFrom ? 'Inherited' : 'Built-in default');
 	let accountsDeclared = $derived(entry.declared.includes(ACCOUNTS_KEY));
-	let inheritedAccounts = $derived(inheritFrom?.accounts ?? []);
-
-	const button =
-		'rounded border border-neutral-600 px-2 py-1 text-xs text-neutral-200 hover:border-neutral-400';
+	let inherited = $derived(inheritFrom ? usedSelections(inheritFrom) : []);
+	/** The accounts this profile is inheriting, in the order the section above lists them. */
+	let inheritedAccounts = $derived(
+		accounts
+			.map((account, index) => ({ account, index }))
+			.filter((row) => inherited.some((selection) => selection.accountKey === row.account.key))
+	);
 
 	function declares(prop: GeneralProp): boolean {
 		return entry.declared.includes(declaredKeyOf(prop));
@@ -75,14 +89,27 @@
 			return;
 		}
 
-		// A declared account list replaces the inherited one outright, and the API keys behind it
-		// were never sent to the browser, so each account has to be given one here rather than
-		// letting the save be refused for it.
-		if (!entry.accountsWereDeclared) {
-			entry.accounts = inheritedAccounts.map((account) => newAccount(account.values));
+		// A declared account list replaces the inherited one outright, so the profile starts from what
+		// it was inheriting: the same accounts, ticked, showing the same photos. Each keeps the handle
+		// the read issued for it under the default configuration, so their stored API keys come across
+		// on save without the administrator retyping a key they were already using.
+		//
+		// Only when this profile has nothing of its own, which is the first time the override is
+		// turned on and no other. Seeding again would overwrite whatever it had been given since -
+		// including selections it is holding unticked - with the default configuration's, and turning
+		// an override off and on again is not a request to discard the override's contents.
+		if (!entry.accountsWereDeclared && entry.accounts.length === 0) {
+			entry.accounts = inherited.map((selection) =>
+				newSelection(selection.accountKey, selection.values)
+			);
 		}
 
 		entry.declared = [...entry.declared, ACCOUNTS_KEY];
+	}
+
+	/** This entry's selection for an account, ticked or not: an unticked one is kept, not dropped. */
+	function selectionFor(account: EditableAccount): AccountSelection | undefined {
+		return entry.accounts.find((selection) => selection.accountKey === account.key);
 	}
 
 	function setGeneral(prop: GeneralProp, value: FieldValue) {
@@ -150,7 +177,7 @@
 		<h3 class="text-sm font-semibold uppercase tracking-wide text-neutral-400">Immich accounts</h3>
 		{#if entry.isDefault}
 			<span class="text-xs text-neutral-500">
-				The default configuration always declares its own accounts.
+				The default configuration always uses at least one of the accounts above.
 			</span>
 		{:else}
 			<label class="flex items-center gap-2 text-xs text-neutral-400">
@@ -168,41 +195,62 @@
 	{#if accountsDeclared}
 		{#if !entry.isDefault && !entry.accountsWereDeclared}
 			<p class="mb-2 rounded border border-amber-600 bg-amber-950/40 p-2 text-xs text-amber-300">
-				This profile now declares its own accounts instead of inheriting them, so it cannot keep API
-				keys it never had of its own. Enter the key for each account below before saving.
+				This profile now declares its own accounts instead of inheriting them. The accounts ticked
+				below keep the API keys already stored for them, but changes to which accounts the default
+				configuration uses no longer reach this profile.
+			</p>
+		{/if}
+
+		{#if accounts.length === 0}
+			<p class="text-xs text-neutral-500">
+				There are no Immich accounts to choose from. Add one in the Immich accounts section above.
 			</p>
 		{/if}
 
 		<div class="space-y-3">
-			<!-- Keyed by the account object rather than its index: position is deliberately not an
-			     identity anywhere in this feature, and reusing a DOM node across a delete would put
-			     one account's half-typed API key on another. -->
-			{#each entry.accounts as account, index (account)}
-				<AccountEditor
-					{account}
-					{index}
-					profile={entry.name}
-					{version}
-					onRemove={() => (entry.accounts = entry.accounts.filter((_, other) => other !== index))}
-				/>
+			<!-- Keyed by the account's own key rather than its position: position is deliberately not an
+			     identity anywhere in this feature, and reusing a DOM node across a removal would put one
+			     account's photo selection under another. -->
+			{#each accounts as account, index (account.key)}
+				{@const selection = selectionFor(account)}
+				<div class="rounded border border-neutral-700 p-3">
+					<label class="flex items-center gap-2">
+						<input
+							type="checkbox"
+							class="h-4 w-4 shrink-0 accent-sky-500"
+							checked={selection?.uses === true}
+							onchange={(event) =>
+								setAccountUse(entry, account, event.currentTarget.checked, inheritFrom)}
+						/>
+						<span class="truncate text-sm text-neutral-200">{accountName(account, index)}</span>
+						{#if account.label.trim() && account.serverUrl.trim()}
+							<span class="truncate text-xs text-neutral-500">{account.serverUrl.trim()}</span>
+						{/if}
+					</label>
+
+					{#if selection?.uses}
+						<div class="mt-3">
+							<AccountEditor
+								id="{entry.name}-{account.key}"
+								{account}
+								{selection}
+								{version}
+								title="What {entryLabel(entry)} shows from this account"
+							/>
+						</div>
+					{/if}
+				</div>
 			{/each}
 		</div>
-
-		<button
-			type="button"
-			class="{button} mt-3"
-			onclick={() => (entry.accounts = [...entry.accounts, newAccount()])}
-		>
-			Add account
-		</button>
 	{:else}
 		<p class="mb-2 text-xs text-neutral-500">
-			Inherited from the default configuration. Override to give this profile its own accounts.
+			Inherited from the default configuration. Override to choose which accounts this profile shows
+			and what it shows from each.
 		</p>
 		<ul class="space-y-1 text-sm text-neutral-300">
-			{#each inheritedAccounts as account (account)}
+			{#each inheritedAccounts as row (row.account.key)}
 				<li class="rounded border border-neutral-800 px-2 py-1">
-					{account.values.immichServerUrl || '(no server URL)'}
+					{accountName(row.account, row.index)}
 				</li>
 			{/each}
 		</ul>
