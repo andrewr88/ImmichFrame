@@ -123,7 +123,8 @@ public sealed class AdminConfigService(
                     "which is not reversible from here, so confirm the conversion before saving.");
             }
 
-            var rewritten = Render(source.Format, BuildDocument(request, StoredSecrets(source, current)));
+            var stored = StoredSecrets(source, current, request.Version);
+            var rewritten = Render(source.Format, BuildDocument(request, stored));
 
             // Bind and validate before the file is touched. Validation is local - it reads ApiKeyFile
             // from disk and checks that each account has a key - so a broken configuration is refused
@@ -175,26 +176,74 @@ public sealed class AdminConfigService(
     }
 
     /// <summary>
-    /// Where a secret the browser was never given is read back from, per configuration being
-    /// written.
+    /// One stored account, remembered along with the name of the configuration that declared it.
     /// <para>
-    /// Normally that is the file itself, and deliberately only the part of it the configuration in
-    /// question <em>declares</em>: falling back to the merged value would write a secret a profile
-    /// inherits into that profile as an override of its own.
+    /// The owner is kept because a handle answers two questions with different scopes. <em>Which
+    /// stored API key is this?</em> any entry in the document may answer, which is what lets a
+    /// profile be given an account it never declared without the key being retyped. <em>What did
+    /// this entry already spell out?</em> only the entry's own stored account may answer - an
+    /// adopted account is new here, and answering that one across entries would make the adopting
+    /// profile write out every setting the entry it came from spelled out, sparse no longer.
+    /// </para>
+    /// </summary>
+    private readonly record struct StoredAccount(string Owner, JsonObject Account);
+
+    /// <summary>
+    /// The configuration as it stands on disk, in the two shapes a save reads secrets back out of.
+    /// </summary>
+    /// <param name="DeclaredByName">
+    /// What each configuration <em>declares</em> itself, under the name a handle spells it with -
+    /// <see cref="ConfigCatalog.DefaultProfileName"/> for the default configuration. A profile the
+    /// request is creating is simply absent.
+    /// </param>
+    /// <param name="AccountsById">
+    /// Every stored account in the document, the default configuration's and every profile's, under
+    /// the handle the read issued for it. Built once per save and shared by every entry: the handle
+    /// names the account it was read from, not the entry being written.
+    /// </param>
+    private sealed record StoredConfiguration(
+        IReadOnlyDictionary<string, JsonObject> DeclaredByName,
+        IReadOnlyDictionary<string, StoredAccount> AccountsById)
+    {
+        /// <summary>
+        /// What one configuration declares - the default one for a null <paramref name="profileName"/>,
+        /// otherwise that profile - or null where it declares nothing yet.
+        /// </summary>
+        public JsonObject? Declared(string? profileName) =>
+            DeclaredByName.GetValueOrDefault(profileName ?? ConfigCatalog.DefaultProfileName);
+    }
+
+    /// <summary>
+    /// Where a secret the browser was never given is read back from.
+    /// <para>
+    /// For everything but an account's API key that is the file itself, and deliberately only the
+    /// part of it the configuration in question <em>declares</em>: falling back to the merged value
+    /// would write a secret a profile inherits into that profile as an override of its own.
+    /// </para>
+    /// <para>
+    /// API keys are gathered from every entry at once instead, because an account handle names the
+    /// entry and position it was read from - so resolving one against the whole document still
+    /// cannot land on an account the editor did not point at, and an administrator can hand a
+    /// profile an account the default configuration declares without retyping its credentials.
+    /// Entries the request is about to delete or rename are in there too: an account of theirs may
+    /// be the one moving elsewhere in this very save.
     /// </para>
     /// <para>
     /// A v1 file has no declared-versus-inherited distinction to preserve - it is one flat
-    /// configuration with no profiles - so its secrets come from the running settings instead.
-    /// Without that, converting a file to the current schema would blank the API key it is being
-    /// converted around.
+    /// configuration with no profiles - so its secrets come from the running settings instead, and
+    /// its accounts are the default configuration's alone. Without that, converting a file to the
+    /// current schema would blank the API key it is being converted around.
     /// </para>
     /// </summary>
-    private Func<string?, JsonObject?> StoredSecrets(ConfigSource source, string current)
+    private StoredConfiguration StoredSecrets(ConfigSource source, string current, string version)
     {
+        var declaredByName = new Dictionary<string, JsonObject>(StringComparer.OrdinalIgnoreCase);
+
         if (source.LegacySchema)
         {
             var settings = _catalog.Default;
-            var secrets = new JsonObject
+
+            declaredByName[ConfigCatalog.DefaultProfileName] = new JsonObject
             {
                 [GeneralKey] = new JsonObject
                 {
@@ -210,23 +259,66 @@ public sealed class AdminConfigService(
                     .ToArray())
             };
 
-            return profileName => profileName is null ? secrets : null;
+            return new StoredConfiguration(declaredByName, AccountsById(version, declaredByName));
         }
 
         var document = ConfigLoader.CreateDocument(source.Format, current);
 
-        return profileName =>
+        declaredByName[ConfigCatalog.DefaultProfileName] = document.DeclaredOverrides(null);
+
+        foreach (var name in document.ProfileNames)
         {
-            try
+            // One name, one entry: a handle's key lookup and an entry's own declared subtree are
+            // both resolved out of this dictionary by entry name, so a second entry answering to a
+            // name already in it would quietly source the first one's secrets - the default
+            // configuration's three general secrets and its accounts' stored keys among them - from
+            // somewhere else in the file. No file that reaches this branch can do that today: the
+            // loader refuses both collisions, and one that trips either is read as v1 instead. The
+            // refusal is repeated here because that guarantee lives two files away, and nothing on
+            // this side would notice it being relaxed.
+            if (!declaredByName.TryAdd(name, document.DeclaredOverrides(name)))
             {
-                return document.DeclaredOverrides(profileName);
+                throw new SettingsNotValidException(
+                    ConfigCatalog.DefaultProfileName.Equals(name, StringComparison.OrdinalIgnoreCase)
+                        ? $"'{name}' is a reserved name and cannot be used for a configuration profile. " +
+                          "It is how the default configuration itself is spelled, and a profile of that name would shadow it."
+                        : $"There is more than one configuration profile named '{name}'. Profile names are case-insensitive.");
             }
-            catch (ProfileNotFoundException)
+        }
+
+        return new StoredConfiguration(declaredByName, AccountsById(version, declaredByName));
+    }
+
+    /// <summary>
+    /// Indexes every stored account in the document by the handle the read issued for it.
+    /// <para>
+    /// Keyed exactly as <see cref="Entry"/> keys it, entry name included, so a handle the editor
+    /// echoes back lands on the account it was read from and on no other. Two entries therefore
+    /// cannot collide, and nothing here is reached by guessing - an entry the handle does not name
+    /// is not a candidate for it.
+    /// </para>
+    /// </summary>
+    private static Dictionary<string, StoredAccount> AccountsById(
+        string version, IReadOnlyDictionary<string, JsonObject> declaredByName)
+    {
+        var byId = new Dictionary<string, StoredAccount>(StringComparer.Ordinal);
+
+        foreach (var (name, declared) in declaredByName)
+        {
+            // An entry declaring no account list of its own contributes none: the accounts it shows
+            // are another entry's, and they are already indexed under that entry's handles.
+            if (declared[AccountsKey] is not JsonArray stored) continue;
+
+            for (var index = 0; index < stored.Count; index++)
             {
-                // A profile the request is creating declares nothing yet.
-                return null;
+                if (stored[index] is JsonObject account)
+                {
+                    byId[AccountId(version, name, index)] = new StoredAccount(name, account);
+                }
             }
-        };
+        }
+
+        return byId;
     }
 
     private AdminConfigDto ReadCurrent()
@@ -368,9 +460,9 @@ public sealed class AdminConfigService(
     }
 
     private static Dictionary<string, object?> BuildDocument(
-        AdminConfigUpdateDto request, Func<string?, JsonObject?> stored)
+        AdminConfigUpdateDto request, StoredConfiguration stored)
     {
-        var root = BuildEntry(request.Default, stored(null), request.Version, null);
+        var root = BuildEntry(request.Default, stored.Declared(null), stored.AccountsById, null);
 
         // The default configuration is the one thing with nothing above it to inherit from, so an
         // absent or empty account list here is not a sparse override - it is an ImmichFrame that
@@ -400,7 +492,7 @@ public sealed class AdminConfigService(
                     $"There is more than one configuration profile named '{name}'. Profile names are case-insensitive.");
             }
 
-            profiles[name] = BuildEntry(profile, stored(name), request.Version, name);
+            profiles[name] = BuildEntry(profile, stored.Declared(name), stored.AccountsById, name);
         }
 
         if (profiles.Count > 0)
@@ -416,10 +508,10 @@ public sealed class AdminConfigService(
     /// request names, and nothing else. This is where a profile stays sparse.
     /// </summary>
     private static Dictionary<string, object?> BuildEntry(
-        AdminConfigEntryDto entry, JsonObject? declared, string version, string? profileName)
+        AdminConfigEntryDto entry, JsonObject? declared,
+        IReadOnlyDictionary<string, StoredAccount> storedById, string? profileName)
     {
         var storedGeneral = declared?[GeneralKey] as JsonObject;
-        var storedAccounts = declared?[AccountsKey] as JsonArray;
 
         Dictionary<string, object?>? general = null;
         List<Dictionary<string, object?>>? accounts = null;
@@ -460,7 +552,7 @@ public sealed class AdminConfigService(
             }
             else if (string.Equals(key, AccountsKey, StringComparison.OrdinalIgnoreCase))
             {
-                accounts = Accounts(entry.Accounts, storedAccounts, version, profileName);
+                accounts = Accounts(entry.Accounts, storedById, profileName);
             }
             else
             {
@@ -492,6 +584,13 @@ public sealed class AdminConfigService(
     /// Builds the account list a configuration declares, putting each masked API key back on the
     /// account it was read from - or refusing the save when it cannot say which account that is.
     /// <para>
+    /// A handle resolves against every entry in the document, not just this one, so an administrator
+    /// can give a profile an account the default configuration - or another profile - declares
+    /// without retyping its credentials. Two entries naming the same stored account is not an
+    /// ambiguity: each writes its own copy of that key into its own list, which is the point. Two
+    /// accounts <em>within one list</em> naming it still is, and is still refused.
+    /// </para>
+    /// <para>
     /// There is deliberately no positional fallback. Deleting the first of two accounts shifts every
     /// account after it, so matching by position would write the deleted account's key under the
     /// surviving account's server URL and start sending one Immich server another server's
@@ -500,17 +599,11 @@ public sealed class AdminConfigService(
     /// </para>
     /// </summary>
     private static List<Dictionary<string, object?>> Accounts(
-        IReadOnlyList<AdminAccountSettingsDto>? accounts, JsonArray? stored, string version, string? profileName)
+        IReadOnlyList<AdminAccountSettingsDto>? accounts,
+        IReadOnlyDictionary<string, StoredAccount> storedById,
+        string? profileName)
     {
-        var storedById = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
-        for (var index = 0; index < (stored?.Count ?? 0); index++)
-        {
-            if (stored![index] is JsonObject account)
-            {
-                storedById[AccountId(version, profileName ?? ConfigCatalog.DefaultProfileName, index)] = account;
-            }
-        }
-
+        var entryName = profileName ?? ConfigCatalog.DefaultProfileName;
         var where = profileName is null ? "the default configuration" : $"configuration profile '{profileName}'";
         var claimed = new HashSet<string>(StringComparer.Ordinal);
         var defaults = new ServerAccountSettings();
@@ -519,14 +612,33 @@ public sealed class AdminConfigService(
         foreach (var account in accounts ?? [])
         {
             var ambiguous = false;
+
+            // Two questions, deliberately two variables: which stored key this account is, and what
+            // this entry had already spelled out about it. Only the first may be answered from
+            // another entry's account.
+            JsonObject? stored = null;
             JsonObject? declared = null;
 
             if (!string.IsNullOrEmpty(account.Id) && storedById.TryGetValue(account.Id, out var match))
             {
-                // One handle, one account: two entries claiming the same stored account is exactly the
-                // ambiguity that must not be resolved by guessing.
-                if (claimed.Add(account.Id)) declared = match;
-                else ambiguous = true;
+                // One handle, one account in this list: a second account naming it is the ambiguity
+                // that must not be resolved by guessing.
+                if (claimed.Add(account.Id))
+                {
+                    stored = match.Account;
+
+                    // Matched by name rather than by reference: the request may spell this entry's
+                    // name with different casing than the file does, which is exactly the difference
+                    // AccountId already folds away.
+                    if (string.Equals(match.Owner, entryName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        declared = match.Account;
+                    }
+                }
+                else
+                {
+                    ambiguous = true;
+                }
             }
 
             var apiKey = account.ApiKey;
@@ -543,24 +655,23 @@ public sealed class AdminConfigService(
                     // would find its configuration unsaveable.
                     apiKey = null;
                 }
+                else if (ambiguous)
+                {
+                    throw new SettingsNotValidException(
+                        $"Two accounts in {where} name the same stored account, so ImmichFrame cannot tell " +
+                        $"which of them keeps its API key. Enter the API key for '{Label(account)}' and save again.");
+                }
                 else if (stored is null)
                 {
                     throw new SettingsNotValidException(
-                        $"Saving this makes {where} declare its own account list instead of inheriting one, so " +
-                        $"it cannot keep an API key it never had of its own. Enter the API key for " +
-                        $"'{Label(account)}' and save again.");
-                }
-                else if (declared is null)
-                {
-                    throw new SettingsNotValidException(
-                        $"The API key for '{Label(account)}' in {where} could not be matched to a stored account" +
-                        (ambiguous ? ", because another account in this save already claimed the same one" : "") +
-                        ". Enter that account's API key again and save; ImmichFrame will not guess which stored " +
-                        "key belongs to it.");
+                        $"The API key for '{Label(account)}' in {where} could not be matched to an account " +
+                        "stored anywhere in the settings file, so there is no key to keep: either the account " +
+                        "is new, or the stored account it came from is gone. Enter its API key and save again; " +
+                        "ImmichFrame will not guess which stored key belongs to it.");
                 }
                 else
                 {
-                    apiKey = declared[nameof(ServerAccountSettings.ApiKey)]?.GetValue<string>();
+                    apiKey = stored[nameof(ServerAccountSettings.ApiKey)]?.GetValue<string>();
                 }
             }
 
