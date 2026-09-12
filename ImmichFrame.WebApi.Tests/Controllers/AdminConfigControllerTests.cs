@@ -96,6 +96,47 @@ public class AdminConfigControllerTests
         }
         """;
 
+    /// <summary>
+    /// An account on the default configuration, a profile that declares none of its own, and a
+    /// profile that does - so a handle can be resolved in either direction.
+    /// <para>
+    /// Both stored accounts spell out a setting whose value is also its built-in default
+    /// (<c>ShowFavorites</c>, <c>ShowArchived</c>). Those are the only settings that make "this entry
+    /// declared it" visible in the written file, and so the only ones that can show a profile
+    /// adopting an account being de-sparsified by the entry it adopted from.
+    /// </para>
+    /// </summary>
+    private const string SharedAccountsJson = """
+        {
+          "General": {
+            "Interval": 45
+          },
+          "Accounts": [
+            {
+              "ImmichServerUrl": "http://server-x.example.com",
+              "ApiKey": "key-x",
+              "ShowFavorites": false
+            }
+          ],
+          "Profiles": {
+            "kitchen": {
+              "General": {
+                "Interval": 10
+              }
+            },
+            "studio": {
+              "Accounts": [
+                {
+                  "ImmichServerUrl": "http://server-z.example.com",
+                  "ApiKey": "key-z",
+                  "ShowArchived": false
+                }
+              ]
+            }
+          }
+        }
+        """;
+
     private const string ApiKeyFileJson = """
         {
           "General": {
@@ -811,8 +852,9 @@ public class AdminConfigControllerTests
 
     /// <summary>
     /// When the handle cannot name exactly one stored account the save is refused outright. There is
-    /// no positional fallback to quietly land on, so both an absent handle and one two accounts claim
-    /// have to end the same way: ask for the key again.
+    /// no positional fallback to quietly land on, so both an absent handle and one two accounts in the
+    /// same list claim have to end the same way: ask for the key again. Two accounts in <em>different</em>
+    /// lists claiming one stored account is a different matter, and is allowed.
     /// </summary>
     [TestCase(false, TestName = "SaveConfig_MaskedKeyWithNoAccountHandle_IsRefused")]
     [TestCase(true, TestName = "SaveConfig_TwoAccountsClaimingOneStoredAccount_IsRefused")]
@@ -842,18 +884,23 @@ public class AdminConfigControllerTests
         {
             Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
             Assert.That(problem, Does.Contain("server-"), "the message has to name the account to retype");
+            Assert.That(problem,
+                ambiguous ? Does.Contain("name the same stored account") : Does.Contain("could not be matched"),
+                "and has to say which of the two it is - they are not fixed the same way");
             Assert.That(File.ReadAllText(SettingsPath("Settings.json")), Is.EqualTo(before));
         });
     }
 
     /// <summary>
-    /// A profile taking over the account list has no stored key of its own to keep. Failing closed is
-    /// right; the message has to say why, rather than leaving the administrator with the loader's
-    /// "Either ApiKey or ApiKeyFile must be provided."
+    /// A profile taking over the account list names no stored account: the read issues no handle for
+    /// an account a profile inherits, so there is nothing saying which stored key this one is.
+    /// Failing closed is right; the message has to say why, rather than leaving the administrator
+    /// with the loader's "Either ApiKey or ApiKeyFile must be provided."
     /// </summary>
     [Test]
-    public async Task SaveConfig_ProfileNewlyOverridingAccounts_SaysTheKeyMustBeRetyped()
+    public async Task SaveConfig_ProfileNewlyOverridingAccountsWithNoHandle_SaysTheKeyMustBeRetyped()
     {
+        // Arrange
         WriteSettings("Settings.json", SettingsJson);
         using var factory = CreateFactory();
         var client = factory.CreateClient();
@@ -861,24 +908,266 @@ public class AdminConfigControllerTests
         var config = await GetConfig(client);
         var kitchen = config.Profiles.Single(profile => profile.Name == "kitchen");
 
+        Assume.That(kitchen.Accounts[0].Id, Is.Null,
+            "an account a profile inherits is issued no handle, which is what makes this unresolvable");
+
         // The inherited account, now declared by the profile, with its key still masked.
         config = config with
         {
             Profiles = [kitchen with { DeclaredKeys = [.. kitchen.DeclaredKeys, "Accounts"] }]
         };
 
+        // Act
         var response = await Put(client, config);
         var problem = await response.Content.ReadAsStringAsync();
 
+        // Assert
         Assert.Multiple(() =>
         {
             Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
-            // The distinguishing sentence, not just "kitchen" and "API key" - the could-not-be-matched
-            // refusal next door contains both of those too, so a looser assertion would pass whichever
-            // branch ran.
-            Assert.That(problem, Does.Contain("declare its own account list instead of inheriting one"));
+            Assert.That(problem, Does.Contain("could not be matched"));
             Assert.That(problem, Does.Contain("kitchen"));
             Assert.That(problem, Does.Not.Contain("Either ApiKey or ApiKeyFile"));
+        });
+    }
+
+    /// <summary>
+    /// The point of the whole handle mechanism, and what a handle now buys that it did not: an
+    /// account the default configuration declares can be assigned to a profile, and the profile keeps
+    /// that account's API key without an administrator retyping a credential the browser was never
+    /// shown.
+    /// <para>
+    /// The adopted account also has to be written as sparsely as any other new one. The entry it came
+    /// from spelled <c>ShowFavorites</c> out; the profile did not, so writing it here would hand the
+    /// profile an override of a built-in default it never asked for - and cut it off from a later
+    /// change to that default, which is the drift the declared-key machinery exists to prevent.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task SaveConfig_ProfileAdoptingTheDefaultsAccount_KeepsItsStoredApiKeyAndStaysSparse()
+    {
+        // Arrange
+        WriteSettings("Settings.json", SharedAccountsJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var config = await GetConfig(client);
+        var kitchen = config.Profiles.Single(profile => profile.Name == "kitchen");
+        var studio = config.Profiles.Single(profile => profile.Name == "studio");
+
+        // What the editor sends once the default configuration's account is assigned to this profile:
+        // the handle that account was read under, and the key still masked.
+        kitchen.Accounts[0].Id = config.Default.Accounts[0].Id;
+        kitchen.Accounts[0].ApiKey = AdminSecret.Placeholder;
+
+        config = config with
+        {
+            Profiles = [kitchen with { DeclaredKeys = [.. kitchen.DeclaredKeys, "Accounts"] }, studio]
+        };
+
+        // Act
+        var response = await Put(client, config);
+        var body = await response.Content.ReadAsStringAsync();
+        var saved = JsonNode.Parse(File.ReadAllText(SettingsPath("Settings.json")));
+        var adopted = saved?["Profiles"]?["kitchen"]?["Accounts"]?[0];
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK), body);
+
+            Assert.That((string?)adopted?["ImmichServerUrl"], Is.EqualTo("http://server-x.example.com"));
+            Assert.That((string?)adopted?["ApiKey"], Is.EqualTo("key-x"),
+                "the profile keeps the key of the account it was given");
+
+            Assert.That(adopted?.AsObject().Select(pair => pair.Key),
+                Is.EquivalentTo(new[] { "ImmichServerUrl", "ApiKey" }),
+                "an adopted account is new to this profile, so only what differs from the built-in defaults is written");
+
+            // The entries it was resolved across are untouched, each still declaring its own.
+            Assert.That((string?)saved?["Accounts"]?[0]?["ApiKey"], Is.EqualTo("key-x"));
+            Assert.That(saved?["Accounts"]?[0]?.AsObject().Select(pair => pair.Key),
+                Does.Contain("ShowFavorites"),
+                "the entry that did spell a default-valued setting out still writes it");
+            Assert.That((string?)saved?["Profiles"]?["studio"]?["Accounts"]?[0]?["ApiKey"], Is.EqualTo("key-z"));
+            Assert.That(saved?["Profiles"]?["studio"]?["Accounts"]?[0]?.AsObject().Select(pair => pair.Key),
+                Does.Contain("ShowArchived"));
+
+            Assert.That(body, Does.Not.Contain("key-x"), "and the key itself never travels to the browser");
+        });
+    }
+
+    /// <summary>
+    /// The same in the other direction, between two profiles: neither the default configuration nor
+    /// the entry being saved is special, the handle simply names the account it was read from.
+    /// </summary>
+    [Test]
+    public async Task SaveConfig_ProfileAdoptingAnotherProfilesAccount_KeepsItsStoredApiKey()
+    {
+        // Arrange
+        WriteSettings("Settings.json", SharedAccountsJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var config = await GetConfig(client);
+        var kitchen = config.Profiles.Single(profile => profile.Name == "kitchen");
+        var studio = config.Profiles.Single(profile => profile.Name == "studio");
+
+        kitchen.Accounts[0].Id = studio.Accounts[0].Id;
+        kitchen.Accounts[0].ImmichServerUrl = studio.Accounts[0].ImmichServerUrl;
+        kitchen.Accounts[0].ApiKey = AdminSecret.Placeholder;
+
+        config = config with
+        {
+            Profiles = [kitchen with { DeclaredKeys = [.. kitchen.DeclaredKeys, "Accounts"] }, studio]
+        };
+
+        // Act
+        var response = await Put(client, config);
+        var body = await response.Content.ReadAsStringAsync();
+        var saved = JsonNode.Parse(File.ReadAllText(SettingsPath("Settings.json")));
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK), body);
+            Assert.That((string?)saved?["Profiles"]?["kitchen"]?["Accounts"]?[0]?["ImmichServerUrl"],
+                Is.EqualTo("http://server-z.example.com"));
+            Assert.That((string?)saved?["Profiles"]?["kitchen"]?["Accounts"]?[0]?["ApiKey"], Is.EqualTo("key-z"));
+
+            // And the profile it came from still has it too - adopting is copying, not moving.
+            Assert.That((string?)saved?["Profiles"]?["studio"]?["Accounts"]?[0]?["ApiKey"], Is.EqualTo("key-z"));
+            Assert.That(body, Does.Not.Contain("key-z"));
+        });
+    }
+
+    /// <summary>
+    /// Two entries naming one stored account in the same save is legitimate - each writes its own copy
+    /// of that key into its own list - and is the case that separates "this list already claimed it",
+    /// which is an ambiguity, from "another list claimed it", which is not.
+    /// </summary>
+    [Test]
+    public async Task SaveConfig_TwoProfilesAdoptingOneStoredAccount_BothKeepItsApiKey()
+    {
+        // Arrange
+        WriteSettings("Settings.json", SharedAccountsJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var config = await GetConfig(client);
+        var kitchen = config.Profiles.Single(profile => profile.Name == "kitchen");
+        var shared = config.Default.Accounts[0].Id;
+
+        kitchen.Accounts[0].Id = shared;
+        kitchen.Accounts[0].ApiKey = AdminSecret.Placeholder;
+
+        // A profile created in this very save, taking the same account.
+        var hallway = new AdminConfigEntryDto("hallway", ["Accounts"], new AdminGeneralSettingsDto(),
+        [
+            new AdminAccountSettingsDto
+            {
+                Id = shared,
+                ImmichServerUrl = "http://server-x.example.com",
+                ApiKey = AdminSecret.Placeholder
+            }
+        ]);
+
+        config = config with
+        {
+            Profiles =
+            [
+                kitchen with { DeclaredKeys = [.. kitchen.DeclaredKeys, "Accounts"] },
+                config.Profiles.Single(profile => profile.Name == "studio"),
+                hallway
+            ]
+        };
+
+        // Act
+        var response = await Put(client, config);
+        var body = await response.Content.ReadAsStringAsync();
+        var saved = JsonNode.Parse(File.ReadAllText(SettingsPath("Settings.json")));
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK), body);
+            Assert.That((string?)saved?["Profiles"]?["kitchen"]?["Accounts"]?[0]?["ApiKey"], Is.EqualTo("key-x"));
+            Assert.That((string?)saved?["Profiles"]?["hallway"]?["Accounts"]?[0]?["ApiKey"], Is.EqualTo("key-x"));
+            Assert.That((string?)saved?["Accounts"]?[0]?["ApiKey"], Is.EqualTo("key-x"));
+        });
+    }
+
+    /// <summary>
+    /// The counterpart to the widened lookup: it is wider, not looser. A handle no entry in the
+    /// document issued still matches nothing, and there is no stored key to fall back on.
+    /// </summary>
+    [Test]
+    public async Task SaveConfig_AccountHandleMatchingNothingInTheDocument_IsRefused()
+    {
+        // Arrange
+        WriteSettings("Settings.json", SharedAccountsJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var before = File.ReadAllText(SettingsPath("Settings.json"));
+        var config = await GetConfig(client);
+
+        // Well-formed and of the right shape, but issued by no read of this document.
+        config.Default.Accounts[0].Id = new string('a', 16);
+
+        // Act
+        var response = await Put(client, config);
+        var problem = await response.Content.ReadAsStringAsync();
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+            Assert.That(problem, Does.Contain("could not be matched"));
+            Assert.That(problem, Does.Contain("server-x"), "the message has to name the account to retype");
+            Assert.That(File.ReadAllText(SettingsPath("Settings.json")), Is.EqualTo(before));
+        });
+    }
+
+    /// <summary>
+    /// Saving a configuration nobody edited has to be a fixpoint, both in what is written and in what
+    /// each entry declares. It is also the only case that exercises a handle across a rolled version
+    /// token: the first save rewrites the file, so every handle the second read issues is computed
+    /// from a version that did not exist when the first one was.
+    /// </summary>
+    [Test]
+    public async Task SaveConfig_UneditedConfigurationSavedTwice_IsWrittenIdenticallyAndStaysSparse()
+    {
+        // Arrange
+        WriteSettings("Settings.json", SharedAccountsJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        // Act
+        var first = await Put(client, await GetConfig(client));
+        var afterFirst = File.ReadAllText(SettingsPath("Settings.json"));
+
+        var second = await Put(client, await GetConfig(client));
+        var afterSecond = File.ReadAllText(SettingsPath("Settings.json"));
+
+        var saved = JsonNode.Parse(afterSecond);
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(second.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(afterSecond, Is.EqualTo(afterFirst), "an unedited save must change nothing at all");
+
+            Assert.That(saved?["Profiles"]?["kitchen"]?.AsObject().Select(pair => pair.Key),
+                Is.EquivalentTo(new[] { "General" }),
+                "a profile that inherited its accounts must not start declaring them");
+            Assert.That(saved?["Profiles"]?["studio"]?.AsObject().Select(pair => pair.Key),
+                Is.EquivalentTo(new[] { "Accounts" }),
+                "and one that declared nothing else must not acquire a General section");
+
+            Assert.That((string?)saved?["Accounts"]?[0]?["ApiKey"], Is.EqualTo("key-x"));
+            Assert.That((string?)saved?["Profiles"]?["studio"]?["Accounts"]?[0]?["ApiKey"], Is.EqualTo("key-z"));
         });
     }
 
