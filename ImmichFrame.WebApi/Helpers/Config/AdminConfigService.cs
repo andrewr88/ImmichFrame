@@ -28,8 +28,7 @@ namespace ImmichFrame.WebApi.Helpers.Config;
 /// </para>
 /// </summary>
 public sealed class AdminConfigService(
-    ConfigLoader _loader,
-    ConfigLocation _location,
+    Services.SettingsService _store,
     SwappableConfigCatalog _catalog,
     ILogger<AdminConfigService> _logger)
 {
@@ -56,12 +55,6 @@ public sealed class AdminConfigService(
         nameof(GeneralSettings.AuthenticationSecret)
     };
 
-    /// <summary>
-    /// How many previous versions of the settings file are kept beside it. Bounded on purpose: a
-    /// save that turns out wrong is usually noticed a save or two later, and an unbounded pile of
-    /// backups in the configuration directory is its own operational problem.
-    /// </summary>
-    private const int BackupsKept = 5;
 
     /// <summary>
     /// The relaxed encoder, because this file is meant to be hand-editable. The default escapes
@@ -99,32 +92,20 @@ public sealed class AdminConfigService(
     {
         lock (_saveLock)
         {
-            var source = _loader.DescribeSource(_location.Directory);
+            var settings = _store.Read();
+            var source = new ConfigSource(settings.Format, null, false);
 
-            if (source.Format == ConfigFormat.Environment || source.Path is null)
+            // Checked here as well as inside the store: this lock is what makes the token meaningful
+            // within the process, and refusing before anything is rendered keeps the message about
+            // the edit rather than about the write.
+            if (!string.Equals(VersionOf(settings), request.Version, StringComparison.Ordinal))
             {
                 throw new ConfigSaveRefusedException(
-                    "This installation is configured from environment variables, so there is no settings file to edit. " +
-                    "Create a Settings.json or Settings.yml in the configuration directory and restart ImmichFrame to use the editor.");
+                    "The settings have changed since they were loaded into the editor. Reload the configuration and apply your changes again.");
             }
 
-            var current = File.ReadAllText(source.Path);
-
-            if (!string.Equals(VersionOf(current), request.Version, StringComparison.Ordinal))
-            {
-                throw new ConfigSaveRefusedException(
-                    $"'{source.Path}' has changed since it was loaded into the editor. Reload the configuration and apply your changes again.");
-            }
-
-            if (source.LegacySchema && !request.ConvertLegacySchema)
-            {
-                throw new ConfigSaveRefusedException(
-                    $"'{source.Path}' is written in the old settings schema. Saving rewrites it in the current one, " +
-                    "which is not reversible from here, so confirm the conversion before saving.");
-            }
-
-            var stored = StoredSecrets(source, current, request.Version);
-            var rewritten = Render(source.Format, BuildDocument(request, stored));
+            var stored = StoredSecrets(source, settings.Text, request.Version);
+            var rewritten = Render(settings.Format, BuildDocument(request, stored));
 
             // Bind and validate before the file is touched. Validation is local - it reads ApiKeyFile
             // from disk and checks that each account has a key - so a broken configuration is refused
@@ -134,16 +115,16 @@ public sealed class AdminConfigService(
             // file: it copies ApiKeyFile's contents into ApiKey, and serialising the settings objects
             // instead of the text above would write the key itself into a file that only ever named
             // the path to it.
-            var catalog = Validated(source.Format, rewritten);
+            var catalog = Validated(settings.Format, rewritten);
 
-            WriteAtomically(source.Path, rewritten);
+            _store.Save(rewritten, settings.Format, settings.Version);
 
             // Last, and only on a completed write: everything reading IConfigCatalog now sees the
-            // configuration that is on disk, and the per-profile services built from the old one are
-            // dropped so the next request rebuilds them.
+            // stored configuration, and the per-profile services built from the old one are dropped
+            // so the next request rebuilds them.
             _catalog.Swap(catalog);
 
-            _logger.LogInformation("Configuration saved to '{configPath}' and applied without a restart", source.Path);
+            _logger.LogInformation("Configuration saved and applied without a restart");
 
             return ReadCurrent();
         }
@@ -323,26 +304,18 @@ public sealed class AdminConfigService(
 
     private AdminConfigDto ReadCurrent()
     {
-        var source = _loader.DescribeSource(_location.Directory);
+        var settings = _store.Read();
+        var source = new ConfigSource(settings.Format, null, false);
+        var version = VersionOf(settings);
 
-        if (source.Format == ConfigFormat.Environment || source.Path is null)
+        // Nothing has ever configured this instance, so there is no document to project. The editor
+        // gets the empty default configuration to fill in rather than an error.
+        if (_store.IsUnconfigured)
         {
-            return NotFromAFile(source, string.Empty,
-                "This installation is configured from environment variables. There is no settings file to edit.");
+            return NotFromAFile(source, version, null);
         }
 
-        var text = File.ReadAllText(source.Path);
-
-        if (source.LegacySchema)
-        {
-            // A v1 file is flat: it has no profiles and nothing in it is inherited, so every setting
-            // it can express counts as declared. Saving it therefore writes the lot, which is what
-            // converting to the current schema means.
-            return NotFromAFile(source, VersionOf(text), null);
-        }
-
-        var document = ConfigLoader.CreateDocument(source.Format, text);
-        var version = VersionOf(text);
+        var document = ConfigLoader.CreateDocument(settings.Format, settings.Text);
 
         var profiles = document.ProfileNames
             .Select(name => Entry(version, name, document.Bind<ServerSettings>(name), document.DeclaredOverrides(name)))
@@ -350,7 +323,7 @@ public sealed class AdminConfigService(
 
         return new AdminConfigDto(
             version,
-            new AdminConfigSourceDto(FormatName(source.Format), source.Path, false, true, null),
+            new AdminConfigSourceDto(FormatName(source.Format), null, false, true, null),
             Entry(version, ConfigCatalog.DefaultProfileName,
                 document.Bind<ServerSettings>(null), document.DeclaredOverrides(null)),
             profiles);
@@ -793,115 +766,33 @@ public sealed class AdminConfigService(
         source is null ? null : source.GetType().GetProperty(name)?.GetValue(source);
 
     /// <summary>
-    /// Renders the document in the format it was loaded in - a YAML installation stays YAML and a
-    /// JSON one stays JSON, because the loader picks by filename and a changed format would leave
-    /// the old file behind to win the next restart.
+    /// Renders the document in the format it was stored in - a configuration imported from YAML
+    /// stays YAML and one imported from JSON stays JSON. Not a cosmetic choice: YAML's
+    /// representation model carries no resolved scalar type, so rewriting a YAML document as JSON
+    /// would have to guess whether a quoted '10' was a number or a string.
     /// </summary>
     private static string Render(ConfigFormat format, Dictionary<string, object?> root) => format switch
     {
         ConfigFormat.Json => JsonSerializer.Serialize(root, JsonOutput),
         ConfigFormat.Yaml => new SerializerBuilder().Build().Serialize(root),
-        _ => throw new ConfigSaveRefusedException($"There is no settings file to write for {format}.")
+        _ => throw new ConfigSaveRefusedException($"There is no settings document to write for {format}.")
     };
 
-    /// <summary>
-    /// Backs the old file up, writes the new one beside it, and renames it over the top, so a reader
-    /// sees either the whole old file or the whole new one and never a half-written one.
-    /// </summary>
-    private void WriteAtomically(string path, string contents)
-    {
-        var directory = Path.GetDirectoryName(path) ?? _location.Directory;
-        var fileName = Path.GetFileName(path);
-        var temporary = Path.Combine(directory, $".{fileName}.{Guid.NewGuid():N}.tmp");
-
-        try
-        {
-            // The temporary file first: on a read-only mount this is what fails, and it fails before
-            // a backup file has been left lying around.
-            File.WriteAllText(temporary, contents);
-
-            // The rename below hands the live file the temporary file's permissions, and a new file
-            // is created at 0666 minus the umask. Without this, an operator who tightened the mode on
-            // a file holding every Immich API key and the frame's AuthenticationSecret would silently
-            // get it widened back on the first save from the editor. File.Copy already carries the
-            // mode across to the backup.
-            if (!OperatingSystem.IsWindows())
-            {
-                File.SetUnixFileMode(temporary, File.GetUnixFileMode(path));
-            }
-
-            var backup = Path.Combine(directory,
-                $"{fileName}.{DateTime.UtcNow.ToString("yyyyMMddTHHmmssZ", CultureInfo.InvariantCulture)}.bak");
-            File.Copy(path, backup, overwrite: true);
-
-            File.Move(temporary, path, overwrite: true);
-
-            _logger.LogInformation("Previous configuration kept at '{backupPath}'", backup);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
-        {
-            TryDelete(temporary);
-
-            throw new ConfigSaveRefusedException(
-                $"'{directory}' could not be written to, so the configuration was not saved. " +
-                "ImmichFrame runs as UID 1000 and needs write access to the configuration directory; " +
-                $"a read-only mount cannot be edited from here. ({ex.Message})", ex);
-        }
-
-        // Outside the block above, and after it: the rename has happened, so a failure while tidying
-        // up old backups must not be reported as a configuration that was not saved.
-        PruneBackups(directory, fileName);
-    }
 
     /// <summary>
-    /// Drops all but the <see cref="BackupsKept"/> most recent backups. Ordered by name, which the
-    /// sortable UTC timestamp in it makes the same as ordering by age.
+    /// The token that decides whether an edit is still current: the stored row's version, which the
+    /// store increments on every save and enforces again as an EF concurrency token. Rendered as a
+    /// string because it travels through the DTOs and into the account handles below, which are
+    /// text.
     /// <para>
-    /// Failure here is logged and swallowed: the new file is already in place, and turning a problem
-    /// with housekeeping into a failed save the administrator has to repeat - and which would then
-    /// fail the version check, because the file did change - would be worse than leaving a stale
-    /// backup behind.
+    /// This replaced a hash of the settings file's contents when the database became the source of
+    /// truth. A counter is the better token here for the reason the hash was chosen there: a hash
+    /// answers "are these the same bytes", which was the question while a human could edit the file
+    /// underneath the editor, and the row can only change by being saved.
     /// </para>
     /// </summary>
-    private void PruneBackups(string directory, string fileName)
-    {
-        try
-        {
-            foreach (var stale in Directory.EnumerateFiles(directory, $"{fileName}.*.bak")
-                         .OrderByDescending(backup => backup, StringComparer.Ordinal)
-                         .Skip(BackupsKept)
-                         .ToList())
-            {
-                File.Delete(stale);
-            }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            _logger.LogWarning("Could not prune old configuration backups in '{configDirectory}' ({errorMessage})",
-                directory, ex.Message);
-        }
-    }
-
-    private void TryDelete(string path)
-    {
-        try
-        {
-            File.Delete(path);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            _logger.LogWarning("Could not remove the temporary settings file '{temporaryPath}' ({errorMessage})",
-                path, ex.Message);
-        }
-    }
-
-    /// <summary>
-    /// The token that decides whether an edit is still current. A hash of the file's contents rather
-    /// than its timestamp: a hand edit and a save from a second browser tab both change it, and a
-    /// file restored byte for byte deliberately does not.
-    /// </summary>
-    private static string VersionOf(string text) =>
-        "sha256:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
+    private static string VersionOf(Services.StoredSettings settings) =>
+        settings.Version.ToString(CultureInfo.InvariantCulture);
 
     private static string FormatName(ConfigFormat format) => format.ToString().ToLowerInvariant();
 

@@ -158,7 +158,6 @@ export type ExifResponseDto = {
         [key: string]: any | null;
     } | null;
 };
-export type UserAvatarColor = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
 export type UserResponseDto = {
     avatarColor: UserAvatarColor;
     email: string;
@@ -203,8 +202,6 @@ export type TagResponseDto = {
         [key: string]: any | null;
     } | null;
 };
-export type AssetTypeEnum = 0 | 1 | 2 | 3;
-export type AssetVisibility = 0 | 1 | 2 | 3;
 export type AssetResponseDto = {
     immichServerUrl?: string | null;
     checksum: string;
@@ -243,7 +240,6 @@ export type AssetResponseDto = {
         [key: string]: any | null;
     } | null;
 };
-export type SourceType = 0 | 1 | 2;
 export type AssetFaceResponseDto = {
     boundingBoxX1?: number;
     boundingBoxX2?: number;
@@ -258,7 +254,6 @@ export type AssetFaceResponseDto = {
         [key: string]: any | null;
     } | null;
 };
-export type AlbumUserRole = 0 | 1 | 2;
 export type AlbumUserResponseDto = {
     role: AlbumUserRole;
     user: UserResponseDto;
@@ -273,7 +268,6 @@ export type ContributorCountResponseDto = {
         [key: string]: any | null;
     } | null;
 };
-export type AssetOrder = 0 | 1;
 export type AlbumResponseDto = {
     albumName: string;
     albumThumbnailAssetId?: string | null;
@@ -598,3 +592,47 @@ export function getWeather({ clientIdentifier, profile }: {
         ...opts
     });
 }
+export const UserAvatarColor = {
+    Primary: "primary",
+    Pink: "pink",
+    Red: "red",
+    Yellow: "yellow",
+    Blue: "blue",
+    Green: "green",
+    Purple: "purple",
+    Orange: "orange",
+    Gray: "gray",
+    Amber: "amber"
+} as const;
+export type UserAvatarColor = (typeof UserAvatarColor)[keyof typeof UserAvatarColor];
+export const AssetTypeEnum = {
+    Image: "image",
+    Video: "video",
+    Audio: "audio",
+    Other: "other"
+} as const;
+export type AssetTypeEnum = (typeof AssetTypeEnum)[keyof typeof AssetTypeEnum];
+export const AssetVisibility = {
+    Archive: "archive",
+    Timeline: "timeline",
+    Hidden: "hidden",
+    Locked: "locked"
+} as const;
+export type AssetVisibility = (typeof AssetVisibility)[keyof typeof AssetVisibility];
+export const SourceType = {
+    MachineLearning: "machineLearning",
+    Exif: "exif",
+    Manual: "manual"
+} as const;
+export type SourceType = (typeof SourceType)[keyof typeof SourceType];
+export const AlbumUserRole = {
+    Editor: "editor",
+    Owner: "owner",
+    Viewer: "viewer"
+} as const;
+export type AlbumUserRole = (typeof AlbumUserRole)[keyof typeof AlbumUserRole];
+export const AssetOrder = {
+    Asc: "asc",
+    Desc: "desc"
+} as const;
+export type AssetOrder = (typeof AssetOrder)[keyof typeof AssetOrder];
