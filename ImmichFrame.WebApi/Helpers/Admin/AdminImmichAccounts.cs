@@ -30,7 +30,7 @@ public record ResolvedImmichAccount(string ServerUrl, string ApiKey, string Host
 /// </para>
 /// <para>
 /// But the read and the catalog are two different things, and the code below must not assume they
-/// agree. The read is the settings file <em>as it is on disk right now</em>; the catalog is what
+/// agree. The read is the stored settings <em>as the database holds them right now</em>; the catalog is what
 /// this process is <em>running</em>. They are bound from the same document by the same code and so
 /// normally line up index for index - but a hand edit since startup, or a save from another
 /// administrator, moves one and not the other, and the version token cannot catch it because the
@@ -56,7 +56,7 @@ public sealed class AdminImmichAccounts(
     /// <summary>
     /// The named <c>HttpClient</c> every picker request goes out on. Configured in <c>Program.cs</c>
     /// and deliberately not <c>ImmichApiAccountClient</c>: the frame's own client talks only to
-    /// servers named in the settings file, while this one talks to whatever an administrator types.
+    /// servers named in the stored settings, while this one talks to whatever an administrator types.
     /// </summary>
     public const string HttpClientName = "AdminImmichPickerClient";
 
@@ -202,7 +202,7 @@ public sealed class AdminImmichAccounts(
         // (ConfigCatalog.DefaultProfileName resolves to the default configuration in TryGet.)
         if (!_catalog.TryGet(entry.Name, out var settings))
         {
-            error = $"Configuration profile '{entry.Name}' is in the settings file but not in the running configuration. " +
+            error = $"Configuration profile '{entry.Name}' is in the stored settings but not in the running configuration. " +
                     "Restart ImmichFrame to pick it up, then try again.";
             return false;
         }
@@ -210,7 +210,8 @@ public sealed class AdminImmichAccounts(
         var saved = settings.Accounts.ElementAtOrDefault(index.Value);
         var declared = entry.Accounts[index.Value].ImmichServerUrl;
 
-        // The position came from the file and is being applied to the running configuration, so it is
+        // The position came from the stored settings and is being applied to the running configuration,
+        // so it is
         // only meaningful while the two still describe the same accounts. The server URL is the part
         // of the account the read does not mask, which makes it exactly the cross-check available:
         // if it does not match, this handle no longer names the account the editor is showing, and
@@ -218,7 +219,7 @@ public sealed class AdminImmichAccounts(
         // onto an account that has never seen them.
         if (saved is null || !string.Equals(declared, saved.ImmichServerUrl, StringComparison.Ordinal))
         {
-            error = "The running configuration no longer matches the settings file, so that account could not be " +
+            error = "The running configuration no longer matches the stored settings, so that account could not be " +
                     "identified safely. Restart ImmichFrame, then try again.";
             return false;
         }
@@ -239,7 +240,7 @@ public sealed class AdminImmichAccounts(
     /// editor and swapped in since. The remedy is therefore the file, not the form in front of them.
     /// </summary>
     private const string StoredKeyRemedy =
-        "Fix it in the settings file - or in the file its ApiKeyFile names - and save the configuration again.";
+        "Fix it in the admin editor - or in the file its ApiKeyFile names - and save the configuration again.";
 
     /// <inheritdoc cref="StoredKeyRemedy"/>
     /// <remarks>The same problem in a key being typed, where the fix is simply to paste it again.</remarks>
