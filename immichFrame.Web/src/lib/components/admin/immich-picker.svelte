@@ -120,11 +120,30 @@
 		});
 	});
 
-	// Runs once, on creation. Everything it reads is untracked deliberately: the server URL is bound
-	// on input, so re-priming whenever the credentials change would be a request per keystroke. A
-	// picker whose account is edited goes back to bare ids until the panel is opened, as before.
+	/**
+	 * What the quiet read was last started for, as the values themselves. Held so that the effect
+	 * below can tell "there is something new here to name" from every other reason it might run.
+	 */
+	let primedFor: string | null = null;
+
+	// Runs on creation and whenever the configured values change - which is the profile tab strip's
+	// doing as much as the administrator's. `EntryEditor` is rendered unkeyed, so selecting another
+	// configuration swaps this picker's props rather than building a new picker: switching from a
+	// profile with no people to one that has them used to leave the first run's "nothing to name
+	// here" verdict standing, and the rows sat on bare identifiers until the panel was opened.
+	//
+	// The values are the only dependency, deliberately. The credentials are not: the server URL is
+	// bound on input, so waking on those would be one read per keystroke - which is why `list` is not
+	// a dependency either, since a credential change clears it.
 	$effect(() => {
-		untrack(prime);
+		const signature = values.join('\n');
+
+		if (values.length === 0 || signature === primedFor) return;
+
+		untrack(() => {
+			primedFor = signature;
+			prime();
+		});
 	});
 
 	/**
