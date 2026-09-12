@@ -39,6 +39,7 @@
   },
   "Accounts": [
     {
+      "Label": "Account1.Label_TEST",
       "ImmichServerUrl": "Account1.ImmichServerUrl_TEST",
       "ApiKey": "Account1.ApiKey_TEST",
       "ApiKeyFile": "Account1.ApiKeyFile_TEST",
@@ -64,6 +65,7 @@
       ]
     },
     {
+      "Label": "Account2.Label_TEST",
       "ImmichServerUrl": "Account2.ImmichServerUrl_TEST",
       "ApiKey": "Account2.ApiKey_TEST",
       "ApiKeyFile": "Account2.ApiKeyFile_TEST",

@@ -37,10 +37,15 @@ export type GeneralProp = Exclude<
 	'hasWeatherApiKey' | 'hasWebhook' | 'hasAuthenticationSecret'
 >;
 
-/** Every account setting rendered by the generic field renderer; the rest have bespoke UI. */
+/**
+ * Every account setting rendered by the generic field renderer; the rest have bespoke UI.
+ *
+ * `label` is excluded because it is not a photo-selection setting at all: it names the account, so
+ * it belongs wherever the account itself is presented rather than in the generic field list.
+ */
 export type AccountProp = Exclude<
 	keyof AdminAccountSettingsDto,
-	'id' | 'apiKey' | 'hasApiKey' | 'apiKeyFromFile' | 'immichServerUrl' | 'apiKeyFile'
+	'id' | 'label' | 'apiKey' | 'hasApiKey' | 'apiKeyFromFile' | 'immichServerUrl' | 'apiKeyFile'
 >;
 
 export type FieldKind =
