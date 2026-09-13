@@ -115,11 +115,13 @@ builder.Services.AddSingleton<ProfileRegistry>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentProfile, CurrentProfile>();
 
-// The profile's services are resolved once per request, through a holder rather than directly.
-// ProfileServices is IDisposable and belongs to the registry, not to the request: the container
-// disposes whatever a scoped factory returns, so registering it here would tear a profile's pools
-// down at the end of one request while every other request on that profile still used them.
-// ProfileScope is not disposable, so there is nothing for the container to take ownership of.
+// The profile's services are resolved once per request, through a holder rather than directly. The
+// holder leases the profile's graph on first use and gives the lease back when the container
+// disposes it at the end of the request, so a configuration swap landing mid-request cannot tear
+// that graph down while this request is still inside it. ProfileScope being disposable is the
+// mechanism, and it is the only thing registered here the container may own: everything handed out
+// of it is shared with every other request on the profile, which is why IImmichFrameLogic below
+// goes out through a non-owning forwarder.
 builder.Services.AddScoped<ProfileScope>();
 
 // Settings and services are scoped and resolve through the registry, so a request naming a
@@ -131,9 +133,17 @@ builder.Services.AddScoped<IGeneralSettings>(srv => srv.GetRequiredService<IServ
 builder.Services.AddScoped<IClientSettings>(srv => srv.GetRequiredService<IGeneralSettings>());
 builder.Services.AddScoped<IServerBehaviorSettings>(srv => srv.GetRequiredService<IGeneralSettings>());
 
+// Neither of these two is IDisposable, so the container has nothing to capture and the shared
+// instance can be handed out as it is. Check that still holds before adding another.
 builder.Services.AddScoped<IWeatherService>(srv => srv.GetRequiredService<ProfileScope>().Services.WeatherService);
 builder.Services.AddScoped<ICalendarService>(srv => srv.GetRequiredService<ProfileScope>().Services.CalendarService);
-builder.Services.AddScoped<IImmichFrameLogic>(srv => srv.GetRequiredService<ProfileScope>().Services.Logic);
+
+// The logic is the exception: it is IDisposable, and the container disposes whatever a scoped
+// factory returns even when it built none of it, so handing out the profile's own instance ended
+// that profile's pools and caches with the first request that touched them. The forwarder is not
+// disposable, so there is nothing for the request's scope to take ownership of.
+builder.Services.AddScoped<IImmichFrameLogic>(srv =>
+    new NonOwningImmichFrameLogic(srv.GetRequiredService<ProfileScope>().Services.Logic));
 
 builder.Services.AddControllers()
       .AddJsonOptions(options =>

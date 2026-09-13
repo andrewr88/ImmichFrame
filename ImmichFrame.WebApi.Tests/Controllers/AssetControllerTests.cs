@@ -144,8 +144,14 @@ namespace ImmichFrame.WebApi.Tests.Controllers
             // Act
             var response = await client.GetAsync("/api/Asset/RandomImageAndInfo");
 
+            // A second request on the same profile, deliberately: the profile's pools and API caches
+            // are shared by every request on it, so anything that ties their lifetime to one
+            // request's DI scope serves the first request and fails every one after it.
+            var repeatResponse = await client.GetAsync("/api/Asset/RandomImageAndInfo");
+
             // Assert
             response.EnsureSuccessStatusCode();
+            repeatResponse.EnsureSuccessStatusCode();
             var content = await response.Content.ReadAsStringAsync();
             // For now, we'll just check if the response is not empty.
             // A more robust check would be to deserialize the response and check the asset ID.
