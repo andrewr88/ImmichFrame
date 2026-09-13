@@ -1,7 +1,4 @@
-using System.Net;
 using System.Net.Http;
-using System.Text.Json;
-using ImmichFrame.Core.Api;
 using ImmichFrame.Core.Interfaces;
 using ImmichFrame.WebApi.Helpers.Config;
 using ImmichFrame.WebApi.Helpers.Profiles;
@@ -11,14 +8,14 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
-using Moq.Protected;
 using NUnit.Framework;
 
 namespace ImmichFrame.WebApi.Tests.Helpers.Profiles;
 
 /// <summary>
 /// How long a profile's object graph lives. It is shared by every request on that profile, so no
-/// single request may end its life - only <see cref="ProfileRegistry.Invalidate"/> may.
+/// single request may end its life: <see cref="ProfileRegistry.Invalidate"/> retires it and the last
+/// lease to be released is what tears it down.
 /// <para>
 /// The trap these pin is that Microsoft.Extensions.DependencyInjection takes ownership of any
 /// <see cref="IDisposable"/> a factory registration returns, including one the container never
@@ -44,7 +41,7 @@ public class ProfileGraphLifetimeTests
     /// weather and calendar services are handed out as they are, because their Core types are of
     /// neither disposable kind today - and an upstream merge quietly making a Core type disposable
     /// is exactly how this outage arrived in the first place. For those two it would be worse than
-    /// for the logic: <see cref="ProfileServices.Dispose"/> does not tear them down at all, so a
+    /// for the logic: a retired <see cref="ProfileServices"/> does not tear them down at all, so a
     /// request scope that destroyed one would leave the registry serving it dead with nothing that
     /// ever rebuilds it. Add a fourth scoped handout and it belongs in this list too.
     /// </para>
@@ -100,26 +97,9 @@ public class ProfileGraphLifetimeTests
 
     private static WebApplicationFactory<Program> CreateFactory()
     {
-        var handler = new Mock<HttpMessageHandler>().WithServerVersion();
-
-        // The only Immich call GetTotalAssets makes on an unnarrowed account, and it is made behind
-        // the API cache - which is the piece that used to be disposed.
-        handler.Protected()
-            .Setup<Task<HttpResponseMessage>>(
-                "SendAsync",
-                ItExpr.Is<HttpRequestMessage>(req => req.RequestUri!.ToString().Contains("assets/statistics")),
-                ItExpr.IsAny<CancellationToken>()
-            )
-            .ReturnsAsync(() => new HttpResponseMessage
-            {
-                StatusCode = HttpStatusCode.OK,
-                Content = new StringContent(JsonSerializer.Serialize(new AssetStatsResponseDto
-                {
-                    Images = TotalImages,
-                    Videos = 0,
-                    Total = TotalImages
-                }))
-            });
+        // The statistics call is the only Immich call GetTotalAssets makes on an unnarrowed account,
+        // and it is made behind the API cache - which is the piece that used to be disposed.
+        var handler = new Mock<HttpMessageHandler>().WithServerVersion().WithAssetStatistics(TotalImages);
 
         return new WebApplicationFactory<Program>()
             .WithWebHostBuilder(builder =>

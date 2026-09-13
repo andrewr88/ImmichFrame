@@ -115,13 +115,13 @@ builder.Services.AddSingleton<ProfileRegistry>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentProfile, CurrentProfile>();
 
-// The profile's services are resolved once per request, through a holder rather than directly.
-// ProfileServices is IDisposable and belongs to the registry, not to the request: the container
-// disposes whatever a scoped factory returns, so registering it here would tear a profile's pools
-// down at the end of one request while every other request on that profile still used them.
-// ProfileScope is not disposable, so there is nothing for the container to take ownership of here.
-// That covers the holder only: every member handed out of it has to clear the same bar on its own
-// account, which is why IImmichFrameLogic below goes out through a non-owning forwarder.
+// The profile's services are resolved once per request, through a holder rather than directly. The
+// holder leases the profile's graph on first use and gives the lease back when the container
+// disposes it at the end of the request, so a configuration swap landing mid-request cannot tear
+// that graph down while this request is still inside it. ProfileScope being disposable is the
+// mechanism, and it is the only thing registered here the container may own: everything handed out
+// of it is shared with every other request on the profile, which is why IImmichFrameLogic below
+// goes out through a non-owning forwarder.
 builder.Services.AddScoped<ProfileScope>();
 
 // Settings and services are scoped and resolve through the registry, so a request naming a

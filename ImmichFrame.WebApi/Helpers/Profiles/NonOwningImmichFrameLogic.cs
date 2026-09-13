@@ -18,8 +18,8 @@ namespace ImmichFrame.WebApi.Helpers.Profiles;
 /// <para>
 /// So this is deliberately <b>not</b> <see cref="IDisposable"/>: there is nothing here for the
 /// container to take ownership of. Do not unwrap it in <c>Program.cs</c>, and do not let it become
-/// disposable - <see cref="ProfileRegistry.Invalidate"/> is the only thing that may end a profile
-/// graph's life.
+/// disposable - a profile graph's life ends when a configuration swap retires it and the last
+/// request leasing it releases, never because one request's scope finished.
 /// </para>
 /// </summary>
 public sealed class NonOwningImmichFrameLogic(IImmichFrameLogic _logic) : IImmichFrameLogic

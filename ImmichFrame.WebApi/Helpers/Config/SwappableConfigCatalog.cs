@@ -33,10 +33,13 @@ public sealed class SwappableConfigCatalog(Func<IConfigCatalog> _seed, Func<Prof
     /// <para>
     /// A request already in flight keeps the <see cref="ProfileServices"/> pinned to its scope and
     /// finishes against the configuration it started with, which is what makes the swap safe to do
-    /// under load: nothing in that graph is <see cref="IDisposable"/> and its <c>HttpClient</c>s
-    /// come from <c>IHttpClientFactory</c>, so a superseded graph is simply collected once the last
-    /// request holding it completes. A request that has not yet resolved its graph gets the
-    /// replacement instead, so the two halves of one request are never mixed.
+    /// under load: that graph is leased for the life of the request (<see cref="ProfileScope"/>), so
+    /// dropping it here retires it rather than destroys it - it stops being handed out immediately,
+    /// and is torn down once the last request holding it completes. The lease is not decoration.
+    /// The asset pools own their API caches, so tearing a superseded graph down on the spot left
+    /// every request already inside it failing with <see cref="ObjectDisposedException"/> on its
+    /// next call. A request that has not yet resolved its graph gets the replacement instead, so the
+    /// two halves of one request are never mixed.
     /// </para>
     /// <para>
     /// The one rough edge: a request whose profile the replacement no longer declares, admitted by
