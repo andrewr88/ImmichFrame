@@ -178,7 +178,9 @@ public class ProfileReloadTests
         {
             Assert.That(settings.GeneralSettings.Interval, Is.EqualTo(BeforeInterval));
             Assert.That(settings, Is.SameAs(before.Settings));
-            Assert.That(logic, Is.SameAs(before.Logic),
+            // Through the forwarder the scope is handed instead of the graph's own logic - see
+            // NonOwningImmichFrameLogic for why it is there.
+            Assert.That(((NonOwningImmichFrameLogic)logic).Target, Is.SameAs(before.Logic),
                 "a service resolved after the swap must come from the graph the scope started with");
         });
     }

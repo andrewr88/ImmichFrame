@@ -47,8 +47,10 @@ public sealed class ProfileServices : IDisposable
     /// Tears down the profile's asset pools and their API caches. Called by
     /// <see cref="ProfileRegistry.Invalidate"/> when a configuration swap drops this profile's
     /// services, never by the container: these are shared by every request on the profile, so the
-    /// end of any one request's scope must not dispose them. The scoped registrations in
-    /// <c>Program.cs</c> hand out the members rather than this object for that reason.
+    /// end of any one request's scope must not dispose them. Handing out the members rather than
+    /// this object is not by itself what keeps the container out - <see cref="Logic"/> is disposable
+    /// too, and the container captures any disposable a scoped factory returns - so
+    /// <c>Program.cs</c> wraps it in a <see cref="NonOwningImmichFrameLogic"/> on the way out.
     /// </summary>
     public void Dispose() => (Logic as IDisposable)?.Dispose();
 }
