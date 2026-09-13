@@ -12,7 +12,7 @@ namespace ImmichFrame.WebApi.Helpers.Profiles;
 /// per-request reaches them through <see cref="ProfileRegistry"/> rather than rebuilding them.
 /// </para>
 /// </summary>
-public sealed class ProfileServices
+public sealed class ProfileServices : IDisposable
 {
     public ProfileServices(IServiceProvider root, IServerSettings settings)
     {
@@ -42,4 +42,13 @@ public sealed class ProfileServices
     public IImmichFrameLogic Logic { get; }
     public IWeatherService WeatherService { get; }
     public ICalendarService CalendarService { get; }
+
+    /// <summary>
+    /// Tears down the profile's asset pools and their API caches. Called by
+    /// <see cref="ProfileRegistry.Invalidate"/> when a configuration swap drops this profile's
+    /// services, never by the container: these are shared by every request on the profile, so the
+    /// end of any one request's scope must not dispose them. The scoped registrations in
+    /// <c>Program.cs</c> hand out the members rather than this object for that reason.
+    /// </summary>
+    public void Dispose() => (Logic as IDisposable)?.Dispose();
 }
