@@ -13,6 +13,16 @@
 	let errorMessage = $state('');
 	let configSource = $state('');
 
+	/**
+	 * The masthead's height, measured rather than assumed: it wraps on a narrow viewport and grows
+	 * when the configuration source appears in it. Everything the editor hangs below it needs this
+	 * one number - the rail and the profile strip stick to it, and the rail's scroll-spy offsets by
+	 * it - so it is published downwards twice, as the custom property those two sticky rules read
+	 * and as a prop for the arithmetic. Nothing that decides the masthead's own height reads either,
+	 * so measuring it and then publishing it cannot feed back into the measurement.
+	 */
+	let mastheadHeight = $state(0);
+
 	onMount(loadSession);
 
 	async function loadSession() {
@@ -69,8 +79,13 @@
 	<title>ImmichFrame configuration</title>
 </svelte:head>
 
-<div class="modernist min-h-screen">
-	<header class="masthead">
+<!-- The custom property is left unset until the header has been laid out and measured, so that
+     the declaration in the stylesheet below stands in meanwhile, not a zero overriding it. -->
+<div
+	class="modernist min-h-screen"
+	style:--masthead-height={mastheadHeight ? `${mastheadHeight}px` : null}
+>
+	<header class="masthead" bind:offsetHeight={mastheadHeight}>
 		<div class="masthead-inner">
 			<h1 class="brand">IMMICHFRAME</h1>
 			<p class="kicker">Configuration editor</p>
@@ -95,7 +110,7 @@
 		</div>
 	</header>
 
-	<div class="page">
+	<div class="page" class:page-editor={view === 'admin'}>
 		{#if view === 'loading'}
 			<p class="text-muted">Checking your session…</p>
 		{:else if view === 'error'}
@@ -156,12 +171,24 @@
 					view = 'not-admin';
 				}}
 				onSource={(label) => (configSource = label)}
+				{mastheadHeight}
 			/>
 		{/if}
 	</div>
 </div>
 
 <style>
+	/*
+	 * The masthead at its usual height, its 59px of content plus the rule under it. The measurement
+	 * above replaces this inline the moment the header has been laid out; this is the floor under
+	 * it, and not a line to delete once the measurement works. `top: var(--masthead-height)` with
+	 * nothing behind the variable is invalid at computed-value time, which is to say `top: auto`:
+	 * the rail and the profile strip would both quietly stop sticking.
+	 */
+	.modernist {
+		--masthead-height: 61px;
+	}
+
 	.masthead {
 		position: sticky;
 		top: 0;
@@ -170,13 +197,18 @@
 		border-bottom: 2px solid var(--color-divider);
 	}
 
+	/*
+	 * Full width, not the 1100px the page's prose keeps: the editor below takes the window, so a
+	 * capped masthead would leave the brand floating well to the right of the rail it heads. This
+	 * and `.page` pad by the same `var(--space-4)` and the rail has no padding on its left, so the
+	 * brand's left edge lands on the rail items'. The gate views keep their measure - that is
+	 * `.page`'s doing, not the masthead's.
+	 */
 	.masthead-inner {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
 		gap: var(--space-3);
-		max-width: 1100px;
-		margin: 0 auto;
 		padding: var(--space-3) var(--space-4);
 	}
 
@@ -239,6 +271,17 @@
 		max-width: 1100px;
 		margin: 0 auto;
 		padding: var(--space-6) var(--space-4);
+	}
+
+	/*
+	 * The gate views are prose and stay in the 1100px measure; the editor is a two-column workspace
+	 * and takes the window. Its foot goes with the width: the save bar is sticky at the bottom of
+	 * the pane, and page padding under it would hold it that far off the bottom of the screen at the
+	 * end of the scroll.
+	 */
+	.page-editor {
+		max-width: none;
+		padding-bottom: 0;
 	}
 
 	/*

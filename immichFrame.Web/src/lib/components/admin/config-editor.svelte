@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import * as api from '$lib/immichFrameApi';
 	import {
+		entryLabel,
 		newProfile,
 		problemDetail,
 		profileNameError,
@@ -13,6 +14,7 @@
 		type EditableEntry
 	} from './admin-config';
 	import AccountsSection from './accounts-section.svelte';
+	import AdminRail from './admin-rail.svelte';
 	import EntryEditor from './entry-editor.svelte';
 
 	interface Props {
@@ -22,9 +24,15 @@
 		onForbidden: () => void;
 		/** Where the configuration was read from, for the page header. Raised on every load. */
 		onSource: (label: string) => void;
+		/**
+		 * How tall the masthead is, measured by the page that owns it. Passed down to the rail, whose
+		 * scroll-spy has to know where the sticky chrome ends; the page publishes the same number as
+		 * `--masthead-height` for the CSS below to stick to.
+		 */
+		mastheadHeight: number;
 	}
 
-	let { onUnauthenticated, onForbidden, onSource }: Props = $props();
+	let { onUnauthenticated, onForbidden, onSource, mastheadHeight }: Props = $props();
 
 	let config = $state<EditableConfig | null>(null);
 	let loading = $state(true);
@@ -52,6 +60,16 @@
 	let savedPending: string | null = $state(null);
 	let saved = $derived(savedPending !== null && savedPending === pending);
 
+	// What the server holds, as the same comparable value: set from every read and from every save.
+	// The save bar says whether there is anything unsaved and not how much, because that is all the
+	// model knows - dirtiness here is a comparison and has never been a count of edits.
+	let serverPending: string | null = $state(null);
+	let unsaved = $derived(serverPending !== null && serverPending !== pending);
+
+	// Measured rather than assumed, because the strip wraps on a narrow viewport: the rail offsets
+	// its scroll-spy by whatever the sticky chrome above the pane currently covers.
+	let stripHeight = $state(0);
+
 	onMount(load);
 
 	async function load() {
@@ -60,6 +78,7 @@
 		saveError = '';
 		saveStale = false;
 		savedPending = null;
+		serverPending = null;
 		pendingDeletions = [];
 		problems = [];
 
@@ -81,6 +100,7 @@
 			const loaded = toEditable(response.data);
 
 			config = loaded;
+			serverPending = JSON.stringify(toUpdate(loaded));
 			selected = 0;
 			onSource(loaded.source.path ?? loaded.source.format ?? 'unknown');
 		} catch {
@@ -121,6 +141,7 @@
 				// so the banner's "this is what was saved" does not depend on when a derived
 				// happens to recompute.
 				savedPending = JSON.stringify(toUpdate(reloaded));
+				serverPending = savedPending;
 				return;
 			}
 
@@ -181,167 +202,177 @@
 		</div>
 	</section>
 {:else if config}
-	<section class="card banner">
-		<p class="source">
-			<span class="source-label">Configuration source</span>
-			<span class="mono">{config.source.path ?? config.source.format ?? 'unknown'}</span>
-		</p>
-		{#if readOnly}
-			<div class="warning">
-				<p class="warning-text">
-					{config.source.notEditableReason ?? 'This configuration cannot be edited from here.'}
-				</p>
-				<p class="warning-note">The settings below are shown read-only.</p>
-			</div>
-		{:else if needsConversion}
-			<div class="warning">
-				<p class="warning-text">
-					This settings file is written in the old schema. Saving rewrites it in the current one,
-					which cannot be undone from here.
-				</p>
-				<label class="warning-consent">
-					<input type="checkbox" class="warning-check" bind:checked={config.convertLegacySchema} />
-					<span>Convert this file to the current schema when I save.</span>
-				</label>
-			</div>
-		{/if}
-	</section>
+	<div class="editor">
+		<AdminRail
+			entry={current}
+			accountCount={config.accounts.length}
+			{mastheadHeight}
+			{stripHeight}
+		/>
 
-	<!-- Everything from here to the save bar is still on Tailwind palette classes, and
-	     `.modernist` redefines `--color-neutral-100` through `-900` - the very variables Tailwind v4
-	     resolves `text-neutral-*` and `border-neutral-*` through. So the light shell above did not
-	     just recolour these components, it inverted their ground: the inactive profile tabs, the
-	     only route to a profile, came out at 1.33:1. Containing them on the dark surface they were
-	     written for costs one element instead of a class revert at every site, and on that ground
-	     the Modernist ramp reads as well as Tailwind's own or better (those tabs, 13.3:1). Strictly
-	     temporary: task 002 lifts the tab strip and the save bar out of it, and it goes when task
-	     005 converts the last child left inside. -->
-	<div class="bg-neutral-950 p-4 text-neutral-100">
-		<!-- Above the tab strip, because an Immich account belongs to the configuration as a whole rather
-		     than to whichever tab happens to be selected: the same account is used by the default
-		     configuration and by any number of profiles, and is one set of credentials in all of them. -->
-		<fieldset disabled={readOnly}>
-			<AccountsSection {config} />
-		</fieldset>
+		<div class="pane">
+			<div class="strip" bind:offsetHeight={stripHeight}>
+				<span class="strip-label">Editing</span>
 
-		<div class="mb-4 flex flex-wrap items-center gap-2">
-			{#each entries as entry, index (entry.name + index)}
-				<button
-					type="button"
-					class="rounded px-3 py-1 text-sm {index === selected
-						? 'bg-sky-700 text-white'
-						: 'border border-neutral-700 text-neutral-300 hover:border-neutral-500'}"
-					onclick={() => (selected = index)}
-				>
-					{entry.isDefault ? 'Default configuration' : entry.name}
-				</button>
-			{/each}
-		</div>
-
-		{#if !readOnly}
-			<div class="mb-4 flex flex-wrap items-end gap-2">
-				<div>
-					<label class="text-xs text-neutral-400" for="new-profile">New profile</label>
-					<input
-						id="new-profile"
-						type="text"
-						class="block rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-sm
-							text-neutral-100"
-						placeholder="kitchen"
-						bind:value={newProfileName}
-					/>
-				</div>
-				<!-- Still on the old dark classes, like the Reload button below: it sits inside the
-				     containment wrapper, which task 002 converts, and `.btn` would paint `--color-text` on
-				     near-black at 1.19:1 over a 1.06:1 border. It is the only way to add a profile, so it
-				     cannot go illegible in the meantime. -->
-				<button
-					type="button"
-					class="rounded border border-neutral-600 px-3 py-1 text-sm text-neutral-200
-						hover:border-neutral-400"
-					onclick={addProfile}
-				>
-					Add profile
-				</button>
-				{#if current && !current.isDefault}
-					<button
-						type="button"
-						class="rounded border border-red-700 px-3 py-1 text-sm text-red-300
-							hover:border-red-500 hover:text-red-200"
-						onclick={() => removeProfile(current)}
-					>
-						Delete profile '{current.name}'…
-					</button>
-				{/if}
-			</div>
-			{#if newProfileError}
-				<p class="mb-4 text-sm text-red-300">{newProfileError}</p>
-			{/if}
-		{/if}
-
-		{#if current}
-			<fieldset disabled={readOnly}>
-				<EntryEditor
-					entry={current}
-					accounts={config.accounts}
-					inheritFrom={current.isDefault ? null : config.default}
-					version={config.version}
-				/>
-			</fieldset>
-		{/if}
-	</div>
-
-	{#if !readOnly}
-		<div class="sticky bottom-0 border-t border-neutral-700 bg-neutral-950 py-3">
-			{#if problems.length > 0}
-				<ul class="mb-2 list-disc pl-5 text-sm text-red-300">
-					{#each problems as problem (problem)}
-						<li>{problem}</li>
+				<div class="tabs">
+					{#each entries as entry, index (entry.name + index)}
+						<button
+							type="button"
+							class="tab"
+							class:is-active={index === selected}
+							onclick={() => (selected = index)}
+						>
+							{entry.isDefault ? 'Default configuration' : entry.name}
+						</button>
 					{/each}
-				</ul>
-			{/if}
-			{#if saveError}
-				<p class="mb-2 text-sm text-red-300">{saveError}</p>
-				{#if saveStale}
-					<!-- Still on the old dark classes, like the Add profile button above: it sits inside
-					     the save bar, which task 002 converts, and `.btn` would paint `--color-text` on
-					     near-black at 1.19:1 over a 1.06:1 border. It is the only way out of a stale save,
-					     so it cannot go illegible in the meantime. -->
-					<button
-						type="button"
-						class="mb-2 rounded border border-neutral-600 px-3 py-1 text-sm text-neutral-200
-							hover:border-neutral-400"
-						onclick={load}
-					>
-						Reload the configuration
-					</button>
+				</div>
+
+				{#if !readOnly}
+					<div class="strip-end">
+						<!-- Named by `aria-label` rather than by a visible caption: the strip is one row of
+						     chrome, and the only thing an empty box beside an Add profile button can be
+						     asking for is the name of one. -->
+						<input
+							type="text"
+							class="input new-profile"
+							aria-label="New profile name"
+							placeholder="kitchen"
+							bind:value={newProfileName}
+						/>
+						<button type="button" class="btn btn-secondary" onclick={addProfile}>
+							Add profile
+						</button>
+						{#if current && !current.isDefault}
+							<button
+								type="button"
+								class="btn delete-profile"
+								onclick={() => removeProfile(current)}
+							>
+								Delete profile '{current.name}'…
+							</button>
+						{/if}
+					</div>
+					{#if newProfileError}
+						<p class="strip-error">{newProfileError}</p>
+					{/if}
 				{/if}
+			</div>
+
+			<div class="pane-body">
+				<section class="card banner">
+					<p class="source">
+						<span class="source-label">Configuration source</span>
+						<span class="mono">{config.source.path ?? config.source.format ?? 'unknown'}</span>
+					</p>
+					{#if readOnly}
+						<div class="warning">
+							<p class="warning-text">
+								{config.source.notEditableReason ??
+									'This configuration cannot be edited from here.'}
+							</p>
+							<p class="warning-note">The settings below are shown read-only.</p>
+						</div>
+					{:else if needsConversion}
+						<div class="warning">
+							<p class="warning-text">
+								This settings file is written in the old schema. Saving rewrites it in the current
+								one, which cannot be undone from here.
+							</p>
+							<label class="warning-consent">
+								<input
+									type="checkbox"
+									class="warning-check"
+									bind:checked={config.convertLegacySchema}
+								/>
+								<span>Convert this file to the current schema when I save.</span>
+							</label>
+						</div>
+					{/if}
+				</section>
+
+				<!-- What is left of the containment wrapper. `.modernist` redefines
+				     `--color-neutral-100` through `-900` - the very variables Tailwind v4 resolves
+				     `text-neutral-*` and `border-neutral-*` through - so the light ground does not
+				     merely recolour a component still written in those classes, it inverts it: the
+				     profile tabs, before they were converted above, came out at 1.33:1. The chrome
+				     around it has now been lifted out and only the two unconverted children are left
+				     on the dark surface they were written for - the accounts section (task 004) and
+				     the entry editor (tasks 003 and 005). It goes with the last of them. -->
+				<div class="bg-neutral-950 p-4 text-neutral-100">
+					<!-- First in the pane, and listed apart from the profile's own sections in the rail,
+					     because an Immich account belongs to the configuration as a whole rather than to
+					     whichever tab happens to be selected: the same account is used by the default
+					     configuration and by any number of profiles, and is one set of credentials in all
+					     of them. -->
+					<fieldset disabled={readOnly}>
+						<AccountsSection {config} />
+					</fieldset>
+
+					{#if current}
+						<fieldset disabled={readOnly}>
+							<EntryEditor
+								entry={current}
+								accounts={config.accounts}
+								inheritFrom={current.isDefault ? null : config.default}
+								version={config.version}
+							/>
+						</fieldset>
+					{/if}
+				</div>
+			</div>
+
+			{#if !readOnly}
+				<div class="save-bar">
+					{#if problems.length > 0}
+						<ul class="save-problems">
+							{#each problems as problem (problem)}
+								<li>{problem}</li>
+							{/each}
+						</ul>
+					{/if}
+					{#if saveError}
+						<p class="save-error">{saveError}</p>
+						{#if saveStale}
+							<button type="button" class="btn btn-secondary" onclick={load}>
+								Reload the configuration
+							</button>
+						{/if}
+					{/if}
+					{#if pendingDeletions.length > 0}
+						<p class="save-deletions">
+							{pendingDeletions.length === 1 ? 'Profile' : 'Profiles'}
+							{pendingDeletions.map((name) => `'${name}'`).join(', ')}
+							will be deleted when you save. Reload to get {pendingDeletions.length === 1
+								? 'it'
+								: 'them'} back.
+						</p>
+					{/if}
+					<div class="save-row">
+						<p class="save-note">
+							{#if saved}
+								Saved and applied. Frames pick the new configuration up on their next request.
+							{:else}
+								Editing {entryLabel(current)}. Nothing is written until you save.
+							{/if}
+						</p>
+						<div class="save-actions">
+							{#if unsaved}
+								<span class="save-unsaved">Unsaved changes</span>
+							{/if}
+							<button
+								type="button"
+								class="btn btn-primary"
+								disabled={saving || (needsConversion && !config.convertLegacySchema)}
+								onclick={save}
+							>
+								{saving ? 'Saving…' : 'Save configuration'}
+							</button>
+						</div>
+					</div>
+				</div>
 			{/if}
-			{#if pendingDeletions.length > 0}
-				<p class="mb-2 text-sm text-red-300">
-					{pendingDeletions.length === 1 ? 'Profile' : 'Profiles'}
-					{pendingDeletions.map((name) => `'${name}'`).join(', ')}
-					will be deleted when you save. Reload to get {pendingDeletions.length === 1
-						? 'it'
-						: 'them'} back.
-				</p>
-			{/if}
-			{#if saved}
-				<p class="mb-2 text-sm text-emerald-400">
-					Saved and applied. Frames pick the new configuration up on their next request.
-				</p>
-			{/if}
-			<button
-				type="button"
-				class="rounded bg-sky-700 px-4 py-2 text-sm text-white hover:bg-sky-600
-					disabled:opacity-50 disabled:cursor-not-allowed"
-				disabled={saving || (needsConversion && !config.convertLegacySchema)}
-				onclick={save}
-			>
-				{saving ? 'Saving…' : 'Save configuration'}
-			</button>
 		</div>
-	{/if}
+	</div>
 {/if}
 
 <style>
@@ -430,5 +461,227 @@
 		width: 16px;
 		height: 16px;
 		accent-color: var(--color-warning-700);
+	}
+	/*
+	 * Two columns: the rail, which stays where it is, and the configuration, which scrolls past it.
+	 * `minmax(0, 1fr)` rather than `1fr` because a grid track sized from its contents is widened by
+	 * the longest unbroken thing in it - an Immich album id, a webhook URL - and the rail is what
+	 * would be pushed off screen.
+	 */
+	.editor {
+		display: grid;
+		grid-template-columns: 262px minmax(0, 1fr);
+	}
+
+	/*
+	 * No padding of its own: the strip and the save bar are the pane's own chrome and their rules
+	 * run its full width, so each of them carries its own. `min-width: 0` is the grid item's half of
+	 * the `minmax(0, …)` above - a grid item refuses to shrink below its contents whatever the track
+	 * it sits in allows.
+	 */
+	.pane {
+		min-width: 0;
+	}
+
+	.strip {
+		position: sticky;
+		/* The admin root publishes the masthead's height; the rail sticks to the same number. */
+		top: var(--masthead-height);
+		z-index: 5;
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--space-3);
+		padding: var(--space-2) var(--space-4);
+		background: var(--color-bg);
+		border-bottom: 1px solid var(--color-neutral-300);
+	}
+
+	/*
+	 * The mock's neutral-600 reads 3.85:1 on the page ground, which is under AA for a 10px label.
+	 * Neutral-700 is 5.83:1 and is what the masthead's kicker and source label - the two captions
+	 * this sits in line with - already use, so matching the mock's tone here means matching them.
+	 */
+	.strip-label {
+		font-size: 10px;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		color: var(--color-neutral-700);
+	}
+
+	/*
+	 * One segmented control rather than a row of separate buttons: the border belongs to the set and
+	 * the tabs divide it, which is what says that picking one of these is picking among alternatives.
+	 */
+	.tabs {
+		display: flex;
+		flex-wrap: wrap;
+		border: 1px solid var(--color-divider);
+	}
+
+	.tab {
+		padding: 7px 14px;
+		font-family: var(--font-heading);
+		font-weight: 800;
+		font-size: 13px;
+		line-height: 1.2;
+		color: var(--color-text);
+		background: transparent;
+		border: 0;
+		cursor: pointer;
+	}
+
+	.tab + .tab {
+		border-left: 1px solid var(--color-divider);
+	}
+
+	.tab.is-active {
+		background: var(--color-accent);
+		color: var(--color-bg);
+	}
+
+	.strip-end {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--space-2);
+		margin-left: auto;
+	}
+
+	/*
+	 * Compounded with the component class, like the cards above: `.modernist .input` sets both of
+	 * these properties and carries the specificity a bare `.new-profile` would, so which of them
+	 * won would come down to the order the bundler emitted the two sheets in.
+	 */
+	.input.new-profile {
+		width: 200px;
+		font-size: 13px;
+	}
+
+	/*
+	 * Tailwind's preflight mixes a placeholder at half of `currentColor` - `color-mix(in oklab,
+	 * currentcolor 50%, transparent)`, which keeps the colour and halves its alpha - so on the light
+	 * ground it composites `--color-text` over the input's own surface to #858483: 3.08:1, where the
+	 * text typed into the same box gets 13.7:1. Clear of the 3:1 floor, then, but short of AA at
+	 * 13px, and AA is the bar here - the `aria-label` names this box for assistive technology only,
+	 * which leaves the placeholder the one caption a sighted reader has for what belongs in it.
+	 * Neutral-700 reads 5.38:1 on that same surface.
+	 */
+	.input.new-profile::placeholder {
+		color: var(--color-neutral-700);
+	}
+
+	/*
+	 * Deleting a profile takes every frame on it offline, so it is the one control in this strip
+	 * that wears the accent - at 700, because the bare accent is tuned to 3:1 and this is a label.
+	 */
+	.btn.delete-profile {
+		color: var(--color-accent-700);
+		border-color: var(--color-accent-300);
+	}
+
+	.btn.delete-profile:hover {
+		background: var(--color-accent-100);
+	}
+
+	/* On its own line under the row, because the input it is about has been pushed to the right. */
+	.strip-error {
+		flex-basis: 100%;
+		margin: 0;
+		font-size: 13px;
+		color: var(--color-accent-700);
+	}
+
+	/*
+	 * The room at the foot is what lets the last section reach the chrome line: a section shorter
+	 * than the screen has nothing below it to scroll against, so without this the scroll ends with
+	 * it still halfway down the page and its rail item could never light up. A viewport less the
+	 * masthead is the generous form of "enough" - the exact figure is a viewport less the whole
+	 * chrome, less whatever the last section and the save bar already contribute, and three
+	 * measurements plumbed into CSS would buy nothing but a shorter blank at the very end of a
+	 * scroll. It is what lets the rail decide the last section the same way it decides every other,
+	 * with no foot marker and no special case.
+	 */
+	.pane-body {
+		padding: var(--space-6) var(--space-4) calc(100vh - var(--masthead-height));
+	}
+
+	.save-bar {
+		position: sticky;
+		bottom: 0;
+		z-index: 5;
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: var(--space-2);
+		padding: var(--space-3) var(--space-4);
+		background: var(--color-bg);
+		border-top: 2px solid var(--color-divider);
+	}
+
+	.save-row {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-3);
+		width: 100%;
+	}
+
+	/* Bounded so the sentence stays a sentence: the pane is as wide as the window. */
+	.save-note {
+		max-width: 640px;
+		margin: 0;
+		font-size: 12.5px;
+		color: var(--color-neutral-700);
+	}
+
+	.save-actions {
+		display: flex;
+		align-items: center;
+		gap: var(--space-3);
+	}
+
+	.save-unsaved {
+		font-size: 12.5px;
+		font-weight: 600;
+		color: var(--color-accent-700);
+	}
+
+	/* Failures take the accent ramp at 700, as the load error above does. */
+	.save-problems,
+	.save-error {
+		margin: 0;
+		font-size: 13px;
+		color: var(--color-accent-700);
+	}
+
+	/* Tailwind's preflight strips list markers from every `ul`, and these are a list of faults. */
+	.save-problems {
+		padding-left: var(--space-4);
+		list-style: disc;
+	}
+
+	/*
+	 * The warning role rather than the accent ramp: a profile queued for deletion is a consequence
+	 * to understand before saving, the way the legacy-schema consent above it is, not a failure.
+	 */
+	.save-deletions {
+		margin: 0;
+		padding: var(--space-2) var(--space-3);
+		font-size: 13px;
+		background: var(--color-warning-100);
+		color: var(--color-warning-700);
+		border-left: 4px solid var(--color-warning-700);
+	}
+
+	/*
+	 * Below 900px the rail stops being a column and stacks above the pane. `admin-rail.svelte`
+	 * carries the other half of this breakpoint, where it also stops being sticky.
+	 */
+	@media (max-width: 900px) {
+		.editor {
+			grid-template-columns: minmax(0, 1fr);
+		}
 	}
 </style>

@@ -143,7 +143,7 @@
 	}
 </script>
 
-<section class="mb-6">
+<section class="mb-6" id="section-accounts">
 	<div class="mb-2 flex flex-wrap items-center justify-between gap-2">
 		<h3 class="text-sm font-semibold uppercase tracking-wide text-neutral-400">Immich accounts</h3>
 		<span class="text-xs text-neutral-500">

@@ -132,7 +132,7 @@
 </script>
 
 {#each generalSections as section (section.title)}
-	<section class="mb-6">
+	<section class="mb-6" id="section-{section.title.toLowerCase()}">
 		<h3 class="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-400">
 			{section.title}
 		</h3>
@@ -172,7 +172,7 @@
 	</section>
 {/each}
 
-<section class="mb-6">
+<section class="mb-6" id="section-photo-selection">
 	<div class="mb-2 flex flex-wrap items-center justify-between gap-2">
 		<h3 class="text-sm font-semibold uppercase tracking-wide text-neutral-400">Immich accounts</h3>
 		{#if entry.isDefault}
