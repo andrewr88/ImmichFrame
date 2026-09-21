@@ -4,6 +4,15 @@
 	import ConfigEditor from '$lib/components/admin/config-editor.svelte';
 	// Imported here rather than from app.css so the slideshow bundle never carries the admin
 	// design system. Every rule in it is nested under `.modernist`, which only this page sets.
+	//
+	// After the component import, and not arbitrarily so: the bundler emits each module's CSS in
+	// the order the modules are pulled in, so the scoped rules of every component imported above
+	// land ahead of this sheet, and a tie between the two - the (0,3,0) that
+	// `.modernist .input:disabled` and a component's own `.input:disabled` both carry - is settled
+	// in the sheet's favour. That is the reverse of the usual base-first layering, and four of the
+	// admin components reason about it in their own comments. Swapping these two lines flips every
+	// such tie, and nothing fails. (This file's own style block is compiled after both and still
+	// comes last, so its rules win a tie either way.)
 	import '$lib/components/admin/modernist.css';
 
 	type View = 'loading' | 'error' | 'unconfigured' | 'signed-out' | 'not-admin' | 'admin';

@@ -202,26 +202,16 @@
 	}
 
 	/*
-	 * Same reading of `disabled` for the value itself, and the same reason not to take the system's
-	 * 0.45: at that figure an inherited value reads 2.66:1 against the fill it sits on, 2.75:1
-	 * against the page behind that. 0.7 is 5.49:1 and 5.81:1, clear of AA on either reading, and a
-	 * fade is what the value wants where the box wanted tones: the border, the placeholder and the
-	 * select's own arrow go down with the text rather than each needing a tone of its own.
-	 */
-	.input:disabled {
-		opacity: 0.7;
-		cursor: not-allowed;
-	}
-
-	/*
 	 * The one escape hatch on this sheet, and the only rule that needs one: forced-colors mode
 	 * rewrites `color`, `background-color` and `border-color` into the user's own palette, which is
 	 * why every other rule here comes through it working. `appearance: none` is the declaration it
 	 * cannot rewrite - it removes the rendering that rewriting relies on, and with `--color-accent`
 	 * and `--color-bg` both forced to `Canvas` a checked box would be an empty one. Hand the box
 	 * back to the platform, which draws a tick that mode understands and greys it when it is
-	 * inactive; drop the clipped mark so it cannot be painted over the platform's, and the fade with
-	 * it, since `GrayText` is already saying what the fade was for and `opacity` is not forced.
+	 * inactive; drop the clipped mark so it cannot be painted over the platform's. The fade on a
+	 * disabled `.input` needs the same escape and now takes it in `modernist.css`, beside the rule
+	 * it undoes - stated here it would tie with that rule on specificity and be settled by
+	 * whichever sheet the bundler emitted second.
 	 */
 	@media (forced-colors: active) {
 		.check {
@@ -230,10 +220,6 @@
 
 		.check:checked::after {
 			content: none;
-		}
-
-		.input:disabled {
-			opacity: 1;
 		}
 	}
 </style>

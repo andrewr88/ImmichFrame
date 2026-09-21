@@ -38,7 +38,7 @@
 	--color-accent-900: #4d170e;
 
 	/*
-	 * Extension 1 of 3. Modernist is a mono palette: its one accent is the red, and errors use the
+	 * Extension 1 of 4. Modernist is a mono palette: its one accent is the red, and errors use the
 	 * accent ramp (`--color-accent-700`, since the bare accent is tuned to 3:1 and is not for body
 	 * copy). Warnings cannot share it — a stale save and a legacy-schema consent are different
 	 * things and the admin UI has always told them apart. One extra role, a 100/700 pair mixed for
@@ -74,7 +74,7 @@
 }
 
 /*
- * Extension 2 of 3. `app.css` paints `html` black for the slideshow, which shows through on
+ * Extension 2 of 4. `app.css` paints `html` black for the slideshow, which shows through on
  * overscroll behind a light admin page; `:has()` keeps the repaint to pages that carry the shell.
  * The token is restated here because custom properties inherit downwards only — `--color-bg` is
  * declared on `.modernist`, so `html` cannot read it.
@@ -133,7 +133,7 @@ html:has(.modernist) {
 }
 
 /*
- * Extension 3 of 3, and the only value here altered rather than added. The design system mixes this
+ * Extension 3 of 4, and the only value here altered rather than added. The design system mixes this
  * token at 55%, which reads 3.65:1 on `--color-bg` and 3.56:1 on `--color-surface` — under AA on
  * both of the grounds this page has, for the role every view reaches for when it plays text down.
  * 65% brings it to 4.95:1 and 4.78:1 on the same two, and the hue does not move. An accessibility
@@ -280,6 +280,37 @@ html:has(.modernist) {
 .modernist .input:focus-visible {
 	border-color: var(--color-accent);
 	outline-offset: 0;
+}
+
+/*
+ * Extension 4 of 4, and an addition rather than an alteration: the system dresses a disabled
+ * button and says nothing about a disabled input. This admin reaches that state two ways — a
+ * settings row that inherits rather than declares, and a whole configuration that cannot be
+ * edited, which `config-editor.svelte` says by disabling the fieldset around every section — so
+ * the treatment belongs to the system rather than to whichever component needed it first. Kept in
+ * one component it was true only by luck: the accounts credentials sit under such a fieldset and
+ * would have rendered fully editable on a page whose point is that it cannot be saved.
+ *
+ * Not the system's own 0.45, which is right for a button with nothing to read: at that figure a
+ * faded value reads 2.66:1 against its own faded fill and 2.75:1 against the page behind it. 0.7
+ * is 5.49:1 and 5.81:1, clear of AA on either reading, and a fade is what a value wants where a
+ * check box wanted tones — the border, the placeholder and a select's own arrow go down with the
+ * text rather than each needing a tone of its own.
+ */
+.modernist .input:disabled {
+	opacity: 0.7;
+	cursor: not-allowed;
+}
+
+/*
+ * The fade's one escape hatch, and it travels with it: forced-colors mode already paints an
+ * inactive control in `GrayText`, which is what the fade was there to say, and `opacity` is not
+ * one of the properties that mode rewrites — so left on it would dim what the palette has said.
+ */
+@media (forced-colors: active) {
+	.modernist .input:disabled {
+		opacity: 1;
+	}
 }
 
 .modernist textarea.input {

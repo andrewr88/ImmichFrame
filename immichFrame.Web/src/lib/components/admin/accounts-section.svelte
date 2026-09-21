@@ -30,11 +30,6 @@
 
 	let entries: EditableEntry[] = $derived([config.default, ...config.profiles]);
 
-	const control =
-		'w-full rounded bg-neutral-900 border border-neutral-700 px-2 py-1 text-sm text-neutral-100';
-	const button =
-		'rounded border border-neutral-600 px-2 py-0.5 text-xs text-neutral-200 hover:border-neutral-400';
-
 	/** {@link entriesUsingAccount} against this section's configuration. */
 	function usedBy(account: EditableAccount): EditableEntry[] {
 		return entriesUsingAccount(config, account);
@@ -143,156 +138,166 @@
 	}
 </script>
 
-<section class="mb-6" id="section-accounts">
-	<div class="mb-2 flex flex-wrap items-center justify-between gap-2">
-		<h3 class="text-sm font-semibold uppercase tracking-wide text-neutral-400">Immich accounts</h3>
-		<span class="text-xs text-neutral-500">
-			Every Immich account this installation uses. Each configuration below chooses which of them it
-			shows photos from.
-		</span>
-	</div>
+<section class="section" id="section-accounts">
+	<header class="head">
+		<div>
+			<h2 class="title">Immich accounts</h2>
+			<p class="blurb">
+				Every Immich account this installation uses. Each configuration below chooses which of them
+				it shows photos from.
+			</p>
+		</div>
+		<p class="scope-note">Shared by every configuration</p>
+	</header>
 
 	{#if config.accounts.length === 0}
-		<p class="mb-2 text-xs text-amber-400">
+		<p class="empty">
 			No Immich accounts are configured. ImmichFrame needs at least one to show anything.
 		</p>
 	{/if}
 
-	<div class="space-y-3">
-		<!-- Keyed by the account's own key rather than its position: position is deliberately not an
-		     identity anywhere in this feature, and reusing a DOM node across a removal would put one
-		     account's half-typed API key on another. -->
-		{#each config.accounts as account, index (account.key)}
-			{@const used = usedBy(account)}
-			{@const colliding = collidesIn(account)}
-			<div class="rounded border border-neutral-700 p-3">
-				<div class="mb-3 flex items-center justify-between gap-2">
-					<div class="flex min-w-0 items-center gap-2">
-						<h4 class="truncate text-sm font-semibold text-neutral-200">
-							{accountName(account, index)}
-						</h4>
+	<!-- Keyed by the account's own key rather than its position: position is deliberately not an
+	     identity anywhere in this feature, and reusing a DOM node across a removal would put one
+	     account's half-typed API key on another. -->
+	{#each config.accounts as account, index (account.key)}
+		{@const used = usedBy(account)}
+		{@const colliding = collidesIn(account)}
+		<article class="account">
+			<header class="strip">
+				<div class="ident">
+					<div class="named">
+						<h3 class="name">{accountName(account, index)}</h3>
 						{#if colliding.length > 0}
 							<!-- Both rows are shown and both are marked, rather than one merged into the other:
 							     they are two accounts with two sets of credentials, and the header alone cannot
 							     say so once they share a label. -->
-							<span
-								class="shrink-0 rounded border border-red-700 bg-red-950/40 px-1.5 py-0.5 text-xs
-									text-red-300"
-							>
-								Duplicate label
-							</span>
+							<span class="tag tag-accent pill">Duplicate label</span>
 						{/if}
 					</div>
-					<button
-						type="button"
-						class="shrink-0 rounded border border-red-700 px-2 py-0.5 text-xs text-red-300
-							hover:border-red-500 hover:text-red-200"
-						onclick={() => removeAccount(account, index)}
-					>
-						Remove account…
-					</button>
+					{#if account.label.trim() && account.serverUrl.trim()}
+						<!-- Only beneath a name that is not already it: an account with no label is named by
+						     its server URL, and `accountName` is what decides that. -->
+						<p class="url">{account.serverUrl.trim()}</p>
+					{/if}
 				</div>
+				<button
+					type="button"
+					class="btn btn-secondary remove"
+					onclick={() => removeAccount(account, index)}
+				>
+					Remove account…
+				</button>
+			</header>
 
-				<div class="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
-					<div>
-						<label class="text-sm text-neutral-200" for="{account.key}-label">Label</label>
-						<input
-							id="{account.key}-label"
-							type="text"
-							class={control}
-							placeholder="Optional, e.g. Mum's photos"
-							value={account.label}
-							oninput={(event) => (account.label = event.currentTarget.value)}
-						/>
-						{#if colliding.length > 0}
-							<p class="text-xs text-red-300">
-								Another account used by {colliding.join(', ')} is labelled '{account.label.trim()}'
-								too. A label is what tells one account from another here, so saving is refused until
-								the two differ. Labels are compared ignoring case and surrounding spaces.
-							</p>
-						{:else}
-							<p class="text-xs text-neutral-500">
-								What tells two accounts on one Immich server apart. Written to the settings file
-								only when you give one.
-							</p>
-						{/if}
-					</div>
-
-					<div>
-						<label class="text-sm text-neutral-200" for="{account.key}-url">Immich server URL</label
-						>
-						<input
-							id="{account.key}-url"
-							type="text"
-							class={control}
-							placeholder="http://immich.example.com:2283"
-							value={account.serverUrl}
-							oninput={(event) => (account.serverUrl = event.currentTarget.value)}
-						/>
-					</div>
-
-					<div>
-						<label class="text-sm text-neutral-200" for="{account.key}-key-file">API key file</label
-						>
-						<input
-							id="{account.key}-key-file"
-							type="text"
-							class={control}
-							placeholder="Leave blank to store the key in the settings file"
-							value={account.apiKeyFile}
-							oninput={(event) => (account.apiKeyFile = event.currentTarget.value)}
-						/>
-					</div>
-				</div>
-
-				<div class="mb-2">
-					<span class="text-sm text-neutral-200">API key</span>
-					{#if usesApiKeyFile(account)}
-						<p class="text-sm text-sky-300">
-							Read from the file above at start-up. ImmichFrame refuses a configuration that names
-							both a key file and a key, so there is nothing to type here; clear the path to type a
-							key instead.
+			<div class="fields">
+				<div>
+					<label class="field-label" for="{account.key}-label">Label</label>
+					<input
+						id="{account.key}-label"
+						type="text"
+						class="input"
+						placeholder="Optional, e.g. Mum's photos"
+						value={account.label}
+						oninput={(event) => (account.label = event.currentTarget.value)}
+					/>
+					{#if colliding.length > 0}
+						<p class="help collides">
+							Another account used by {colliding.join(', ')} is labelled '{account.label.trim()}'
+							too. A label is what tells one account from another here, so saving is refused until
+							the two differ. Labels are compared ignoring case and surrounding spaces.
 						</p>
-					{:else if account.hasStoredKey && !account.entering}
-						<div class="flex flex-wrap items-center gap-2">
-							<span class="text-sm text-emerald-400">Set</span>
-							<button type="button" class={button} onclick={() => (account.entering = true)}>
-								Replace key
-							</button>
-						</div>
 					{:else}
-						<div class="flex flex-wrap items-center gap-2">
-							<input
-								id="{account.key}-key"
-								type="password"
-								autocomplete="new-password"
-								class="min-w-0 flex-1 rounded border border-neutral-700 bg-neutral-900 px-2 py-1
-									text-sm text-neutral-100"
-								placeholder="Immich API key"
-								bind:value={account.apiKey}
-							/>
-							{#if account.hasStoredKey}
-								<button
-									type="button"
-									class={button}
-									onclick={() => {
-										account.entering = false;
-										account.apiKey = '';
-									}}
-								>
-									Keep stored key
-								</button>
-							{/if}
-						</div>
-						{#if !account.hasStoredKey}
-							<p class="mt-1 text-xs text-amber-400">
-								The settings file has no stored key for this account, so one has to be entered
-								before it can be saved.
-							</p>
-						{/if}
+						<p class="help">
+							What tells two accounts on one Immich server apart. Written to the settings file only
+							when you give one.
+						</p>
 					{/if}
 				</div>
 
+				<div>
+					<label class="field-label" for="{account.key}-url">Immich server URL</label>
+					<input
+						id="{account.key}-url"
+						type="text"
+						class="input"
+						placeholder="http://immich.example.com:2283"
+						value={account.serverUrl}
+						oninput={(event) => (account.serverUrl = event.currentTarget.value)}
+					/>
+				</div>
+
+				<div>
+					<label class="field-label" for="{account.key}-key-file">API key file</label>
+					<input
+						id="{account.key}-key-file"
+						type="text"
+						class="input"
+						placeholder="Leave blank to store the key in the settings file"
+						value={account.apiKeyFile}
+						oninput={(event) => (account.apiKeyFile = event.currentTarget.value)}
+					/>
+				</div>
+			</div>
+
+			<div class="key">
+				<!-- The heading is inside each branch rather than once above them because it is a
+				     `<label for>` in only two of the four key states: the box it names is rendered when a
+				     key is being typed and not otherwise, and a `for` pointing at an id that is not in the
+				     document names nothing while looking like it does. Kept in the branch the input is in,
+				     so the two cannot drift apart. -->
+				{#if usesApiKeyFile(account)}
+					<span class="field-label">API key</span>
+					<p class="key-note">
+						Read from the file above at start-up. ImmichFrame refuses a configuration that names
+						both a key file and a key, so there is nothing to type here; clear the path to type a
+						key instead.
+					</p>
+				{:else if account.hasStoredKey && !account.entering}
+					<span class="field-label">API key</span>
+					<div class="key-row">
+						<span class="stored">Set</span>
+						<button
+							type="button"
+							class="btn btn-secondary"
+							onclick={() => (account.entering = true)}
+						>
+							Replace key
+						</button>
+					</div>
+				{:else}
+					<label class="field-label" for="{account.key}-key">API key</label>
+					<div class="key-row">
+						<input
+							id="{account.key}-key"
+							type="password"
+							autocomplete="new-password"
+							class="input key-input"
+							placeholder="Immich API key"
+							bind:value={account.apiKey}
+						/>
+						{#if account.hasStoredKey}
+							<button
+								type="button"
+								class="btn btn-secondary"
+								onclick={() => {
+									account.entering = false;
+									account.apiKey = '';
+								}}
+							>
+								Keep stored key
+							</button>
+						{/if}
+					</div>
+					{#if !account.hasStoredKey}
+						<p class="key-warning">
+							The settings file has no stored key for this account, so one has to be entered before
+							it can be saved.
+						</p>
+					{/if}
+				{/if}
+			</div>
+
+			<footer class="foot">
 				{#if account.disagreeing.length > 0}
 					<!-- Said rather than quietly resolved: the file is asserting one account and then
 					     describing it two ways, and a save writes the credentials above over every copy.
@@ -300,7 +305,7 @@
 					     section. The one disagreement that cannot be written through - a stored key kept
 					     here against an entry that reads its key from a file - is refused by
 					     `validationErrors` instead, since that entry would be left with no credential. -->
-					<p class="mb-1 text-xs text-amber-400">
+					<p class="note warn">
 						The settings file describes this account differently in {account.disagreeing
 							.map(namedEntry)
 							.join(', ')} - another server URL, or another API key file. Saving writes the label, server
@@ -309,23 +314,281 @@
 				{/if}
 
 				{#if used.length === 0}
-					<p class="text-xs text-amber-400">
+					<p class="note warn">
 						No configuration uses this account, so saving leaves it out of the settings file
 						altogether. Tick it under a configuration below, or remove it.
 					</p>
 				{:else}
-					<p class="text-xs text-neutral-500">
+					<p class="note">
 						Used by {used.map(entryLabel).join(', ')}. Editing anything above changes it for all of
 						them.
 					</p>
 				{/if}
-			</div>
-		{/each}
-	</div>
+			</footer>
+		</article>
+	{/each}
 
 	{#if removeError}
-		<p class="mt-2 text-sm text-red-300">{removeError}</p>
+		<p class="error">{removeError}</p>
 	{/if}
 
-	<button type="button" class="{button} mt-3" onclick={addAccount}>Add account</button>
+	<button type="button" class="btn btn-secondary add" onclick={addAccount}>Add account</button>
 </section>
+
+<style>
+	/*
+	 * The four elements of a section header, in the order and at the sizes `entry-editor.svelte`
+	 * gives the five below this one: this section heads the same page and a second shape for the
+	 * same thing would only say the two are unrelated. 26px against the sheet's 32px and 24px
+	 * between sections are that file's reasoning as well - none of these headings is the page's
+	 * title, and the rail's scroll-spy argues its detection band against this gap.
+	 */
+	.section {
+		margin: var(--space-6) 0;
+	}
+
+	.head {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: flex-end;
+		justify-content: space-between;
+		gap: var(--space-3);
+		padding-bottom: var(--space-2);
+		border-bottom: 2px solid var(--color-divider);
+	}
+
+	.title {
+		margin: 0;
+		font-size: 26px;
+	}
+
+	.blurb {
+		margin: 2px 0 0;
+		font-size: 13px;
+		color: var(--color-neutral-700);
+	}
+
+	/* Where the sections below say what inherits from them, this one says what it is not part of. */
+	.scope-note {
+		margin: 0;
+		font-size: 11.5px;
+		text-align: right;
+		color: var(--color-neutral-700);
+	}
+
+	/*
+	 * An installation with no accounts shows nothing at all, but that is a state to put right
+	 * rather than an action that failed: the warning role, as the banner's read-only and
+	 * legacy-schema notes take, and not the accent ramp this section spends on refusals.
+	 */
+	.empty {
+		margin: var(--space-3) 0 0;
+		font-size: 13px;
+		color: var(--color-warning-700);
+	}
+
+	.account {
+		margin-top: var(--space-3);
+		border: 1px solid var(--color-divider);
+	}
+
+	.strip {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-2);
+		padding: 12px 16px;
+		background: var(--color-neutral-200);
+		border-bottom: 1px solid var(--color-neutral-300);
+	}
+
+	/*
+	 * `min-width: 0` on the item and on the heading inside it, so a long name or a long URL is
+	 * truncated rather than widening the card: a flex item refuses to shrink below its own content
+	 * until it is told it may, and an account's name is whatever was typed into the box below.
+	 */
+	.ident {
+		min-width: 0;
+	}
+
+	.named {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+	}
+
+	.name,
+	.url {
+		min-width: 0;
+		margin: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	/* 16px against the sheet's 25px: this is a card's title, not a section's. */
+	.name {
+		font-size: 16px;
+	}
+
+	.url {
+		font-family: 'Overpass Mono', ui-monospace, monospace;
+		font-size: 12px;
+		color: var(--color-neutral-700);
+	}
+
+	/* Compounded with `.tag`: the two carry equal specificity, so a bare `.pill` would be settled
+	   by emission order the day it sets something the component class sets too. */
+	.tag.pill {
+		flex-shrink: 0;
+	}
+
+	/*
+	 * Removing an account takes its credentials out of every configuration that uses it, so it
+	 * wears the accent at 700 - the same dress, and the same reasoning, as the strip's
+	 * `delete-profile`. Compounded with `.btn`, which sets the colour and the border itself.
+	 */
+	.btn.remove {
+		flex-shrink: 0;
+		font-size: 12.5px;
+		color: var(--color-accent-700);
+		border-color: var(--color-accent-300);
+	}
+
+	.btn.remove:hover {
+		background: var(--color-accent-100);
+	}
+
+	/*
+	 * The three credentials side by side where there is room and stacked where there is not:
+	 * `auto-fit` drops a column each time the row can no longer give every one of them 240px,
+	 * which is what carries this band through the 900px breakpoint the rail goes static at.
+	 */
+	.fields {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+		gap: 18px;
+		padding: 18px 16px;
+	}
+
+	.field-label {
+		display: block;
+		margin-bottom: var(--space-1);
+		font-size: 13px;
+		font-weight: 600;
+	}
+
+	.help {
+		margin: var(--space-1) 0 0;
+		font-size: 11.5px;
+		color: var(--color-neutral-700);
+	}
+
+	/*
+	 * A collision is refused by `validationErrors` on save, so it takes the accent ramp at 700 the
+	 * way the section's other refusal does. Compounded so it beats `.help`'s own colour on
+	 * specificity rather than on which rule came second, as `secret-field.svelte`'s note does.
+	 */
+	.help.collides {
+		color: var(--color-accent-700);
+	}
+
+	/*
+	 * Its own band rather than a fourth cell of the grid above: three of the key's four states are
+	 * not a text box at all - a paragraph, a word beside a button, or a box with a button beside it
+	 * - and none of them is the shape a column sized for an input was drawn for.
+	 */
+	.key {
+		padding: 0 16px 18px;
+	}
+
+	.key-row {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--space-2);
+	}
+
+	/*
+	 * Shares its row with the button beside it, so it is sized by the flex line rather than by
+	 * `.input`'s own `width: 100%`, and `min-width: 0` is what lets it shrink past the width a text
+	 * box carries intrinsically. Compounded with `.input`, as `secret-field.svelte` does.
+	 */
+	.input.key-input {
+		flex: 1;
+		min-width: 0;
+	}
+
+	/*
+	 * Modernist is a mono palette and has no green to say "Set" in, so it is said by weight at full
+	 * strength against the played-down notes around it - which is how `secret-field.svelte` says
+	 * the same word. Its absence needs no tone of its own here: where there is no stored key the
+	 * word is replaced by a box asking for one, and not by a second word.
+	 */
+	.stored {
+		font-size: 14px;
+		font-weight: 600;
+	}
+
+	/* Informational, and neither a warning nor a refusal: the played-down tone, at the 14px the
+	   control it stands in for is set in rather than at a caption's size. */
+	.key-note {
+		margin: var(--space-1) 0 0;
+		font-size: 14px;
+		color: var(--color-neutral-700);
+	}
+
+	/* Something to put right before saving rather than something that failed: the warning role. */
+	.key-warning {
+		margin: var(--space-1) 0 0;
+		font-size: 12px;
+		color: var(--color-warning-700);
+	}
+
+	/*
+	 * Both of these are statements about the configurations this account appears in rather than
+	 * about the credentials above, which is why they share the band under the rule: what else is
+	 * true of this account elsewhere.
+	 */
+	.foot {
+		padding: 10px 16px;
+		font-size: 11.5px;
+		color: var(--color-neutral-700);
+		border-top: 1px solid var(--color-neutral-300);
+	}
+
+	.note {
+		margin: 0;
+	}
+
+	.note + .note {
+		margin-top: var(--space-1);
+	}
+
+	.note.warn {
+		color: var(--color-warning-700);
+	}
+
+	/* A refused removal is a failure, so it takes the accent ramp the save bar's errors take. */
+	.error {
+		margin: var(--space-3) 0 0;
+		font-size: 13px;
+		color: var(--color-accent-700);
+	}
+
+	.btn.add {
+		margin-top: var(--space-3);
+	}
+
+	/*
+	 * Tailwind's preflight paints a placeholder at half of `currentColor`, which composites to
+	 * 3.10:1 on the input's own surface - clear of the 3:1 floor but short of AA, and all four of
+	 * these are worked examples of what belongs in the box rather than decoration. Neutral-700 is
+	 * 5.38:1 on that same surface, and is the retune `setting-field.svelte` and the profile strip's
+	 * name box already make.
+	 */
+	.input::placeholder {
+		color: var(--color-neutral-700);
+	}
+</style>

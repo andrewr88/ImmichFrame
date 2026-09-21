@@ -290,23 +290,14 @@
 					{/if}
 				</section>
 
-				<!-- What is left of the containment wrapper. `.modernist` redefines
-				     `--color-neutral-100` through `-900` - the very variables Tailwind v4 resolves
-				     `text-neutral-*` and `border-neutral-*` through - so the light ground does not
-				     merely recolour a component still written in those classes, it inverts it: the
-				     profile tabs, before they were converted above, came out at 1.33:1. The entry
-				     editor has since been converted and lifted out of here, leaving the accounts
-				     section alone on the dark surface it was written for. It goes with task 004. -->
-				<div class="bg-neutral-950 p-4 text-neutral-100">
-					<!-- First in the pane, and listed apart from the profile's own sections in the rail,
-					     because an Immich account belongs to the configuration as a whole rather than to
-					     whichever tab happens to be selected: the same account is used by the default
-					     configuration and by any number of profiles, and is one set of credentials in all
-					     of them. -->
-					<fieldset disabled={readOnly}>
-						<AccountsSection {config} />
-					</fieldset>
-				</div>
+				<!-- First in the pane, and listed apart from the profile's own sections in the rail,
+				     because an Immich account belongs to the configuration as a whole rather than to
+				     whichever tab happens to be selected: the same account is used by the default
+				     configuration and by any number of profiles, and is one set of credentials in all
+				     of them. -->
+				<fieldset disabled={readOnly}>
+					<AccountsSection {config} />
+				</fieldset>
 
 				{#if current}
 					<fieldset disabled={readOnly}>
