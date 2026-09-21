@@ -40,6 +40,15 @@
 	// The default configuration has nothing above it, so its unset keys fall back to the setting's
 	// built-in default rather than to another configuration.
 	let inheritLabel = $derived(inheritFrom ? 'Inherited' : 'Built-in default');
+	// The same fact read from the other end, for the section headers: what the reader is looking at
+	// is either the values every profile starts from, or a profile that falls back to them.
+	let inheritNote = $derived(
+		inheritFrom
+			? 'Anything not overridden follows the default configuration'
+			: 'Every profile inherits what is not overridden here'
+	);
+	/** How a row's override control names this configuration when it offers to write into it. */
+	let editing = $derived(entryLabel(entry));
 	let accountsDeclared = $derived(entry.declared.includes(ACCOUNTS_KEY));
 	let inherited = $derived(inheritFrom ? usedSelections(inheritFrom) : []);
 	/** The accounts this profile is inheriting, in the order the section above lists them. */
@@ -132,10 +141,21 @@
 </script>
 
 {#each generalSections as section (section.title)}
-	<section class="mb-6" id="section-{section.title.toLowerCase()}">
-		<h3 class="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-400">
-			{section.title}
-		</h3>
+	<section class="section" id="section-{section.title.toLowerCase()}">
+		<header class="head">
+			<div>
+				<h2 class="title">{section.title}</h2>
+				<p class="blurb">{section.blurb}</p>
+			</div>
+			<p class="inherit-note">{inheritNote}</p>
+		</header>
+
+		<div class="columns">
+			<span>Setting</span>
+			<span>Value</span>
+			<span>Where it comes from</span>
+		</div>
+
 		{#each section.props as prop (prop)}
 			{@const spec = generalFields[prop]}
 			{@const id = `${entry.name}-${prop}`}
@@ -145,6 +165,7 @@
 				help={spec.help}
 				declared={declares(prop)}
 				{inheritLabel}
+				entryName={editing}
 				onToggle={(declared) => toggleGeneral(prop, declared)}
 			>
 				{#if spec.kind === 'secret'}
@@ -172,87 +193,177 @@
 	</section>
 {/each}
 
-<section class="mb-6" id="section-photo-selection">
-	<div class="mb-2 flex flex-wrap items-center justify-between gap-2">
-		<h3 class="text-sm font-semibold uppercase tracking-wide text-neutral-400">Immich accounts</h3>
-		{#if entry.isDefault}
-			<span class="text-xs text-neutral-500">
-				The default configuration always uses at least one of the accounts above.
-			</span>
+<section class="section" id="section-photo-selection">
+	<header class="head">
+		<div>
+			<h2 class="title">Photo selection</h2>
+			<p class="blurb">
+				Which of those accounts this configuration shows photos from, and what it shows from each.
+			</p>
+		</div>
+		<p class="inherit-note">{inheritNote}</p>
+	</header>
+
+	<!-- The last of the containment wrappers, and it goes with task 005. `.modernist` redefines
+	     `--color-neutral-100` through `-900`, which is what Tailwind v4 resolves `text-neutral-*` and
+	     `border-neutral-*` through, so this body on the light ground would not merely be recoloured,
+	     it would be inverted to around 1.3:1. The section's header above it is converted and sits
+	     outside the wrapper, so the rail still finds a section it can read. -->
+	<div class="bg-neutral-950 p-4 text-neutral-100">
+		<div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+			{#if entry.isDefault}
+				<span class="text-xs text-neutral-500">
+					The default configuration always uses at least one of the accounts above.
+				</span>
+			{:else}
+				<label class="flex items-center gap-2 text-xs text-neutral-400">
+					<input
+						type="checkbox"
+						class="h-3.5 w-3.5 accent-sky-500"
+						checked={accountsDeclared}
+						onchange={(event) => toggleAccounts(event.currentTarget.checked)}
+					/>
+					<span>{accountsDeclared ? 'Overridden' : 'Inherited'}</span>
+				</label>
+			{/if}
+		</div>
+
+		{#if accountsDeclared}
+			{#if !entry.isDefault && !entry.accountsWereDeclared}
+				<p class="mb-2 rounded border border-amber-600 bg-amber-950/40 p-2 text-xs text-amber-300">
+					This profile now declares its own accounts instead of inheriting them. The accounts ticked
+					below keep the API keys already stored for them, but changes to which accounts the default
+					configuration uses no longer reach this profile.
+				</p>
+			{/if}
+
+			{#if accounts.length === 0}
+				<p class="text-xs text-neutral-500">
+					There are no Immich accounts to choose from. Add one in the Immich accounts section above.
+				</p>
+			{/if}
+
+			<div class="space-y-3">
+				<!-- Keyed by the account's own key rather than its position: position is deliberately not an
+				     identity anywhere in this feature, and reusing a DOM node across a removal would put one
+				     account's photo selection under another. -->
+				{#each accounts as account, index (account.key)}
+					{@const selection = selectionFor(account)}
+					<div class="rounded border border-neutral-700 p-3">
+						<label class="flex items-center gap-2">
+							<input
+								type="checkbox"
+								class="h-4 w-4 shrink-0 accent-sky-500"
+								checked={selection?.uses === true}
+								onchange={(event) =>
+									setAccountUse(entry, account, event.currentTarget.checked, inheritFrom)}
+							/>
+							<span class="truncate text-sm text-neutral-200">{accountName(account, index)}</span>
+							{#if account.label.trim() && account.serverUrl.trim()}
+								<span class="truncate text-xs text-neutral-500">{account.serverUrl.trim()}</span>
+							{/if}
+						</label>
+
+						{#if selection?.uses}
+							<div class="mt-3">
+								<AccountEditor
+									id="{entry.name}-{account.key}"
+									{account}
+									{selection}
+									{version}
+									title="What {entryLabel(entry)} shows from this account"
+								/>
+							</div>
+						{/if}
+					</div>
+				{/each}
+			</div>
 		{:else}
-			<label class="flex items-center gap-2 text-xs text-neutral-400">
-				<input
-					type="checkbox"
-					class="h-3.5 w-3.5 accent-sky-500"
-					checked={accountsDeclared}
-					onchange={(event) => toggleAccounts(event.currentTarget.checked)}
-				/>
-				<span>{accountsDeclared ? 'Overridden' : 'Inherited'}</span>
-			</label>
+			<p class="mb-2 text-xs text-neutral-500">
+				Inherited from the default configuration. Override to choose which accounts this profile
+				shows and what it shows from each.
+			</p>
+			<ul class="space-y-1 text-sm text-neutral-300">
+				{#each inheritedAccounts as row (row.account.key)}
+					<li class="rounded border border-neutral-800 px-2 py-1">
+						{accountName(row.account, row.index)}
+					</li>
+				{/each}
+			</ul>
 		{/if}
 	</div>
-
-	{#if accountsDeclared}
-		{#if !entry.isDefault && !entry.accountsWereDeclared}
-			<p class="mb-2 rounded border border-amber-600 bg-amber-950/40 p-2 text-xs text-amber-300">
-				This profile now declares its own accounts instead of inheriting them. The accounts ticked
-				below keep the API keys already stored for them, but changes to which accounts the default
-				configuration uses no longer reach this profile.
-			</p>
-		{/if}
-
-		{#if accounts.length === 0}
-			<p class="text-xs text-neutral-500">
-				There are no Immich accounts to choose from. Add one in the Immich accounts section above.
-			</p>
-		{/if}
-
-		<div class="space-y-3">
-			<!-- Keyed by the account's own key rather than its position: position is deliberately not an
-			     identity anywhere in this feature, and reusing a DOM node across a removal would put one
-			     account's photo selection under another. -->
-			{#each accounts as account, index (account.key)}
-				{@const selection = selectionFor(account)}
-				<div class="rounded border border-neutral-700 p-3">
-					<label class="flex items-center gap-2">
-						<input
-							type="checkbox"
-							class="h-4 w-4 shrink-0 accent-sky-500"
-							checked={selection?.uses === true}
-							onchange={(event) =>
-								setAccountUse(entry, account, event.currentTarget.checked, inheritFrom)}
-						/>
-						<span class="truncate text-sm text-neutral-200">{accountName(account, index)}</span>
-						{#if account.label.trim() && account.serverUrl.trim()}
-							<span class="truncate text-xs text-neutral-500">{account.serverUrl.trim()}</span>
-						{/if}
-					</label>
-
-					{#if selection?.uses}
-						<div class="mt-3">
-							<AccountEditor
-								id="{entry.name}-{account.key}"
-								{account}
-								{selection}
-								{version}
-								title="What {entryLabel(entry)} shows from this account"
-							/>
-						</div>
-					{/if}
-				</div>
-			{/each}
-		</div>
-	{:else}
-		<p class="mb-2 text-xs text-neutral-500">
-			Inherited from the default configuration. Override to choose which accounts this profile shows
-			and what it shows from each.
-		</p>
-		<ul class="space-y-1 text-sm text-neutral-300">
-			{#each inheritedAccounts as row (row.account.key)}
-				<li class="rounded border border-neutral-800 px-2 py-1">
-					{accountName(row.account, row.index)}
-				</li>
-			{/each}
-		</ul>
-	{/if}
 </section>
+
+<style>
+	/*
+	 * The track list is declared here rather than in `override-row.svelte` so that the column
+	 * headings and the rows they head read one declaration between them, and so that the breakpoint
+	 * below governs both at once. 24px between sections is what the rail's scroll-spy reasons
+	 * against when it argues for a one-pixel detection band.
+	 */
+	.section {
+		--settings-grid: minmax(190px, 250px) minmax(0, 1fr) 210px;
+
+		margin: var(--space-6) 0;
+	}
+
+	.head {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: flex-end;
+		justify-content: space-between;
+		gap: var(--space-3);
+		padding-bottom: var(--space-2);
+		border-bottom: 2px solid var(--color-divider);
+	}
+
+	/* 26px against the sheet's 32px: five of these head one page and none of them is its title. */
+	.title {
+		margin: 0;
+		font-size: 26px;
+	}
+
+	.blurb {
+		margin: 2px 0 0;
+		font-size: 13px;
+		color: var(--color-neutral-700);
+	}
+
+	.inherit-note {
+		margin: 0;
+		font-size: 11.5px;
+		text-align: right;
+		color: var(--color-neutral-700);
+	}
+
+	/*
+	 * The mock's neutral-600 reads 3.85:1 on the page ground, under AA for a 10px label - the same
+	 * figure and the same answer as the profile strip's caption, which took neutral-700 for it.
+	 * That is 5.83:1 and is the tone every other played down caption on this page already wears.
+	 */
+	.columns {
+		display: grid;
+		grid-template-columns: var(--settings-grid);
+		gap: 20px;
+		padding: var(--space-3) 0 var(--space-1);
+		font-size: 10px;
+		letter-spacing: 0.13em;
+		text-transform: uppercase;
+		color: var(--color-neutral-700);
+		border-bottom: 1px solid var(--color-neutral-300);
+	}
+
+	/*
+	 * Below 900px a row is one column, where `config-editor.svelte` drops the rail out of a column
+	 * of its own. The headings go with it: three column names over a single column head nothing.
+	 */
+	@media (max-width: 900px) {
+		.section {
+			--settings-grid: minmax(0, 1fr);
+		}
+
+		.columns {
+			display: none;
+		}
+	}
+</style>

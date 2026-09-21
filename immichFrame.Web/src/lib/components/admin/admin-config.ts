@@ -125,9 +125,10 @@ export const generalFields: Record<GeneralProp, FieldSpec> = {
 };
 
 /** Every key of {@link generalFields} appears in exactly one of these. */
-export const generalSections: { title: string; props: GeneralProp[] }[] = [
+export const generalSections: { title: string; blurb: string; props: GeneralProp[] }[] = [
 	{
 		title: 'Slideshow',
+		blurb: 'How long each photo stays on screen, and how it moves.',
 		props: [
 			'interval',
 			'transitionDuration',
@@ -140,6 +141,7 @@ export const generalSections: { title: string; props: GeneralProp[] }[] = [
 	},
 	{
 		title: 'Overlay',
+		blurb: 'What is drawn over the photo.',
 		props: [
 			'showClock',
 			'clockFormat',
@@ -157,10 +159,12 @@ export const generalSections: { title: string; props: GeneralProp[] }[] = [
 	},
 	{
 		title: 'Appearance',
+		blurb: 'Colour, type and language of the frame itself.',
 		props: ['primaryColor', 'secondaryColor', 'style', 'baseFontSize', 'language']
 	},
 	{
 		title: 'Weather',
+		blurb: 'The weather panel and where it reads from.',
 		props: [
 			'weatherApiKey',
 			'unitSystem',
@@ -171,6 +175,7 @@ export const generalSections: { title: string; props: GeneralProp[] }[] = [
 	},
 	{
 		title: 'Server',
+		blurb: 'Caching, refresh intervals and the secrets a frame must send.',
 		props: [
 			'downloadImages',
 			'renewImagesDuration',

@@ -294,10 +294,9 @@
 				     `--color-neutral-100` through `-900` - the very variables Tailwind v4 resolves
 				     `text-neutral-*` and `border-neutral-*` through - so the light ground does not
 				     merely recolour a component still written in those classes, it inverts it: the
-				     profile tabs, before they were converted above, came out at 1.33:1. The chrome
-				     around it has now been lifted out and only the two unconverted children are left
-				     on the dark surface they were written for - the accounts section (task 004) and
-				     the entry editor (tasks 003 and 005). It goes with the last of them. -->
+				     profile tabs, before they were converted above, came out at 1.33:1. The entry
+				     editor has since been converted and lifted out of here, leaving the accounts
+				     section alone on the dark surface it was written for. It goes with task 004. -->
 				<div class="bg-neutral-950 p-4 text-neutral-100">
 					<!-- First in the pane, and listed apart from the profile's own sections in the rail,
 					     because an Immich account belongs to the configuration as a whole rather than to
@@ -307,18 +306,18 @@
 					<fieldset disabled={readOnly}>
 						<AccountsSection {config} />
 					</fieldset>
-
-					{#if current}
-						<fieldset disabled={readOnly}>
-							<EntryEditor
-								entry={current}
-								accounts={config.accounts}
-								inheritFrom={current.isDefault ? null : config.default}
-								version={config.version}
-							/>
-						</fieldset>
-					{/if}
 				</div>
+
+				{#if current}
+					<fieldset disabled={readOnly}>
+						<EntryEditor
+							entry={current}
+							accounts={config.accounts}
+							inheritFrom={current.isDefault ? null : config.default}
+							version={config.version}
+						/>
+					</fieldset>
+				{/if}
 			</div>
 
 			{#if !readOnly}
