@@ -483,3 +483,9 @@ audit/audit.db-shm
 immichframe.db
 immichframe.db-wal
 immichframe.db-shm
+
+# Task briefs written by the agent workflow in .claude/skills. They are working
+# notes for one change, not documentation of the result - what they decided ends
+# up in the commit message and in the code's own comments - and they went stale
+# as soon as the work they describe landed.
+misc/
