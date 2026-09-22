@@ -643,24 +643,10 @@
 	 * import comment is where that order is written down.
 	 */
 
-	/*
-	 * The ground everything below was coloured against, stated here rather than waited for. Until
-	 * 006 removes `entry-editor.svelte`'s containment wrapper this subtree sits on
-	 * `bg-neutral-950`, and the recolours this task makes are the ones that suffer worst on it:
-	 * the two `.note` captions fall from 6.85:1 at HEAD to 3.04:1 and the two `.note.warn` lines
-	 * from about 11:1 to 2.65:1, all four 12px body text, while the two `.btn-secondary` controls
-	 * read 1.19:1 on a 1.06:1 edge. On `--color-bg` those same figures are 5.83:1, 6.70:1,
-	 * 14.86:1 and 2.41:1. One rule rather than six per-element retunes to undo again in 006.
-	 *
-	 * Goes with 006: when the wrapper is gone this ground is the page's own and the rule is
-	 * redundant. The padding is what keeps a light panel inside a dark card looking deliberate.
-	 */
 	.picker {
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-2);
-		padding: var(--space-3);
-		background: var(--color-bg);
 	}
 
 	/* Captions, notices and refusals alike: played down, and raised to the warning role where the
@@ -692,11 +678,13 @@
 	}
 
 	/*
-	 * `color` is set here rather than inherited, and it is not decoration: `entry-editor.svelte`'s
-	 * containment wrapper paints its subtree `text-neutral-100`, which Tailwind resolves through
-	 * the very token `.modernist` redefines - so a chip on its own near-white fill would inherit
-	 * near-white text until 006 takes the wrapper away. The system's own `.btn` and `.input` state
-	 * their colour for the same reason.
+	 * `color` here is defensive rather than a fix for anything present: with the containment wrapper
+	 * gone nothing between `.modernist` and a chip sets one, so this `<li>` already inherits the
+	 * sheet's own `--color-text` and the declaration is a no-op today. Kept because the chip is what
+	 * would suffer most if something overhead ever did set one - it carries its own near-white fill,
+	 * so near-white text would leave it blank. The system's own `.btn` and `.input` state theirs for
+	 * a reason that does not reach an `<li>`: the UA stylesheet gives a form control a colour of its
+	 * own to override, and gives a list item none.
 	 */
 	.chip {
 		display: inline-flex;
@@ -836,9 +824,10 @@
 	}
 
 	/*
-	 * The heavy edge the design gives a dialog; the elevation is already the system's. `color` for
-	 * the same reason the chip states one - this whole subtree is inside the containment wrapper's
-	 * `text-neutral-100` until 006.
+	 * The heavy edge the design gives a dialog; the elevation is already the system's. `color` is the
+	 * chip's guard again and just as redundant: this is a `<div role="dialog">` rather than a
+	 * `<dialog>` element, so there is no UA `CanvasText` on it to beat and it inherits `--color-text`
+	 * like everything else on the page.
 	 */
 	.dialog.picker-dialog {
 		width: min(700px, 100%);

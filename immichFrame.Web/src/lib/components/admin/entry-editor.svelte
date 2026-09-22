@@ -204,94 +204,103 @@
 		<p class="inherit-note">{inheritNote}</p>
 	</header>
 
-	<!-- The last of the containment wrappers, and it goes with task 005. `.modernist` redefines
-	     `--color-neutral-100` through `-900`, which is what Tailwind v4 resolves `text-neutral-*` and
-	     `border-neutral-*` through, so this body on the light ground would not merely be recoloured,
-	     it would be inverted to around 1.3:1. The section's header above it is converted and sits
-	     outside the wrapper, so the rail still finds a section it can read. -->
-	<div class="bg-neutral-950 p-4 text-neutral-100">
-		<div class="mb-2 flex flex-wrap items-center justify-between gap-2">
-			{#if entry.isDefault}
-				<span class="text-xs text-neutral-500">
-					The default configuration always uses at least one of the accounts above.
-				</span>
-			{:else}
-				<label class="flex items-center gap-2 text-xs text-neutral-400">
-					<input
-						type="checkbox"
-						class="h-3.5 w-3.5 accent-sky-500"
-						checked={accountsDeclared}
-						onchange={(event) => toggleAccounts(event.currentTarget.checked)}
-					/>
-					<span>{accountsDeclared ? 'Overridden' : 'Inherited'}</span>
-				</label>
-			{/if}
-		</div>
-
-		{#if accountsDeclared}
-			{#if !entry.isDefault && !entry.accountsWereDeclared}
-				<p class="mb-2 rounded border border-amber-600 bg-amber-950/40 p-2 text-xs text-amber-300">
-					This profile now declares its own accounts instead of inheriting them. The accounts ticked
-					below keep the API keys already stored for them, but changes to which accounts the default
-					configuration uses no longer reach this profile.
-				</p>
-			{/if}
-
-			{#if accounts.length === 0}
-				<p class="text-xs text-neutral-500">
-					There are no Immich accounts to choose from. Add one in the Immich accounts section above.
-				</p>
-			{/if}
-
-			<div class="space-y-3">
-				<!-- Keyed by the account's own key rather than its position: position is deliberately not an
-				     identity anywhere in this feature, and reusing a DOM node across a removal would put one
-				     account's photo selection under another. -->
-				{#each accounts as account, index (account.key)}
-					{@const selection = selectionFor(account)}
-					<div class="rounded border border-neutral-700 p-3">
-						<label class="flex items-center gap-2">
-							<input
-								type="checkbox"
-								class="h-4 w-4 shrink-0 accent-sky-500"
-								checked={selection?.uses === true}
-								onchange={(event) =>
-									setAccountUse(entry, account, event.currentTarget.checked, inheritFrom)}
-							/>
-							<span class="truncate text-sm text-neutral-200">{accountName(account, index)}</span>
-							{#if account.label.trim() && account.serverUrl.trim()}
-								<span class="truncate text-xs text-neutral-500">{account.serverUrl.trim()}</span>
-							{/if}
-						</label>
-
-						{#if selection?.uses}
-							<div class="mt-3">
-								<AccountEditor
-									id="{entry.name}-{account.key}"
-									{account}
-									{selection}
-									{version}
-									title="What {entryLabel(entry)} shows from this account"
-								/>
-							</div>
-						{/if}
-					</div>
-				{/each}
-			</div>
-		{:else}
-			<p class="mb-2 text-xs text-neutral-500">
-				Inherited from the default configuration. Override to choose which accounts this profile
-				shows and what it shows from each.
+	<div class="banner">
+		{#if entry.isDefault}
+			<p class="banner-note">
+				The default configuration always uses at least one of the accounts above.
 			</p>
-			<ul class="space-y-1 text-sm text-neutral-300">
-				{#each inheritedAccounts as row (row.account.key)}
-					<li class="rounded border border-neutral-800 px-2 py-1">
-						{accountName(row.account, row.index)}
-					</li>
-				{/each}
-			</ul>
+		{:else}
+			<!-- 003's override control, declared again here because Svelte scopes a component's styles
+			     to the component that declares them. The same control in every other respect: the
+			     accounts list is a declared key like any other, and this says the same thing about it
+			     that the third column says about a setting - written here, or followed from there. -->
+			<label
+				class="override"
+				class:is-declared={accountsDeclared}
+				title={accountsDeclared
+					? 'This configuration writes this setting. Click to stop overriding it.'
+					: `Click to override this setting in ${editing}.`}
+			>
+				<!-- Named for the same reason a row's box is: on its own this is a thirty-first
+				     "Overridden, checkbox" among the sections above, and the one that is not a setting.
+				     The visible word leads the name so a voice user can still ask for what they see. -->
+				<input
+					type="checkbox"
+					class="box"
+					aria-label="{accountsDeclared ? 'Overridden' : inheritLabel}: Photo selection"
+					checked={accountsDeclared}
+					onchange={(event) => toggleAccounts(event.currentTarget.checked)}
+				/>
+				<span>{accountsDeclared ? 'Overridden' : inheritLabel}</span>
+			</label>
 		{/if}
 	</div>
+
+	{#if accountsDeclared}
+		{#if !entry.isDefault && !entry.accountsWereDeclared}
+			<p class="warning">
+				This profile now declares its own accounts instead of inheriting them. The accounts ticked
+				below keep the API keys already stored for them, but changes to which accounts the default
+				configuration uses no longer reach this profile.
+			</p>
+		{/if}
+
+		{#if accounts.length === 0}
+			<p class="warning">
+				There are no Immich accounts to choose from. Add one in the Immich accounts section above.
+			</p>
+		{/if}
+
+		<!-- Keyed by the account's own key rather than its position: position is deliberately not an
+		     identity anywhere in this feature, and reusing a DOM node across a removal would put one
+		     account's photo selection under another. -->
+		{#each accounts as account, index (account.key)}
+			{@const selection = selectionFor(account)}
+			{@const uses = selection?.uses === true}
+			<article class="account">
+				<!-- The whole strip is the label, so the name and the state beside the box toggle the
+				     account too: what the strip says is what the box answers. -->
+				<label class="account-head" class:is-used={uses}>
+					<input
+						type="checkbox"
+						class="check"
+						checked={uses}
+						onchange={(event) =>
+							setAccountUse(entry, account, event.currentTarget.checked, inheritFrom)}
+					/>
+					<span class="account-name">{accountName(account, index)}</span>
+					{#if account.label.trim() && account.serverUrl.trim()}
+						<!-- Only beside a name that is not already it: an account with no label is named by
+						     its server URL, and `accountName` is what decides that. -->
+						<span class="account-url">{account.serverUrl.trim()}</span>
+					{/if}
+					<span class="account-state">{uses ? 'Shows photos from this account' : 'Not used'}</span>
+				</label>
+
+				{#if selection?.uses}
+					<div class="account-body">
+						<AccountEditor
+							id="{entry.name}-{account.key}"
+							{account}
+							{selection}
+							{version}
+							title="What {entryLabel(entry)} shows from this account"
+						/>
+					</div>
+				{/if}
+			</article>
+		{/each}
+	{:else}
+		<p class="inherited-note">
+			Inherited from the default configuration. Override to choose which accounts this profile shows
+			and what it shows from each.
+		</p>
+		<ul class="inherited">
+			{#each inheritedAccounts as row (row.account.key)}
+				<li>{accountName(row.account, row.index)}</li>
+			{/each}
+		</ul>
+	{/if}
 </section>
 
 <style>
@@ -354,6 +363,246 @@
 	}
 
 	/*
+	 * Photo selection, from here down. The wrapper that used to sit around this body was hiding
+	 * every colour in it, and taking it away is the whole of this section's conversion - so these
+	 * bands are read against the page's own `--color-bg`, save for the one fill the section keeps:
+	 * a used account's header strip paints `--color-neutral-200`. That is not a rare state either,
+	 * and since the strip's `is-used` and the box's `checked` are one variable read twice, a used
+	 * account's URL and status are never seen on anything else.
+	 *
+	 * Both grounds clear AA. Neutral-700 is 5.30:1 on neutral-200 against 5.83:1 on
+	 * `--color-bg`, for the 12px URL and the 11px status alike; the name inherits `--color-text`,
+	 * 13.51:1 and 14.86:1. The box's own figures are with the box, below.
+	 */
+
+	.banner {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		/*
+		 * The control is pushed to the end rather than parted from something by `space-between`: on
+		 * a profile it is the only thing in this row, and a lone item in a `space-between` row sits
+		 * at the start - which is where it has been sitting since 003 took away the heading it used
+		 * to share the row with.
+		 */
+		justify-content: flex-end;
+		gap: var(--space-3);
+		margin-top: var(--space-3);
+		padding: 12px 16px;
+		border: 1px solid var(--color-divider);
+	}
+
+	/* Capped at a readable measure rather than run across the page, and kept to the left end of the
+	   row by its own margin so the control opposite it stays at the right. */
+	.banner-note {
+		max-width: 620px;
+		margin: 0 auto 0 0;
+		font-size: 12.5px;
+		color: var(--color-neutral-700);
+	}
+
+	/* 003's control, restated: `override-row.svelte` is where these three rules are explained. */
+	.override {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		padding: 6px 8px;
+		font-size: 12.5px;
+		font-weight: 400;
+		color: var(--color-neutral-700);
+		border: 1px solid var(--color-neutral-300);
+		cursor: pointer;
+	}
+
+	.override.is-declared {
+		font-weight: 600;
+		color: var(--color-accent-700);
+		background: var(--color-accent-100);
+		border-color: var(--color-accent);
+	}
+
+	.box {
+		flex-shrink: 0;
+		width: 16px;
+		height: 16px;
+		margin: 0;
+		accent-color: var(--color-accent);
+	}
+
+	/*
+	 * Both are things to know or to put right before saving rather than actions that failed, so
+	 * they take the warning role - the same role, and the same reasoning, as the empty accounts
+	 * section in `accounts-section.svelte`. The accent ramp on this page means refused.
+	 */
+	.warning {
+		margin: var(--space-3) 0 0;
+		font-size: 13px;
+		color: var(--color-warning-700);
+	}
+
+	.account {
+		margin-top: var(--space-3);
+		border: 1px solid var(--color-divider);
+	}
+
+	/*
+	 * The strip is a `<label>` around the box, so a click anywhere along it ticks the account: the
+	 * name and the state it carries are the question the box answers, and neither is a control of
+	 * its own that a click could be meant for instead.
+	 */
+	.account-head {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--space-2) var(--space-3);
+		padding: 12px 16px;
+		cursor: pointer;
+		border-bottom: 1px solid var(--color-neutral-300);
+	}
+
+	/*
+	 * The rule under the strip parts it from the body below, so it goes when there is no body: the
+	 * body renders only for an account this configuration uses, so on one it does not the strip is
+	 * the panel's only child, and its own light rule lands on the panel's own `--color-divider`
+	 * edge - 2px of doubled line, light over dark, on the default state of every account a
+	 * configuration has not ticked.
+	 */
+	.account-head:last-child {
+		border-bottom: 0;
+	}
+
+	/* The fill is the section's answer at a glance: which of these accounts this configuration is
+	   showing photos from, readable without reading a word of any strip. */
+	.account-head.is-used {
+		background: var(--color-neutral-200);
+	}
+
+	/*
+	 * 003's box at 20px, and it travels with the escape hatch its `appearance: none` needs, for the
+	 * reason `setting-field.svelte` gives at length: forced-colors mode cannot rewrite that
+	 * declaration, so a ticked box would be an empty one. The fill and the rule are that box's too,
+	 * and neither had to be retuned - but not because the ground is the same as there. It is not:
+	 * `checked` and the strip's `is-used` are one variable read twice, so a ticked box is always on
+	 * the strip's `--color-neutral-200` and an empty one always on `--color-bg`.
+	 *
+	 * Both clear 1.4.11 on the ground they get, and would on the other. The ticked fill is 3.42:1
+	 * on neutral-200 and 3.76:1 on `--color-bg`; ticked and inactive, 3.50:1 and 3.85:1. An empty
+	 * box is its rule and nothing else - `--color-surface` is 1.08:1 on the page ground - and that
+	 * rule is 12.60:1 there, 11.45:1 on neutral-200.
+	 */
+	.check {
+		appearance: none;
+		display: grid;
+		place-content: center;
+		flex: none;
+		width: 20px;
+		height: 20px;
+		margin: 0;
+		background: var(--color-surface);
+		border: 1px solid var(--color-neutral-900);
+		border-radius: var(--radius-sm);
+		cursor: pointer;
+	}
+
+	.check:checked {
+		background: var(--color-accent);
+		border-color: var(--color-accent);
+	}
+
+	.check:checked::after {
+		content: '';
+		width: 10px;
+		height: 10px;
+		background: var(--color-bg);
+		clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
+	}
+
+	/* Read-only configurations disable the fieldset around this editor, and the platform's own box
+	   said so before this rule took its rendering away. 003's tones, which say it at full opacity. */
+	.check:disabled {
+		border-color: var(--color-neutral-600);
+		cursor: not-allowed;
+	}
+
+	.check:checked:disabled {
+		background: var(--color-neutral-600);
+		border-color: var(--color-neutral-600);
+	}
+
+	/*
+	 * `min-width: 0` on both, so a long name or a long URL is truncated rather than widening the
+	 * panel: a flex item refuses to shrink below its own content until it is told it may, and an
+	 * account's name is whatever was typed into the box in the section above.
+	 */
+	.account-name,
+	.account-url {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	/* 15px in the heading face: a panel's name, and one rank below the card titles in the accounts
+	   section, which is where this account is described rather than assigned. */
+	.account-name {
+		font-family: var(--font-heading);
+		font-weight: 800;
+		font-size: 15px;
+	}
+
+	.account-url {
+		font-family: 'Overpass Mono', ui-monospace, monospace;
+		font-size: 12px;
+		color: var(--color-neutral-700);
+	}
+
+	/* At the far end of the strip whatever else is in it, including a strip whose name has wrapped
+	   onto a line of its own. */
+	.account-state {
+		margin-left: auto;
+		font-size: 11px;
+		letter-spacing: 0.1em;
+		text-transform: uppercase;
+		color: var(--color-neutral-700);
+	}
+
+	.account-body {
+		padding: 18px 16px 22px;
+	}
+
+	/*
+	 * The one read-only state this section has, and so the one place the design's read-only note
+	 * belongs: an inheriting profile is shown the default configuration's accounts and cannot
+	 * choose among them. A rule down its left rather than a colour of its own, because nothing
+	 * here is wrong - following the default configuration is where a profile starts.
+	 */
+	.inherited-note {
+		max-width: 620px;
+		margin: var(--space-3) 0 0;
+		padding-left: 10px;
+		font-size: 12px;
+		color: var(--color-neutral-700);
+		border-left: 3px solid var(--color-neutral-400);
+	}
+
+	.inherited {
+		margin: var(--space-3) 0 0;
+		padding: 0;
+		list-style: none;
+	}
+
+	/* The strip above without its box: these are accounts this profile shows and cannot choose. */
+	.inherited li {
+		padding: 10px 16px;
+		font-size: 14px;
+		border: 1px solid var(--color-divider);
+	}
+
+	.inherited li + li {
+		margin-top: var(--space-2);
+	}
+
+	/*
 	 * Below 900px a row is one column, where `config-editor.svelte` drops the rail out of a column
 	 * of its own. The headings go with it: three column names over a single column head nothing.
 	 */
@@ -364,6 +613,23 @@
 
 		.columns {
 			display: none;
+		}
+	}
+
+	/*
+	 * The escape hatch that travels with `appearance: none`, and the only rule here that needs one:
+	 * forced-colors mode rewrites colour, background and border into the user's own palette, so
+	 * every other rule above comes through it working. Hand the box back to the platform, which
+	 * draws a tick that mode understands, and drop the clipped mark so it cannot be painted over
+	 * the platform's own.
+	 */
+	@media (forced-colors: active) {
+		.check {
+			appearance: auto;
+		}
+
+		.check:checked::after {
+			content: none;
 		}
 	}
 </style>
