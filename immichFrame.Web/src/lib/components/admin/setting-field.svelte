@@ -102,9 +102,9 @@
 	 * column is as wide as the window: a two letter language code in a box that crosses the screen
 	 * reads as a box that expects a paragraph.
 	 *
-	 * Compounded with `.input` rather than written alone, as the chrome above does: `.modernist
-	 * .input` and `.modernist textarea.input` set several of these properties themselves, so a bare
-	 * `.lines` would win or lose on whichever stylesheet the bundler happened to emit second.
+	 * Compounded with `.input` rather than written alone, as the chrome above does: `.admin-theme
+	 * .input` and `.admin-theme textarea.input` set several of these properties themselves, so a
+	 * bare `.lines` would win or lose on whichever stylesheet the bundler happened to emit second.
 	 */
 	.input.select {
 		max-width: 340px;
@@ -120,12 +120,12 @@
 		max-width: 420px;
 		font-family: 'Overpass Mono', ui-monospace, monospace;
 		font-size: 13px;
-		/* The three rows the design asks for, restated as a height: `.modernist textarea.input`'s 90px
-		   floor beats `rows="3"` and renders every list deeper than it is drawn. Three line boxes at
-		   the sheet's 1.55 on this 13px, plus `.input`'s own 6px padding and 1px border on each edge.
-		   The system's 90px is right for a textarea with no row count of its own and stays as it is;
-		   this is the only one here that has one. */
-		min-height: calc(3 * 1.55 * 13px + 2 * 6px + 2 * 1px);
+		/* The three rows the design asks for, restated as a height: `.admin-theme textarea.input`'s
+		   90px floor beats `rows="3"` and renders every list deeper than it is drawn. Three line boxes
+		   at the sheet's 1.55 on this 13px, plus `.input`'s own 10px padding and 1px border on each
+		   edge. The theme's 90px is right for a textarea with no row count of its own and stays as it
+		   is; this is the only one here that has one. */
+		min-height: calc(3 * 1.55 * 13px + 2 * 10px + 2 * 1px);
 	}
 
 	/*
@@ -209,7 +209,7 @@
 	 * and `--color-bg` both forced to `Canvas` a checked box would be an empty one. Hand the box
 	 * back to the platform, which draws a tick that mode understands and greys it when it is
 	 * inactive; drop the clipped mark so it cannot be painted over the platform's. The fade on a
-	 * disabled `.input` needs the same escape and now takes it in `modernist.css`, beside the rule
+	 * disabled `.input` needs the same escape and now takes it in `admin-theme.css`, beside the rule
 	 * it undoes - stated here it would tie with that rule on specificity and be settled by
 	 * whichever sheet the bundler emitted second.
 	 */

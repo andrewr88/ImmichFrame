@@ -119,9 +119,9 @@
 	}
 
 	/*
-	 * Modernist is a mono palette, so "Set" is not a green: it is said by weight against a played
-	 * down "Not set", which is the same pair of tones the rest of this pane tells apart with. The
-	 * played down tone is 5.83:1 on the page, so the subordinate state is read, not dimmed.
+	 * The admin theme has no success role, so "Set" is not a green: it is said by weight against a
+	 * played down "Not set", which is the same pair of tones the rest of this pane tells apart with.
+	 * The played down tone is 10.31:1 on the page, so the subordinate state is read, not dimmed.
 	 */
 	.status {
 		font-size: 14px;
@@ -140,8 +140,8 @@
 	}
 
 	/*
-	 * The warning role, not the accent. Having no secret and being asked for one are conditions to
-	 * understand before saving, the way the banner's legacy-schema consent is; the accent ramp is
+	 * The warning role, not the danger role. Having no secret and being asked for one are conditions
+	 * to understand before saving, the way the banner's legacy-schema consent is; the danger role is
 	 * what this pane spends on failures. `.note.warning` is compounded so it beats `.note`'s own
 	 * colour on specificity rather than on which rule came second.
 	 */

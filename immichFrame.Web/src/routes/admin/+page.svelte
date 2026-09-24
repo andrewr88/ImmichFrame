@@ -3,17 +3,17 @@
 	import * as api from '$lib/immichFrameApi';
 	import ConfigEditor from '$lib/components/admin/config-editor.svelte';
 	// Imported here rather than from app.css so the slideshow bundle never carries the admin
-	// design system. Every rule in it is nested under `.modernist`, which only this page sets.
+	// theme. Every rule in it is nested under `.admin-theme`, which only this page sets.
 	//
 	// After the component import, and not arbitrarily so: the bundler emits each module's CSS in
 	// the order the modules are pulled in, so the scoped rules of every component imported above
 	// land ahead of this sheet, and a tie between the two - the (0,3,0) that
-	// `.modernist .input:disabled` and a component's own `.input:disabled` both carry - is settled
+	// `.admin-theme .input:disabled` and a component's own `.input:disabled` both carry - is settled
 	// in the sheet's favour. That is the reverse of the usual base-first layering, and four of the
 	// admin components reason about it in their own comments. Swapping these two lines flips every
 	// such tie, and nothing fails. (This file's own style block is compiled after both and still
 	// comes last, so its rules win a tie either way.)
-	import '$lib/components/admin/modernist.css';
+	import '$lib/components/admin/admin-theme.css';
 
 	type View = 'loading' | 'error' | 'unconfigured' | 'signed-out' | 'not-admin' | 'admin';
 
@@ -91,7 +91,7 @@
 <!-- The custom property is left unset until the header has been laid out and measured, so that
      the declaration in the stylesheet below stands in meanwhile, not a zero overriding it. -->
 <div
-	class="modernist min-h-screen"
+	class="admin-theme min-h-screen"
 	style:--masthead-height={mastheadHeight ? `${mastheadHeight}px` : null}
 >
 	<header class="masthead" bind:offsetHeight={mastheadHeight}>
@@ -194,7 +194,7 @@
 	 * nothing behind the variable is invalid at computed-value time, which is to say `top: auto`:
 	 * the rail and the profile strip would both quietly stop sticking.
 	 */
-	.modernist {
+	.admin-theme {
 		--masthead-height: 61px;
 	}
 
@@ -294,7 +294,7 @@
 	}
 
 	/*
-	 * Compounded with `.card` rather than written alone: `.modernist .card` from the global sheet
+	 * Compounded with `.card` rather than written alone: `.admin-theme .card` from the global sheet
 	 * carries the same specificity, so a bare `.gate` would win or lose on whichever stylesheet
 	 * the bundler happened to emit second.
 	 */
@@ -329,11 +329,11 @@
 		margin-top: var(--space-2);
 	}
 
-	/* Failures take the accent ramp at 700: the bare accent is tuned to 3:1 and is not body copy. */
+	/* Failures take the danger role; the accent is for emphasis, not for faults. */
 	.card.gate-error {
-		background: var(--color-accent-100);
-		color: var(--color-accent-700);
-		border-left: 4px solid var(--color-accent);
+		background: var(--color-danger-100);
+		color: var(--color-danger-700);
+		border-left: 4px solid var(--color-danger-700);
 	}
 
 	/* The warning role, used where this view has always been amber: a refused account is not a fault. */

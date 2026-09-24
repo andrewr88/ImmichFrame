@@ -367,7 +367,7 @@
 
 <style>
 	/*
-	 * Compounded with `.card` rather than written alone: `.modernist .card` from the global sheet
+	 * Compounded with `.card` rather than written alone: `.admin-theme .card` from the global sheet
 	 * carries the same specificity, so a bare `.notice` would win or lose on whichever stylesheet
 	 * the bundler happened to emit second.
 	 */
@@ -377,11 +377,11 @@
 		padding: var(--space-4);
 	}
 
-	/* Failures take the accent ramp at 700: the bare accent is tuned to 3:1 and is not body copy. */
+	/* Failures take the danger role; the accent is for emphasis, not for faults. */
 	.card.notice {
-		background: var(--color-accent-100);
-		color: var(--color-accent-700);
-		border-left: 4px solid var(--color-accent);
+		background: var(--color-danger-100);
+		color: var(--color-danger-700);
+		border-left: 4px solid var(--color-danger-700);
 	}
 
 	.notice-text {
@@ -417,7 +417,7 @@
 
 	/*
 	 * The warning role, used where this banner has always been amber. Read-only and legacy-schema
-	 * are conditions to understand before saving, not failures, so they stay off the accent ramp
+	 * are conditions to understand before saving, not failures, so they stay off the danger role
 	 * the load error above uses.
 	 */
 	.warning {
@@ -539,7 +539,7 @@
 	}
 
 	/*
-	 * Compounded with the component class, like the cards above: `.modernist .input` sets both of
+	 * Compounded with the component class, like the cards above: `.admin-theme .input` sets both of
 	 * these properties and carries the specificity a bare `.new-profile` would, so which of them
 	 * won would come down to the order the bundler emitted the two sheets in.
 	 */
@@ -563,7 +563,8 @@
 
 	/*
 	 * Deleting a profile takes every frame on it offline, so it is the one control in this strip
-	 * that wears the accent - at 700, because the bare accent is tuned to 3:1 and this is a label.
+	 * that wears the accent, with the tint's border for an edge. Destructive, but not a fault, so it
+	 * stays off the danger role: the design dresses it in the primary.
 	 */
 	.btn.delete-profile {
 		color: var(--color-accent-700);
@@ -579,7 +580,7 @@
 		flex-basis: 100%;
 		margin: 0;
 		font-size: 13px;
-		color: var(--color-accent-700);
+		color: var(--color-danger-700);
 	}
 
 	/*
@@ -638,12 +639,12 @@
 		color: var(--color-accent-700);
 	}
 
-	/* Failures take the accent ramp at 700, as the load error above does. */
+	/* Failures take the danger role, as the load error above does. */
 	.save-problems,
 	.save-error {
 		margin: 0;
 		font-size: 13px;
-		color: var(--color-accent-700);
+		color: var(--color-danger-700);
 	}
 
 	/* Tailwind's preflight strips list markers from every `ul`, and these are a list of faults. */
@@ -653,7 +654,7 @@
 	}
 
 	/*
-	 * The warning role rather than the accent ramp: a profile queued for deletion is a consequence
+	 * The warning role rather than the danger role: a profile queued for deletion is a consequence
 	 * to understand before saving, the way the legacy-schema consent above it is, not a failure.
 	 */
 	.save-deletions {

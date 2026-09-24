@@ -637,7 +637,7 @@
 
 <style>
 	/*
-	 * Every rule that lands on an element already wearing a `modernist.css` component class is
+	 * Every rule that lands on an element already wearing an `admin-theme.css` component class is
 	 * compounded with it. The two carry equal specificity and this page imports the components
 	 * before the sheet, so an uncompounded rule would lose the tie silently - `routes/admin`'s own
 	 * import comment is where that order is written down.
@@ -679,7 +679,7 @@
 
 	/*
 	 * `color` here is defensive rather than a fix for anything present: with the containment wrapper
-	 * gone nothing between `.modernist` and a chip sets one, so this `<li>` already inherits the
+	 * gone nothing between `.admin-theme` and a chip sets one, so this `<li>` already inherits the
 	 * sheet's own `--color-text` and the declaration is a no-op today. Kept because the chip is what
 	 * would suffer most if something overhead ever did set one - it carries its own near-white fill,
 	 * so near-white text would leave it blank. The system's own `.btn` and `.input` state theirs for
@@ -931,7 +931,7 @@
 
 	/*
 	 * 003's box, copied rather than shared: `setting-field.svelte` scopes its own to itself and
-	 * `modernist.css` is not this task's to extend. A real check box with the platform's rendering
+	 * `admin-theme.css` is not this task's to extend. A real check box with the platform's rendering
 	 * taken off, and not a button wearing `aria-pressed` - the label association, the space bar and
 	 * the announced state all come with the element and none of them come with the button.
 	 *

@@ -432,7 +432,7 @@
 	/*
 	 * Both are things to know or to put right before saving rather than actions that failed, so
 	 * they take the warning role - the same role, and the same reasoning, as the empty accounts
-	 * section in `accounts-section.svelte`. The accent ramp on this page means refused.
+	 * section in `accounts-section.svelte`. The danger role on this page means refused.
 	 */
 	.warning {
 		margin: var(--space-3) 0 0;

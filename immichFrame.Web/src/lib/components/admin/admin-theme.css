@@ -1,0 +1,505 @@
+/*
+ * The admin UI's theme, in Immich's light look: a white ground, Tailwind's grays, Immich's primary
+ * blue for emphasis, Overpass throughout, pill-shaped buttons and round-cornered cards.
+ *
+ * Plain CSS on purpose: this is not a Tailwind entry point and must not become one (no `@apply`,
+ * no `@theme`, no `@source`). It is imported from `routes/admin/+page.svelte` rather than from
+ * `app.css` so the slideshow bundle never carries it, and every rule is nested under an
+ * `.admin-theme` root class so nothing here can reach the slideshow even if it were.
+ *
+ * A Svelte `<style>` block cannot do this job: Svelte scopes component styles to the component
+ * that declares them, and these classes are consumed by the admin's child components too.
+ *
+ * Contrast figures below are WCAG 2 ratios against the white ground unless another is named.
+ */
+
+.admin-theme {
+	/* Tailwind's gray, which is where every grey in the design comes from. */
+	--color-neutral-100: #f3f4f6;
+	--color-neutral-200: #e5e7eb;
+	--color-neutral-300: #d1d5db;
+	--color-neutral-400: #9ca3af;
+	--color-neutral-500: #6b7280;
+	--color-neutral-600: #4b5563;
+	--color-neutral-700: #374151;
+	--color-neutral-800: #1f2937;
+	--color-neutral-900: #111827;
+
+	--color-bg: #ffffff;
+	--color-text: var(--color-neutral-900);
+
+	/*
+	 * Muted is 7.56:1 and clears AA on every surface below. Faint is 4.83:1, and 4.72:1 on a card,
+	 * but drops under AA on the card header (4.39:1) and in an input (4.35:1): it is for text set
+	 * on the page, a card or a panel footer.
+	 */
+	--color-text-muted: var(--color-neutral-600);
+	--color-text-faint: var(--color-neutral-500);
+
+	/* A rule between things, and the edge of a control that draws one. */
+	--color-divider: var(--color-neutral-200);
+	--color-border: var(--color-neutral-300);
+
+	/* `--color-surface` is a card's fill; the other three are named for what they fill. */
+	--color-surface: #fcfcfd;
+	--color-surface-input: #f1f3f7;
+	--color-surface-header: var(--color-neutral-100);
+	--color-surface-footer: #f9fafb;
+
+	/*
+	 * Built in OKLCH around the design's four blues, which it holds exactly: 100 is the tint, 300
+	 * the tint's border, 700 the primary and 800 its hover. The steps between are spaced the way
+	 * Tailwind spaces its own ramps, at the design's hue. The primary is 700 because 700 is the
+	 * step the components set text in, and the design sets the primary as text throughout: 7.00:1,
+	 * and 6.17:1 on the tint. The bare accent is the same colour, for fills, edges and the ring.
+	 */
+	--color-accent: var(--color-accent-700);
+	--color-accent-100: #eef0fb;
+	--color-accent-200: #dde1f6;
+	--color-accent-300: #c5cbef;
+	--color-accent-400: #939fe7;
+	--color-accent-500: #6e7dd9;
+	--color-accent-600: #5462c3;
+	--color-accent-700: #4250af;
+	--color-accent-800: #37439a;
+	--color-accent-900: #303b8c;
+
+	/*
+	 * Two roles beside the accent, each a tint to fill with and a tone to write in. Danger is what
+	 * failed or was refused; warning is what to understand before saving, and the admin UI has
+	 * always told the two apart. Immich's own error red, #d32f2f, clears AA on white (4.98:1) but
+	 * only just on the danger tint (4.55:1), so danger's 700 is a step deeper on the same hue:
+	 * 6.47:1, and 5.91:1 on its tint. Warning is the design's own pair: 7.31:1, and 6.88:1.
+	 */
+	--color-danger-100: #fef2f2;
+	--color-danger-700: #b91c1c;
+	--color-warning-100: #fff7ed;
+	--color-warning-700: #9a3412;
+
+	--color-backdrop: rgba(17, 24, 39, 0.5);
+
+	--font-heading: 'Overpass', system-ui, sans-serif;
+	--font-body: 'Overpass', system-ui, sans-serif;
+	--font-mono: 'Overpass Mono', ui-monospace, monospace;
+
+	--space-1: 4px;
+	--space-2: 8px;
+	--space-3: 12px;
+	--space-4: 16px;
+	--space-6: 24px;
+	--space-8: 32px;
+
+	/* `--radius-sm` is a check box's corner; the rest are named for what wears them. */
+	--radius-sm: 6px;
+	--radius-input: 12px;
+	--radius-callout: 16px;
+	--radius-card: 24px;
+	--radius-pill: 999px;
+
+	--shadow-sm: 0 1px 2px rgba(17, 24, 39, 0.14);
+	--shadow-md: 0 3px 10px rgba(17, 24, 39, 0.16);
+	--shadow-lg: 0 24px 60px rgba(17, 24, 39, 0.22);
+
+	background: var(--color-bg);
+	color: var(--color-text);
+	font-family: var(--font-body);
+	font-size: 15px;
+	line-height: 1.55;
+}
+
+/*
+ * `app.css` paints `html` black for the slideshow, which shows through on overscroll behind a
+ * light admin page; `:has()` keeps the repaint to pages that carry the theme. The token is restated
+ * here because custom properties inherit downwards only — `--color-bg` is declared on
+ * `.admin-theme`, so `html` cannot read it.
+ */
+html:has(.admin-theme) {
+	--color-bg: #ffffff;
+
+	background: var(--color-bg);
+}
+
+/* The design sets every heading in Overpass at 600, with no tracking of its own. */
+.admin-theme h1,
+.admin-theme h2,
+.admin-theme h3,
+.admin-theme h4,
+.admin-theme h5,
+.admin-theme h6 {
+	font-family: var(--font-heading);
+	font-weight: 600;
+	line-height: 1.25;
+}
+
+.admin-theme h1 {
+	font-size: 32px;
+}
+
+.admin-theme h2 {
+	font-size: 26px;
+}
+
+.admin-theme h3 {
+	font-size: 18px;
+}
+
+.admin-theme h4 {
+	font-size: 16px;
+}
+
+.admin-theme h5 {
+	font-size: 14px;
+}
+
+/* The smallest heading is an uppercase label, dressed as the design dresses those. */
+.admin-theme h6 {
+	font-size: 11px;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--color-text-faint);
+}
+
+.admin-theme :focus-visible {
+	outline: 1px solid var(--color-accent);
+	outline-offset: 2px;
+}
+
+.admin-theme ::selection {
+	background: color-mix(in srgb, var(--color-accent) 30%, transparent);
+}
+
+.admin-theme .text-muted {
+	color: var(--color-text-muted);
+}
+
+/* Buttons, every one of them a pill */
+
+.admin-theme .btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	cursor: pointer;
+	text-decoration: none;
+	font-family: var(--font-heading);
+	font-weight: 600;
+	font-size: 14px;
+	line-height: 1.2;
+	color: var(--color-text);
+	background: transparent;
+	border: 1px solid transparent;
+	padding: var(--space-2) var(--space-4);
+	border-radius: var(--radius-pill);
+}
+
+.admin-theme .btn svg {
+	display: block;
+}
+
+/*
+ * The whole control fades, and at 0.45 a label reads 2.11:1. That is a figure for a control that
+ * cannot be used, which WCAG exempts, and not one for text that has to be read: see the disabled
+ * input below, which is why that one fades less.
+ */
+.admin-theme .btn:disabled {
+	opacity: 0.45;
+	cursor: not-allowed;
+}
+
+/* White on the primary is 7.00:1, and 8.64:1 on its hover. */
+.admin-theme .btn-primary {
+	background: var(--color-accent);
+	color: var(--color-bg);
+}
+
+.admin-theme .btn-primary:hover {
+	background: var(--color-accent-800);
+}
+
+.admin-theme .btn-primary:active {
+	background: var(--color-accent-900);
+}
+
+/* The primary as a label, 7.00:1 at rest and 6.17:1 on the hover's tint. */
+.admin-theme .btn-secondary {
+	color: var(--color-accent);
+	background: var(--color-bg);
+	border-color: var(--color-border);
+}
+
+.admin-theme .btn-secondary:hover {
+	background: var(--color-accent-100);
+}
+
+.admin-theme .btn-secondary:active {
+	background: var(--color-accent-200);
+}
+
+.admin-theme .btn-ghost {
+	color: var(--color-accent);
+	padding-inline: var(--space-1);
+}
+
+.admin-theme .btn-ghost:hover {
+	background: var(--color-accent-100);
+}
+
+.admin-theme .btn-ghost:active {
+	background: var(--color-accent-200);
+}
+
+.admin-theme .btn-icon {
+	width: 36px;
+	height: 36px;
+	padding: 0;
+}
+
+.admin-theme .btn-block {
+	width: 100%;
+	margin-top: var(--space-2);
+	justify-content: flex-start;
+	text-align: left;
+}
+
+/* Tags */
+
+.admin-theme .tag {
+	display: inline-flex;
+	align-items: center;
+	font-size: 11px;
+	letter-spacing: 0.02em;
+	padding: 3px 10px;
+	border-radius: var(--radius-pill);
+}
+
+/* The design's own pill, the one that names the configuration source: 6.17:1. */
+.admin-theme .tag-accent {
+	background: var(--color-accent-100);
+	color: var(--color-accent-700);
+}
+
+/* The same construction in the danger role, 5.91:1, for a tag that marks something refused. */
+.admin-theme .tag-danger {
+	background: var(--color-danger-100);
+	color: var(--color-danger-700);
+}
+
+.admin-theme .tag-neutral {
+	background: var(--color-neutral-100);
+	color: var(--color-neutral-800);
+}
+
+.admin-theme .tag-outline {
+	border: 1px solid var(--color-accent);
+	color: var(--color-accent);
+}
+
+/* Fields */
+
+/* An uppercase label, like the ones in `.table` and `.card-kicker`: open tracking, faint tone. */
+.admin-theme .field > label {
+	display: block;
+	font-size: 11px;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--color-text-faint);
+	margin-bottom: var(--space-1);
+}
+
+/* A filled box with no edge until it needs one. The value reads 15.97:1 on the fill. */
+.admin-theme .input {
+	width: 100%;
+	min-height: 36px;
+	padding: 10px 14px;
+	font: inherit;
+	font-size: 14px;
+	color: var(--color-text);
+	caret-color: var(--color-accent);
+	background: var(--color-surface-input);
+	border: 1px solid transparent;
+	border-radius: var(--radius-input);
+}
+
+.admin-theme .input:hover {
+	border-color: var(--color-border);
+}
+
+/* After `:hover`, which it ties with, so a focused box keeps its edge under the pointer. */
+.admin-theme .input:focus {
+	background: var(--color-bg);
+	border-color: var(--color-accent);
+}
+
+/*
+ * The ring lies against that edge rather than 2px outside it, so the two read as a single 2px line
+ * and not as the box drawn twice.
+ */
+.admin-theme .input:focus-visible {
+	outline-offset: 0;
+}
+
+/*
+ * A disabled input fades as a whole. This admin reaches that state two ways — a settings row that
+ * inherits rather than declares, and a whole configuration that cannot be edited, which
+ * `config-editor.svelte` says by disabling the fieldset around every section — so the treatment
+ * belongs to the theme rather than to whichever component needed it first. Kept in one component
+ * it was true only by luck: the accounts credentials sit under such a fieldset and would have
+ * rendered fully editable on a page whose point is that it cannot be saved.
+ *
+ * 0.7 rather than a button's 0.45, because an inherited value is the one a reader is most often
+ * here to read: faded, it is 6.15:1 against its own faded fill and 6.60:1 against the page behind
+ * it (6.17:1 and 6.52:1 on a card), where 0.45 would leave it at 2.80:1. A fade rather than tones,
+ * because the border, the placeholder and a select's own arrow go down with the text rather than
+ * each needing a tone of its own.
+ */
+.admin-theme .input:disabled {
+	opacity: 0.7;
+	cursor: not-allowed;
+}
+
+/*
+ * The fade's one escape hatch, and it travels with it: forced-colors mode already paints an
+ * inactive control in `GrayText`, which is what the fade was there to say, and `opacity` is not
+ * one of the properties that mode rewrites — so left on it would dim what the palette has said.
+ */
+@media (forced-colors: active) {
+	.admin-theme .input:disabled {
+		opacity: 1;
+	}
+}
+
+.admin-theme textarea.input {
+	min-height: 90px;
+	resize: vertical;
+}
+
+/* Cards */
+
+/* The rule is what draws a card: its fill is 1.03:1 against the page. */
+.admin-theme .card {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	padding: var(--space-3);
+	background: var(--color-surface);
+	border: 1px solid var(--color-divider);
+	border-radius: var(--radius-card);
+}
+
+.admin-theme .card-kicker {
+	font-size: 10px;
+	letter-spacing: 0.14em;
+	text-transform: uppercase;
+	color: var(--color-text-faint);
+}
+
+.admin-theme .card-title {
+	font-family: var(--font-heading);
+	font-weight: 600;
+	font-size: 17px;
+	line-height: 1.2;
+}
+
+.admin-theme .card-body {
+	margin: 0;
+	font-size: 13px;
+	opacity: 0.8;
+	flex: 1;
+}
+
+.admin-theme .card-meta {
+	display: flex;
+	gap: 6px;
+	font-size: 11px;
+	color: var(--color-text-faint);
+}
+
+/* Elevation */
+
+.admin-theme .elev-sm {
+	box-shadow: var(--shadow-sm);
+}
+
+.admin-theme .elev-md {
+	box-shadow: var(--shadow-md);
+}
+
+.admin-theme .elev-lg {
+	box-shadow: var(--shadow-lg);
+}
+
+/* Tables */
+
+.admin-theme .table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 14px;
+}
+
+.admin-theme .table th {
+	text-align: left;
+	font-size: 11px;
+	letter-spacing: 0.13em;
+	text-transform: uppercase;
+	color: var(--color-text-faint);
+	padding: var(--space-2);
+	border-bottom: 1px solid var(--color-divider);
+}
+
+.admin-theme .table td {
+	padding: var(--space-2);
+	border-bottom: 1px solid var(--color-divider);
+}
+
+.admin-theme .table tbody tr:hover {
+	background: color-mix(in srgb, var(--color-text) 4%, transparent);
+}
+
+/* Dialogs */
+
+.admin-theme .dialog-backdrop {
+	position: fixed;
+	inset: 0;
+	display: grid;
+	place-items: center;
+	padding: var(--space-4);
+	background: var(--color-backdrop);
+}
+
+.admin-theme .dialog {
+	width: min(440px, 100%);
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+	padding: var(--space-4);
+	border-radius: var(--radius-card);
+	background: var(--color-bg);
+	box-shadow: var(--shadow-lg);
+}
+
+.admin-theme .dialog-title {
+	font-family: var(--font-heading);
+	font-weight: 600;
+	font-size: 18px;
+}
+
+.admin-theme .dialog-body {
+	font-size: 14px;
+	opacity: 0.85;
+}
+
+.admin-theme .dialog-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: var(--space-2);
+	margin-top: var(--space-2);
+}
+
+/* Rules */
+
+.admin-theme .hr {
+	height: 1px;
+	border: 0;
+	margin: var(--space-4) 0;
+	background: var(--color-divider);
+}

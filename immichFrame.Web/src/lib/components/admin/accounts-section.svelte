@@ -171,7 +171,7 @@
 							<!-- Both rows are shown and both are marked, rather than one merged into the other:
 							     they are two accounts with two sets of credentials, and the header alone cannot
 							     say so once they share a label. -->
-							<span class="tag tag-accent pill">Duplicate label</span>
+							<span class="tag tag-danger pill">Duplicate label</span>
 						{/if}
 					</div>
 					{#if account.label.trim() && account.serverUrl.trim()}
@@ -379,7 +379,7 @@
 	/*
 	 * An installation with no accounts shows nothing at all, but that is a state to put right
 	 * rather than an action that failed: the warning role, as the banner's read-only and
-	 * legacy-schema notes take, and not the accent ramp this section spends on refusals.
+	 * legacy-schema notes take, and not the danger role this section spends on refusals.
 	 */
 	.empty {
 		margin: var(--space-3) 0 0;
@@ -486,12 +486,12 @@
 	}
 
 	/*
-	 * A collision is refused by `validationErrors` on save, so it takes the accent ramp at 700 the
-	 * way the section's other refusal does. Compounded so it beats `.help`'s own colour on
-	 * specificity rather than on which rule came second, as `secret-field.svelte`'s note does.
+	 * A collision is refused by `validationErrors` on save, so it takes the danger role the way the
+	 * section's other refusal does. Compounded so it beats `.help`'s own colour on specificity
+	 * rather than on which rule came second, as `secret-field.svelte`'s note does.
 	 */
 	.help.collides {
-		color: var(--color-accent-700);
+		color: var(--color-danger-700);
 	}
 
 	/*
@@ -521,7 +521,7 @@
 	}
 
 	/*
-	 * Modernist is a mono palette and has no green to say "Set" in, so it is said by weight at full
+	 * The admin theme has no success role to say "Set" in, so it is said by weight at full
 	 * strength against the played-down notes around it - which is how `secret-field.svelte` says
 	 * the same word. Its absence needs no tone of its own here: where there is no stored key the
 	 * word is replaced by a box asking for one, and not by a second word.
@@ -570,11 +570,11 @@
 		color: var(--color-warning-700);
 	}
 
-	/* A refused removal is a failure, so it takes the accent ramp the save bar's errors take. */
+	/* A refused removal is a failure, so it takes the danger role the save bar's errors take. */
 	.error {
 		margin: var(--space-3) 0 0;
 		font-size: 13px;
-		color: var(--color-accent-700);
+		color: var(--color-danger-700);
 	}
 
 	.btn.add {
