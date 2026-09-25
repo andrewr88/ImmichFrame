@@ -96,15 +96,17 @@
 >
 	<header class="masthead" bind:offsetHeight={mastheadHeight}>
 		<div class="masthead-inner">
-			<h1 class="brand">IMMICHFRAME</h1>
-			<p class="kicker">Configuration editor</p>
+			<div class="masthead-start">
+				<h1 class="brand">ImmichFrame</h1>
+				<p class="kicker">Configuration editor</p>
+			</div>
 
 			<div class="masthead-end">
 				{#if configSource}
 					<div class="source">
 						<span class="source-label">Configuration source</span>
 						<span
-							class="mono source-value"
+							class="tag tag-accent mono source-value"
 							title="Populated from the settings file on first run, and the single source of truth from then on."
 						>
 							{configSource}
@@ -113,7 +115,9 @@
 				{/if}
 				{#if session?.authenticated}
 					<span class="account">{session.email || session.subject}</span>
-					<button type="button" class="btn btn-secondary" onclick={signOut}>Sign out</button>
+					<button type="button" class="btn btn-secondary sign-out" onclick={signOut}>
+						Sign out
+					</button>
 				{/if}
 			</div>
 		</div>
@@ -188,62 +192,88 @@
 
 <style>
 	/*
-	 * The masthead at its usual height, its 59px of content plus the rule under it. The measurement
-	 * above replaces this inline the moment the header has been laid out; this is the floor under
-	 * it, and not a line to delete once the measurement works. `top: var(--masthead-height)` with
-	 * nothing behind the variable is invalid at computed-value time, which is to say `top: auto`:
-	 * the rail and the profile strip would both quietly stop sticking.
+	 * The masthead at its usual height, 64px with the rule under it. The measurement above replaces
+	 * this inline the moment the header has been laid out; this is the floor under it, and not a
+	 * line to delete once the measurement works. `top: var(--masthead-height)` with nothing behind
+	 * the variable is invalid at computed-value time, which is to say `top: auto`: the rail and the
+	 * profile strip would both quietly stop sticking.
+	 *
+	 * `--gutter` is the room the design leaves between the window's edges and what sits inside them.
+	 * The masthead and the gate views pad by it here, and the profile strip, the pane and the save
+	 * bar by the same in `config-editor.svelte`: one number for all of them, because they line up -
+	 * Sign out stands over Save configuration.
 	 */
 	.admin-theme {
-		--masthead-height: 61px;
+		--masthead-height: 64px;
+		--gutter: 28px;
 	}
 
+	/*
+	 * 64px as a floor rather than a height: on a narrow viewport the source and the account wrap
+	 * onto a line of their own, and a fixed box would cut them off. The content is centred in
+	 * whatever height that leaves, and the measurement above reports it either way.
+	 */
 	.masthead {
 		position: sticky;
 		top: 0;
 		z-index: 10;
+		display: grid;
+		align-items: center;
+		min-height: 64px;
 		background: var(--color-bg);
-		border-bottom: 2px solid var(--color-divider);
+		border-bottom: 1px solid var(--color-divider);
 	}
 
 	/*
 	 * Full width, not the 1100px the page's prose keeps: the editor below takes the window, so a
-	 * capped masthead would leave the brand floating well to the right of the rail it heads. This
-	 * and `.page` pad by the same `var(--space-4)` and the rail has no padding on its left, so the
-	 * brand's left edge lands on the rail items'. The gate views keep their measure - that is
-	 * `.page`'s doing, not the masthead's.
+	 * capped masthead would leave the brand floating well to the right of the rail it heads. The
+	 * gate views keep their measure - that is `.page`'s doing, not the masthead's - and pad by the
+	 * same gutter, so on a viewport narrower than that measure the brand's left edge lands on
+	 * theirs.
 	 */
 	.masthead-inner {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
-		gap: var(--space-3);
-		padding: var(--space-3) var(--space-4);
+		gap: var(--space-3) var(--space-6);
+		padding: var(--space-3) var(--gutter);
 	}
 
+	/* The brand and the kicker share a baseline, as the design sets them; the row centres them. */
+	.masthead-start {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 14px;
+		min-width: 0;
+	}
+
+	/* The design's wordmark, in the primary: 7.00:1. */
 	.brand {
 		margin: 0;
 		font-family: var(--font-heading);
-		font-weight: 800;
-		font-size: 19px;
+		font-weight: 700;
+		font-size: 21px;
 		line-height: 1.2;
-		letter-spacing: -0.02em;
+		letter-spacing: -0.01em;
+		color: var(--color-accent-700);
 	}
 
+	/* Muted, as the design sets both of the masthead's captions: 7.56:1. */
 	.kicker,
 	.source-label {
 		margin: 0;
 		font-size: 10.5px;
 		letter-spacing: 0.14em;
 		text-transform: uppercase;
-		color: var(--color-neutral-700);
+		color: var(--color-text-muted);
 	}
 
 	.masthead-end {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
-		gap: var(--space-3);
+		gap: var(--space-3) 20px;
 		margin-left: auto;
 	}
 
@@ -258,39 +288,52 @@
 		font-size: 13px;
 	}
 
-	.source-value {
-		font-size: 12px;
-		padding: 2px 8px;
-		background: var(--color-neutral-200);
-		border: 1px solid var(--color-neutral-300);
+	/*
+	 * The sheet's accent tag is the design's pill for exactly this - the primary on its tint,
+	 * 6.17:1 - set larger and heavier here, in the face `.mono` gives it. Compounded with `.tag`
+	 * because `.admin-theme .tag` sets these properties too, at the specificity a bare
+	 * `.source-value` would carry.
+	 */
+	.tag.source-value {
+		padding: 3px 12px;
+		font-size: 13px;
+		font-weight: 600;
+		letter-spacing: normal;
+	}
+
+	/* Muted, like the two captions it sits between: 7.56:1. */
+	.account {
+		font-size: 13px;
+		color: var(--color-text-muted);
 	}
 
 	/*
-	 * `--color-neutral-700` rather than `.text-muted`: the retuned mix does clear AA on this ground
-	 * (4.95:1), but this is 13px and it sits between the kicker and the source label, which are on
-	 * neutral-700 already. Matching them, and the headroom that comes with it (5.83:1), beats sharing
-	 * a token with the page body.
+	 * The design's size for this one, a step under the sheet's button: it is chrome, not an action on
+	 * the page. Compounded with `.btn`, which sets both properties at a bare class's specificity.
 	 */
-	.account {
+	.btn.sign-out {
+		padding: 7px 16px;
 		font-size: 13px;
-		color: var(--color-neutral-700);
 	}
 
 	.page {
 		max-width: 1100px;
 		margin: 0 auto;
-		padding: var(--space-6) var(--space-4);
+		padding: var(--space-6) var(--gutter);
 	}
 
 	/*
 	 * The gate views are prose and stay in the 1100px measure; the editor is a two-column workspace
-	 * and takes the window. Its foot goes with the width: the save bar is sticky at the bottom of
-	 * the pane, and page padding under it would hold it that far off the bottom of the screen at the
-	 * end of the scroll.
+	 * and takes the whole window, edge to edge. Its rail runs flush to the window's left edge, as the
+	 * design draws it, and its strip and save bar run to the right-hand one - each of them carries
+	 * the gutter itself, as do the loading and error states `config-editor.svelte` shows in the
+	 * editor's place. The foot goes with the rest: the save bar is sticky at the bottom of the pane,
+	 * and page padding under it would hold it that far off the bottom of the screen at the end of
+	 * the scroll.
 	 */
 	.page-editor {
 		max-width: none;
-		padding-bottom: 0;
+		padding: 0;
 	}
 
 	/*
@@ -310,12 +353,11 @@
 	}
 
 	/*
-	 * Not `.text-muted`, for the same reason `.account` is not: the retuned mix clears AA on a card
-	 * (4.78:1), but this paragraph is the only place the page says how to turn the admin surface on,
-	 * and neutral-700 gives it 5.38:1.
+	 * Muted: 7.37:1 on the card, headroom enough for the one place the page says how to turn the
+	 * editor on.
 	 */
 	.gate-note {
-		color: var(--color-neutral-700);
+		color: var(--color-text-muted);
 	}
 
 	.gate a {
@@ -329,17 +371,26 @@
 		margin-top: var(--space-2);
 	}
 
-	/* Failures take the danger role; the accent is for emphasis, not for faults. */
+	/*
+	 * Failures take the danger role; the accent is for emphasis, not for faults. Both of these are
+	 * callouts rather than cards: the role's tint, ruled all round in the role's own colour, at the
+	 * callout's radius. Danger's text is 5.91:1 on its tint.
+	 */
 	.card.gate-error {
 		background: var(--color-danger-100);
 		color: var(--color-danger-700);
-		border-left: 4px solid var(--color-danger-700);
+		border: 1px solid var(--color-danger-700);
+		border-radius: var(--radius-callout);
 	}
 
-	/* The warning role, used where this view has always been amber: a refused account is not a fault. */
+	/*
+	 * The warning role, used where this view has always been amber: a refused account is not a
+	 * fault. 6.88:1 on its tint.
+	 */
 	.card.gate-warning {
 		background: var(--color-warning-100);
 		color: var(--color-warning-700);
-		border-left: 4px solid var(--color-warning-700);
+		border: 1px solid var(--color-warning-700);
+		border-radius: var(--radius-callout);
 	}
 </style>

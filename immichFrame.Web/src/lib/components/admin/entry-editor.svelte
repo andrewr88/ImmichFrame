@@ -143,7 +143,7 @@
 {#each generalSections as section (section.title)}
 	<section class="section" id="section-{section.title.toLowerCase()}">
 		<header class="head">
-			<div>
+			<div class="head-text">
 				<h2 class="title">{section.title}</h2>
 				<p class="blurb">{section.blurb}</p>
 			</div>
@@ -195,7 +195,7 @@
 
 <section class="section" id="section-photo-selection">
 	<header class="head">
-		<div>
+		<div class="head-text">
 			<h2 class="title">Photo selection</h2>
 			<p class="blurb">
 				Which of those accounts this configuration shows photos from, and what it shows from each.
@@ -316,39 +316,50 @@
 		margin: var(--space-6) 0;
 	}
 
+	/*
+	 * The design's header: no rule under it, the title and blurb kept to a readable measure at one
+	 * end and the scope note at the other.
+	 */
 	.head {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: flex-end;
 		justify-content: space-between;
-		gap: var(--space-3);
-		padding-bottom: var(--space-2);
-		border-bottom: 2px solid var(--color-divider);
+		gap: var(--space-4);
+		padding-bottom: var(--space-1);
 	}
 
-	/* 26px against the sheet's 32px: five of these head one page and none of them is its title. */
+	.head-text {
+		max-width: 620px;
+	}
+
+	/*
+	 * 26px, the design's section heading, at the sheet's 600. The sheet gives every `h2` that size
+	 * now as well; it is held here all the same, because five of these head one page and none of
+	 * them is its title, whatever the sheet's own scale goes on to do.
+	 */
 	.title {
 		margin: 0;
 		font-size: 26px;
 	}
 
+	/* Muted, 7.56:1, as the scope note opposite it is. */
 	.blurb {
-		margin: 2px 0 0;
+		margin: 4px 0 0;
 		font-size: 13px;
-		color: var(--color-neutral-700);
+		color: var(--color-text-muted);
 	}
 
 	.inherit-note {
 		margin: 0;
 		font-size: 11.5px;
 		text-align: right;
-		color: var(--color-neutral-700);
+		color: var(--color-text-muted);
 	}
 
 	/*
-	 * The mock's neutral-600 reads 3.85:1 on the page ground, under AA for a 10px label - the same
-	 * figure and the same answer as the profile strip's caption, which took neutral-700 for it.
-	 * That is 5.83:1 and is the tone every other played down caption on this page already wears.
+	 * The design's faint caption, as the profile strip's and the rail's labels wear it: 4.83:1 on
+	 * the page ground these sit on.
 	 */
 	.columns {
 		display: grid;
@@ -358,7 +369,7 @@
 		font-size: 10px;
 		letter-spacing: 0.13em;
 		text-transform: uppercase;
-		color: var(--color-neutral-700);
+		color: var(--color-text-faint);
 		border-bottom: 1px solid var(--color-neutral-300);
 	}
 
@@ -370,9 +381,9 @@
 	 * and since the strip's `is-used` and the box's `checked` are one variable read twice, a used
 	 * account's URL and status are never seen on anything else.
 	 *
-	 * Both grounds clear AA. Neutral-700 is 5.30:1 on neutral-200 against 5.83:1 on
+	 * Both grounds clear AA. Neutral-700 is 8.33:1 on neutral-200 against 10.31:1 on
 	 * `--color-bg`, for the 12px URL and the 11px status alike; the name inherits `--color-text`,
-	 * 13.51:1 and 14.86:1. The box's own figures are with the box, below.
+	 * 14.33:1 and 17.74:1. The box's own figures are with the box, below.
 	 */
 
 	.banner {
@@ -463,8 +474,8 @@
 	/*
 	 * The rule under the strip parts it from the body below, so it goes when there is no body: the
 	 * body renders only for an account this configuration uses, so on one it does not the strip is
-	 * the panel's only child, and its own light rule lands on the panel's own `--color-divider`
-	 * edge - 2px of doubled line, light over dark, on the default state of every account a
+	 * the panel's only child, and its own rule lands on the panel's own `--color-divider` edge - 2px
+	 * of doubled line, in two different greys, on the default state of every account a
 	 * configuration has not ticked.
 	 */
 	.account-head:last-child {
@@ -485,10 +496,10 @@
 	 * `checked` and the strip's `is-used` are one variable read twice, so a ticked box is always on
 	 * the strip's `--color-neutral-200` and an empty one always on `--color-bg`.
 	 *
-	 * Both clear 1.4.11 on the ground they get, and would on the other. The ticked fill is 3.42:1
-	 * on neutral-200 and 3.76:1 on `--color-bg`; ticked and inactive, 3.50:1 and 3.85:1. An empty
-	 * box is its rule and nothing else - `--color-surface` is 1.08:1 on the page ground - and that
-	 * rule is 12.60:1 there, 11.45:1 on neutral-200.
+	 * Both clear 1.4.11 on the ground they get, and would on the other. The ticked fill is 5.66:1
+	 * on neutral-200 and 7.00:1 on `--color-bg`; ticked and inactive, 6.10:1 and 7.56:1. An empty
+	 * box is its rule and nothing else - `--color-surface` is 1.03:1 on the page ground - and that
+	 * rule is 17.74:1 there, 14.33:1 on neutral-200.
 	 */
 	.check {
 		appearance: none;

@@ -193,7 +193,7 @@
 </script>
 
 {#if loading}
-	<p class="text-muted">Loading the configuration…</p>
+	<p class="text-muted loading">Loading the configuration…</p>
 {:else if loadError}
 	<section class="card notice">
 		<p class="notice-text">{loadError}</p>
@@ -214,12 +214,15 @@
 			<div class="strip" bind:offsetHeight={stripHeight}>
 				<span class="strip-label">Editing</span>
 
+				<!-- `aria-pressed` says to assistive technology what the fill says on screen: which of
+				     these configurations is the one being edited. -->
 				<div class="tabs">
 					{#each entries as entry, index (entry.name + index)}
 						<button
 							type="button"
 							class="tab"
 							class:is-active={index === selected}
+							aria-pressed={index === selected}
 							onclick={() => (selected = index)}
 						>
 							{entry.isDefault ? 'Default configuration' : entry.name}
@@ -239,13 +242,13 @@
 							placeholder="kitchen"
 							bind:value={newProfileName}
 						/>
-						<button type="button" class="btn btn-secondary" onclick={addProfile}>
+						<button type="button" class="btn btn-secondary add-profile" onclick={addProfile}>
 							Add profile
 						</button>
 						{#if current && !current.isDefault}
 							<button
 								type="button"
-								class="btn delete-profile"
+								class="btn btn-secondary delete-profile"
 								onclick={() => removeProfile(current)}
 							>
 								Delete profile '{current.name}'…
@@ -351,7 +354,7 @@
 							{/if}
 							<button
 								type="button"
-								class="btn btn-primary"
+								class="btn btn-primary save-button"
 								disabled={saving || (needsConversion && !config.convertLegacySchema)}
 								onclick={save}
 							>
@@ -373,15 +376,35 @@
 	 */
 	.card.notice,
 	.card.banner {
-		margin-bottom: var(--space-4);
 		padding: var(--space-4);
 	}
 
-	/* Failures take the danger role; the accent is for emphasis, not for faults. */
+	.card.banner {
+		margin-bottom: var(--space-4);
+	}
+
+	/*
+	 * The page gives the editor the whole window, edge to edge. The loading line and the load error
+	 * stand where the editor will be, so they keep a page's margins of their own: the gutter at the
+	 * sides, and room under the masthead.
+	 */
+	.loading,
 	.card.notice {
+		margin: var(--space-6) var(--gutter);
+	}
+
+	/*
+	 * Failures take the danger role; the accent is for emphasis, not for faults. A callout rather
+	 * than a card: the role's tint, ruled all round in the role's own colour, at the callout's
+	 * radius. The text is 5.91:1 on the tint. Capped at the gate cards' measure, for the reason they
+	 * are: a sentence run across the whole window is a line too long to read.
+	 */
+	.card.notice {
+		max-width: 68ch;
 		background: var(--color-danger-100);
 		color: var(--color-danger-700);
-		border-left: 4px solid var(--color-danger-700);
+		border: 1px solid var(--color-danger-700);
+		border-radius: var(--radius-callout);
 	}
 
 	.notice-text {
@@ -402,12 +425,13 @@
 		margin: 0;
 	}
 
+	/* The masthead's caption, in the masthead's tone: muted, 7.37:1 on the card. */
 	.source-label {
 		margin: 0;
 		font-size: 10.5px;
 		letter-spacing: 0.14em;
 		text-transform: uppercase;
-		color: var(--color-neutral-700);
+		color: var(--color-text-muted);
 	}
 
 	.mono {
@@ -418,16 +442,17 @@
 	/*
 	 * The warning role, used where this banner has always been amber. Read-only and legacy-schema
 	 * are conditions to understand before saving, not failures, so they stay off the danger role
-	 * the load error above uses.
+	 * the load error above uses. A callout, as that error is: 6.88:1 on the tint.
 	 */
 	.warning {
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-2);
-		padding: var(--space-3);
+		padding: var(--space-3) var(--space-4);
 		background: var(--color-warning-100);
 		color: var(--color-warning-700);
-		border-left: 4px solid var(--color-warning-700);
+		border: 1px solid var(--color-warning-700);
+		border-radius: var(--radius-callout);
 	}
 
 	.warning-text {
@@ -481,53 +506,79 @@
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
-		gap: var(--space-3);
-		padding: var(--space-2) var(--space-4);
+		gap: var(--space-3) 18px;
+		/* The page publishes the gutter too, and the masthead pads by it: their ends line up. */
+		padding: 14px var(--gutter);
 		background: var(--color-bg);
-		border-bottom: 1px solid var(--color-neutral-300);
+		border-bottom: 1px solid var(--color-divider);
 	}
 
 	/*
-	 * The mock's neutral-600 reads 3.85:1 on the page ground, which is under AA for a 10px label.
-	 * Neutral-700 is 5.83:1 and is what the masthead's kicker and source label - the two captions
-	 * this sits in line with - already use, so matching the mock's tone here means matching them.
+	 * The design's faint caption, the tone the rail's group headings wear beside it: 4.83:1 on the
+	 * strip's white, which is the only ground it is ever on.
 	 */
 	.strip-label {
 		font-size: 10px;
 		letter-spacing: 0.14em;
 		text-transform: uppercase;
-		color: var(--color-neutral-700);
+		color: var(--color-text-faint);
 	}
 
 	/*
-	 * One segmented control rather than a row of separate buttons: the border belongs to the set and
-	 * the tabs divide it, which is what says that picking one of these is picking among alternatives.
+	 * One segmented control rather than a row of separate buttons: the track belongs to the set and
+	 * the tabs sit in it, which is what says that picking one of these is picking among alternatives.
+	 *
+	 * The edge is transparent, over the track's own fill, and with the 3px of padding inside it makes
+	 * the design's 4px. It is there for forced-colors mode, which drops the fill and paints every
+	 * border in the user's palette: without an edge of its own, nothing there would hold the tabs
+	 * together as one set. Which of them is selected, that mode is told below.
 	 */
 	.tabs {
 		display: flex;
 		flex-wrap: wrap;
-		border: 1px solid var(--color-divider);
+		gap: 2px;
+		padding: 3px;
+		background: var(--color-surface-input);
+		border: 1px solid transparent;
+		border-radius: var(--radius-pill);
 	}
 
+	/* Neutral-700 on the track, 9.28:1; the selected tab is white on the primary, 7.00:1. */
 	.tab {
-		padding: 7px 14px;
+		padding: 7px 16px;
 		font-family: var(--font-heading);
-		font-weight: 800;
+		font-weight: 600;
 		font-size: 13px;
 		line-height: 1.2;
-		color: var(--color-text);
+		color: var(--color-neutral-700);
 		background: transparent;
 		border: 0;
+		border-radius: var(--radius-pill);
 		cursor: pointer;
-	}
-
-	.tab + .tab {
-		border-left: 1px solid var(--color-divider);
 	}
 
 	.tab.is-active {
 		background: var(--color-accent);
 		color: var(--color-bg);
+	}
+
+	/*
+	 * Forced-colors mode drops the primary fill, and with it the only thing on screen that says which
+	 * tab is selected, so the palette's own selected-item pair says it there instead. Held out of the
+	 * forced palette so that that pair is what paints - which leaves this tab's ring to colour too.
+	 * It lies on the track, which the palette grounds in `Canvas`, so it takes `CanvasText`: the
+	 * sheet's primary would show at whatever contrast the user's palette happened to give it.
+	 */
+	@media (forced-colors: active) {
+		.tab.is-active {
+			forced-color-adjust: none;
+			background: SelectedItem;
+			color: SelectedItemText;
+		}
+
+		.tab.is-active:focus-visible {
+			outline-color: CanvasText;
+		}
 	}
 
 	.strip-end {
@@ -539,40 +590,48 @@
 	}
 
 	/*
-	 * Compounded with the component class, like the cards above: `.admin-theme .input` sets both of
-	 * these properties and carries the specificity a bare `.new-profile` would, so which of them
-	 * won would come down to the order the bundler emitted the two sheets in.
+	 * Compounded with the component class, like the cards above: `.admin-theme .input` sets every
+	 * one of these properties and carries the specificity a bare `.new-profile` would, so which of
+	 * them won would come down to the order the bundler emitted the two sheets in. The compact box
+	 * the design gives this strip, level with the compact buttons beside it: their line height, and
+	 * no floor under it taller than they are.
 	 */
 	.input.new-profile {
 		width: 200px;
+		min-height: 0;
+		padding: 6px 8px;
 		font-size: 13px;
+		line-height: 1.2;
 	}
 
 	/*
 	 * Tailwind's preflight mixes a placeholder at half of `currentColor` - `color-mix(in oklab,
-	 * currentcolor 50%, transparent)`, which keeps the colour and halves its alpha - so on the light
-	 * ground it composites `--color-text` over the input's own surface to #858483: 3.08:1, where the
-	 * text typed into the same box gets 13.7:1. Clear of the 3:1 floor, then, but short of AA at
-	 * 13px, and AA is the bar here - the `aria-label` names this box for assistive technology only,
-	 * which leaves the placeholder the one caption a sighted reader has for what belongs in it.
-	 * Neutral-700 reads 5.38:1 on that same surface.
+	 * currentcolor 50%, transparent)`, which keeps the colour and halves its alpha - so it composites
+	 * `--color-text` over the box's own fill to #81868f: 3.29:1, and 3.38:1 over the white the box
+	 * turns when focused, where the text typed into the same box gets 15.97:1. Clear of the 3:1
+	 * floor, then, but short of AA at 13px, and AA is the bar here - the `aria-label` names this box
+	 * for assistive technology only, which leaves the placeholder the one caption a sighted reader
+	 * has for what belongs in it. Muted reads 6.80:1 on the fill and 7.56:1 on white.
 	 */
 	.input.new-profile::placeholder {
-		color: var(--color-neutral-700);
+		color: var(--color-text-muted);
+	}
+
+	/* The compact size the design gives the two buttons in this strip. */
+	.btn.add-profile,
+	.btn.delete-profile {
+		padding: 6px 10px;
+		font-size: 13px;
 	}
 
 	/*
-	 * Deleting a profile takes every frame on it offline, so it is the one control in this strip
-	 * that wears the accent, with the tint's border for an edge. Destructive, but not a fault, so it
-	 * stays off the danger role: the design dresses it in the primary.
+	 * Deleting a profile takes every frame on it offline, so it is set apart from Add profile the way
+	 * the design sets it apart: the tint's border for an edge rather than the neutral one.
+	 * Destructive, but not a fault, so it stays off the danger role - its label is the secondary
+	 * button's primary, 7.00:1.
 	 */
 	.btn.delete-profile {
-		color: var(--color-accent-700);
 		border-color: var(--color-accent-300);
-	}
-
-	.btn.delete-profile:hover {
-		background: var(--color-accent-100);
 	}
 
 	/* On its own line under the row, because the input it is about has been pushed to the right. */
@@ -594,7 +653,7 @@
 	 * with no foot marker and no special case.
 	 */
 	.pane-body {
-		padding: var(--space-6) var(--space-4) calc(100vh - var(--masthead-height));
+		padding: var(--space-6) var(--gutter) calc(100vh - var(--masthead-height));
 	}
 
 	.save-bar {
@@ -605,9 +664,9 @@
 		flex-direction: column;
 		align-items: flex-start;
 		gap: var(--space-2);
-		padding: var(--space-3) var(--space-4);
+		padding: 14px var(--gutter);
 		background: var(--color-bg);
-		border-top: 2px solid var(--color-divider);
+		border-top: 1px solid var(--color-divider);
 	}
 
 	.save-row {
@@ -615,16 +674,16 @@
 		flex-wrap: wrap;
 		align-items: center;
 		justify-content: space-between;
-		gap: var(--space-3);
+		gap: var(--space-4);
 		width: 100%;
 	}
 
-	/* Bounded so the sentence stays a sentence: the pane is as wide as the window. */
+	/* Bounded so the sentence stays a sentence: the pane is as wide as the window. Muted, 7.56:1. */
 	.save-note {
 		max-width: 640px;
 		margin: 0;
 		font-size: 12.5px;
-		color: var(--color-neutral-700);
+		color: var(--color-text-muted);
 	}
 
 	.save-actions {
@@ -637,6 +696,14 @@
 		font-size: 12.5px;
 		font-weight: 600;
 		color: var(--color-accent-700);
+	}
+
+	/*
+	 * The design's size for the page's one primary action, a step over the sheet's button.
+	 * Compounded with `.btn`, which sets the padding at a bare class's specificity.
+	 */
+	.btn.save-button {
+		padding: 10px 18px;
 	}
 
 	/* Failures take the danger role, as the load error above does. */
@@ -655,15 +722,17 @@
 
 	/*
 	 * The warning role rather than the danger role: a profile queued for deletion is a consequence
-	 * to understand before saving, the way the legacy-schema consent above it is, not a failure.
+	 * to understand before saving, the way the legacy-schema consent above it is, not a failure. A
+	 * callout, as that consent is.
 	 */
 	.save-deletions {
 		margin: 0;
-		padding: var(--space-2) var(--space-3);
+		padding: var(--space-2) var(--space-4);
 		font-size: 13px;
 		background: var(--color-warning-100);
 		color: var(--color-warning-700);
-		border-left: 4px solid var(--color-warning-700);
+		border: 1px solid var(--color-warning-700);
+		border-radius: var(--radius-callout);
 	}
 
 	/*

@@ -243,80 +243,139 @@
 		align-self: start;
 		max-height: calc(100vh - var(--masthead-height));
 		overflow: auto;
-		padding: var(--space-4) var(--space-4) var(--space-6) 0;
-		border-right: 1px solid var(--color-neutral-300);
+		padding: 20px var(--space-4) 40px 0;
+		border-right: 1px solid var(--color-divider);
 	}
 
-	/* 13px lines the heading up with the item labels: a 3px rule plus 10px of item padding. */
+	/*
+	 * The design's faint caption, 4.83:1 on the rail's white, at its regular weight rather than the
+	 * sheet's heading weight. Indented by the 24px the item labels below it are: the items run flush
+	 * to the rail's left edge, and their padding is what sets the labels in.
+	 */
 	.rail-heading {
-		margin: 0 0 var(--space-2);
-		padding-left: 13px;
-		font-size: 11px;
+		margin: 0 0 10px;
+		padding: 0 24px;
+		font-size: 10px;
+		font-weight: 400;
 		letter-spacing: 0.14em;
 		text-transform: uppercase;
-		color: var(--color-neutral-700);
+		color: var(--color-text-faint);
 	}
 
 	.rail-list + .rail-heading {
-		margin-top: var(--space-6);
+		margin-top: 22px;
 	}
 
 	.rail-list {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
 		margin: 0;
 		padding: 0;
 		list-style: none;
 	}
 
+	/*
+	 * Flush to the rail's left edge, which is the window's, and rounded at the other end only, so the
+	 * item being read is a tab of tint pulled out from the edge of the screen. A floor rather than a
+	 * height, so a label that wraps under a larger text size grows the item instead of spilling out
+	 * of it. Neutral-700 at rest: 10.31:1, and 9.37:1 on the hover's fill.
+	 */
 	.rail-item {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		gap: var(--space-2);
+		gap: 10px;
 		width: 100%;
-		padding: 8px 10px;
+		min-height: 44px;
+		padding: 0 var(--space-4) 0 24px;
 		font-family: var(--font-heading);
-		font-weight: 800;
-		font-size: 13.5px;
+		font-weight: 500;
+		font-size: 14px;
 		line-height: 1.2;
 		text-align: left;
-		color: var(--color-text);
+		color: var(--color-neutral-700);
 		background: transparent;
 		border: 0;
-		border-left: 3px solid transparent;
+		border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
 		cursor: pointer;
 	}
 
+	/*
+	 * The sheet's ring, drawn inside the item rather than 2px outside it: the items run flush to the
+	 * rail's left edge, and past that edge the rail's own scrolling box - the window's, below 900px -
+	 * would cut that side of the ring off.
+	 */
+	.rail-item:focus-visible {
+		outline-offset: -2px;
+	}
+
 	.rail-item:hover {
-		background: color-mix(in srgb, var(--color-text) 6%, transparent);
+		background: var(--color-neutral-100);
 	}
 
+	/*
+	 * The primary on its tint, 6.17:1. After `:hover`, which it ties with, so the item being read
+	 * keeps its tint under the pointer.
+	 */
 	.rail-item.is-active {
-		background: var(--color-neutral-200);
-		border-left-color: var(--color-accent);
+		background: var(--color-accent-100);
+		color: var(--color-accent-700);
 	}
 
+	/*
+	 * The design sets the account count in its faint tone, but faint is 4.26:1 on the active item's
+	 * tint, and the item this count sits in is the active one whenever the page is at its top. Muted
+	 * is 6.65:1 there, and 6.87:1 on the hover's fill.
+	 */
 	.rail-badge {
 		flex-shrink: 0;
 		font-family: var(--font-body);
 		font-weight: 400;
 		font-size: 11px;
-		color: var(--color-neutral-700);
+		color: var(--color-text-muted);
 	}
 
 	/*
 	 * The accent marks the same thing here as it does in the pane: a value written into this
-	 * configuration rather than inherited.
+	 * configuration rather than inherited. 7.00:1, 6.17:1 on the tint and 6.36:1 on the hover's fill.
 	 */
 	.rail-badge.is-override {
 		color: var(--color-accent-700);
 	}
 
+	/*
+	 * Forced-colors mode drops the tint, and with it the only thing on screen that says which section
+	 * is being read - `aria-current` says it to assistive technology alone - so the palette's own
+	 * selected-item pair says it there instead. Held out of the forced palette so that that pair is
+	 * what paints, which leaves the rest of the item to colour as well, since opting out is
+	 * inherited: the count takes the item's text colour, and so does the ring, drawn inside the item
+	 * and so on the selected fill.
+	 */
+	@media (forced-colors: active) {
+		.rail-item.is-active {
+			forced-color-adjust: none;
+			background: SelectedItem;
+			color: SelectedItemText;
+		}
+
+		.rail-item.is-active .rail-badge {
+			color: inherit;
+		}
+
+		.rail-item.is-active:focus-visible {
+			outline-color: SelectedItemText;
+		}
+	}
+
+	/* Ruled off from the items and set in to their labels, as the design sets it. Muted, 7.56:1. */
 	.rail-note {
-		margin: var(--space-4) 0 0;
-		padding: var(--space-3) 10px 0 13px;
-		border-top: 1px solid var(--color-neutral-300);
+		margin: 22px 0 0 24px;
+		padding: 14px 0 0;
+		border-top: 1px solid var(--color-divider);
 		font-size: 11.5px;
-		color: var(--color-neutral-700);
+		line-height: 1.5;
+		color: var(--color-text-muted);
 	}
 
 	.rail-note-mark {
@@ -337,9 +396,10 @@
 			   be a second scrollbar inside the first. */
 			max-height: none;
 			overflow: visible;
-			padding: var(--space-4) 0;
+			/* The items' round ends kept off the window's edge, as the column keeps them off its rule. */
+			padding: var(--space-4) var(--space-4) var(--space-4) 0;
 			border-right: 0;
-			border-bottom: 1px solid var(--color-neutral-300);
+			border-bottom: 1px solid var(--color-divider);
 		}
 	}
 </style>
