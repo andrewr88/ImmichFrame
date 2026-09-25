@@ -72,7 +72,7 @@
 
 <h5 class="kicker">{title}</h5>
 
-<!-- A box and the name of what it turns on. None of the four booleans carries help text in the
+<!-- A switch and the name of what it turns on. None of the four booleans carries help text in the
      model, so today that is all this renders - but it renders it the way the two groups below do,
      stacked under the label, because a `help` added to one of them in `admin-config.ts` would
      otherwise be dropped here without a word. -->
@@ -138,34 +138,33 @@
 
 <style>
 	/*
-	 * The panel's body. The band it sits in - the border, the header strip above it and this body's
+	 * The panel's body. The card it sits in - the border, the header strip above it and this body's
 	 * own padding - belongs to `entry-editor.svelte`, which owns the panel; what is here is the
 	 * twelve settings and the three groups they fall into.
 	 *
-	 * Everything below is coloured against `--color-bg`: the body carries no fill of its own, so
-	 * the page ground shows through it.
+	 * Everything below is coloured against the panel card's `--color-surface`: the body carries no
+	 * fill of its own, so the card shows through it.
 	 */
 
 	/*
-	 * The mock gives this neutral-600, which reads 3.85:1 on that ground - under AA for a 10px
-	 * caption, and the same figure and the same answer as the column headings above it and the
-	 * profile strip's caption, both of which took neutral-700 for it. That is 5.83:1.
-	 *
-	 * Sized and tracked here; the family and the weight come from the sheet's own `h5`, which is
-	 * what this still is - the heading of the panel's body.
+	 * The design's faint caption, as the settings table's column headings wear it: 4.72:1 on the
+	 * card, and at its regular weight rather than the sheet's heading weight. Still the sheet's
+	 * `h5` in every other respect - the heading of the panel's body.
 	 */
 	.kicker {
 		margin: 0 0 var(--space-3);
 		font-size: 10px;
+		font-weight: 400;
 		letter-spacing: 0.13em;
 		text-transform: uppercase;
-		color: var(--color-neutral-700);
+		color: var(--color-text-faint);
 	}
 
+	/* The include, value and picker groups are parted by a rule, as the design parts them. */
 	.group + .group {
-		margin-top: var(--space-4);
-		padding-top: var(--space-4);
-		border-top: 1px solid var(--color-neutral-300);
+		margin-top: 18px;
+		padding-top: 18px;
+		border-top: 1px solid var(--color-divider);
 	}
 
 	/*
@@ -179,15 +178,16 @@
 		gap: 10px 24px;
 	}
 
+	/* The design's toggle row: the switch, then its name in the body's own size and weight. */
 	.include {
 		display: flex;
 		align-items: center;
-		gap: var(--space-2);
+		gap: var(--space-3);
+		padding: var(--space-1) 0;
 	}
 
 	.include-label {
-		font-size: 13px;
-		font-weight: 600;
+		font-size: 14px;
 	}
 
 	.values {
@@ -198,7 +198,7 @@
 
 	.value-label {
 		display: block;
-		margin-bottom: var(--space-1);
+		margin-bottom: 5px;
 		font-size: 13px;
 		font-weight: 600;
 	}
@@ -212,11 +212,11 @@
 		grid-template-columns: minmax(180px, 230px) minmax(0, 1fr);
 		gap: 20px;
 		align-items: start;
-		padding: 14px 0;
+		padding: 18px 0;
 	}
 
 	.picked + .picked {
-		border-top: 1px solid var(--color-neutral-300);
+		border-top: 1px solid var(--color-divider);
 	}
 
 	/* The group's own padding already parts the first row from the rule above it, and the body's
@@ -234,9 +234,15 @@
 		font-weight: 600;
 	}
 
+	/* Muted, 7.37:1 on the card. */
 	.help {
-		margin: var(--space-1) 0 0;
+		margin: 5px 0 0;
 		font-size: 11.5px;
-		color: var(--color-neutral-700);
+		line-height: 1.45;
+		color: var(--color-text-muted);
+	}
+
+	.picked .help {
+		margin-top: 3px;
 	}
 </style>

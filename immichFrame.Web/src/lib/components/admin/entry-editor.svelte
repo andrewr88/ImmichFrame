@@ -150,46 +150,48 @@
 			<p class="inherit-note">{inheritNote}</p>
 		</header>
 
-		<div class="columns">
-			<span>Setting</span>
-			<span>Value</span>
-			<span>Where it comes from</span>
-		</div>
+		<div class="settings">
+			<div class="columns">
+				<span>Setting</span>
+				<span>Value</span>
+				<span>Where it comes from</span>
+			</div>
 
-		{#each section.props as prop (prop)}
-			{@const spec = generalFields[prop]}
-			{@const id = `${entry.name}-${prop}`}
-			<OverrideRow
-				{id}
-				label={spec.label}
-				help={spec.help}
-				declared={declares(prop)}
-				{inheritLabel}
-				entryName={editing}
-				onToggle={(declared) => toggleGeneral(prop, declared)}
-			>
-				{#if spec.kind === 'secret'}
-					<SecretField
-						{id}
-						label={spec.label}
-						secret={entry.secrets[prop as SecretProp]}
-						hasValue={hasSecret(valuesFor(prop), prop as SecretProp)}
-						declared={declares(prop)}
-						canKeep={entry.originallyDeclared.includes(declaredKeyOf(prop))}
-						inherits={inheritFrom !== null}
-						noSecretWarning={noSecretWarning(prop as SecretProp)}
-					/>
-				{:else}
-					<SettingField
-						{id}
-						{spec}
-						value={valuesFor(prop)[prop]}
-						disabled={!declares(prop)}
-						onChange={(value) => setGeneral(prop, value)}
-					/>
-				{/if}
-			</OverrideRow>
-		{/each}
+			{#each section.props as prop (prop)}
+				{@const spec = generalFields[prop]}
+				{@const id = `${entry.name}-${prop}`}
+				<OverrideRow
+					{id}
+					label={spec.label}
+					help={spec.help}
+					declared={declares(prop)}
+					{inheritLabel}
+					entryName={editing}
+					onToggle={(declared) => toggleGeneral(prop, declared)}
+				>
+					{#if spec.kind === 'secret'}
+						<SecretField
+							{id}
+							label={spec.label}
+							secret={entry.secrets[prop as SecretProp]}
+							hasValue={hasSecret(valuesFor(prop), prop as SecretProp)}
+							declared={declares(prop)}
+							canKeep={entry.originallyDeclared.includes(declaredKeyOf(prop))}
+							inherits={inheritFrom !== null}
+							noSecretWarning={noSecretWarning(prop as SecretProp)}
+						/>
+					{:else}
+						<SettingField
+							{id}
+							{spec}
+							value={valuesFor(prop)[prop]}
+							disabled={!declares(prop)}
+							onChange={(value) => setGeneral(prop, value)}
+						/>
+					{/if}
+				</OverrideRow>
+			{/each}
+		</div>
 	</section>
 {/each}
 
@@ -358,34 +360,48 @@
 	}
 
 	/*
-	 * The design's faint caption, as the profile strip's and the rail's labels wear it: 4.83:1 on
-	 * the page ground these sit on.
+	 * The design's settings card: the rule is what draws it, since its fill is 1.03:1 against the
+	 * page. The rows' own rules part them inside it, and the card's edge closes the last.
+	 */
+	.settings {
+		margin-top: 20px;
+		padding: 4px 18px 8px;
+		background: var(--color-surface);
+		border: 1px solid var(--color-divider);
+		border-radius: var(--radius-card);
+	}
+
+	/*
+	 * The design's faint caption, as the profile strip's and the rail's labels wear it: 4.72:1 on
+	 * the card these sit on.
 	 */
 	.columns {
 		display: grid;
 		grid-template-columns: var(--settings-grid);
 		gap: 20px;
-		padding: var(--space-3) 0 var(--space-1);
+		padding: 10px 0 6px;
 		font-size: 10px;
 		letter-spacing: 0.13em;
 		text-transform: uppercase;
 		color: var(--color-text-faint);
-		border-bottom: 1px solid var(--color-neutral-300);
+		border-bottom: 1px solid var(--color-divider);
 	}
 
 	/*
-	 * Photo selection, from here down. The wrapper that used to sit around this body was hiding
-	 * every colour in it, and taking it away is the whole of this section's conversion - so these
-	 * bands are read against the page's own `--color-bg`, save for the one fill the section keeps:
-	 * a used account's header strip paints `--color-neutral-200`. That is not a rare state either,
-	 * and since the strip's `is-used` and the box's `checked` are one variable read twice, a used
-	 * account's URL and status are never seen on anything else.
+	 * Photo selection, from here down. Each account is a card of its own, on `--color-surface`, and
+	 * its header strip paints `--color-surface-header` while this configuration uses the account.
+	 * That is not a rare state either, and since the strip's `is-used` and the box's `checked` are
+	 * one variable read twice, a used account's URL and status are never seen on anything else.
 	 *
-	 * Both grounds clear AA. Neutral-700 is 8.33:1 on neutral-200 against 10.31:1 on
-	 * `--color-bg`, for the 12px URL and the 11px status alike; the name inherits `--color-text`,
-	 * 14.33:1 and 17.74:1. The box's own figures are with the box, below.
+	 * Both grounds clear AA. Muted is 6.87:1 on the header and 7.37:1 on the card, for the 12px URL
+	 * and the 11px status alike; the name inherits `--color-text`, 16.12:1 and 17.30:1. The box's
+	 * own figures are with the box, below.
 	 */
 
+	/*
+	 * The design's bar over the panels, a callout on the footer's fill: the rule draws it, since
+	 * that fill is 1.05:1 against the page.
+	 */
 	.banner {
 		display: flex;
 		flex-wrap: wrap;
@@ -397,31 +413,41 @@
 		 * to share the row with.
 		 */
 		justify-content: flex-end;
-		gap: var(--space-3);
-		margin-top: var(--space-3);
+		gap: 14px;
+		margin-top: 18px;
 		padding: 12px 16px;
+		background: var(--color-surface-footer);
 		border: 1px solid var(--color-divider);
+		border-radius: var(--radius-callout);
 	}
 
 	/* Capped at a readable measure rather than run across the page, and kept to the left end of the
-	   row by its own margin so the control opposite it stays at the right. */
+	   row by its own margin so the control opposite it stays at the right. Muted, 7.23:1. */
 	.banner-note {
 		max-width: 620px;
 		margin: 0 auto 0 0;
 		font-size: 12.5px;
-		color: var(--color-neutral-700);
+		color: var(--color-text-muted);
 	}
 
-	/* 003's control, restated: `override-row.svelte` is where these three rules are explained. */
+	/*
+	 * The override pill and its round box, restated because Svelte scopes a component's styles to
+	 * the component that declares them: `override-row.svelte` is where these rules are explained.
+	 * Its muted words are 7.56:1 on the pill's white and the primary 6.17:1 on its tint; the empty
+	 * box's faint ring is 4.83:1 on the white.
+	 */
 	.override {
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
-		padding: 6px 8px;
+		padding: 5px 12px 5px 6px;
 		font-size: 12.5px;
-		font-weight: 400;
-		color: var(--color-neutral-700);
-		border: 1px solid var(--color-neutral-300);
+		font-weight: 500;
+		line-height: 1.2;
+		color: var(--color-text-muted);
+		background: var(--color-bg);
+		border: 1px solid var(--color-divider);
+		border-radius: var(--radius-pill);
 		cursor: pointer;
 	}
 
@@ -432,12 +458,40 @@
 		border-color: var(--color-accent);
 	}
 
+	.override:has(.box:disabled) {
+		cursor: not-allowed;
+	}
+
 	.box {
-		flex-shrink: 0;
+		appearance: none;
+		display: grid;
+		place-content: center;
+		flex: none;
 		width: 16px;
 		height: 16px;
 		margin: 0;
-		accent-color: var(--color-accent);
+		background: transparent;
+		border: 1px solid var(--color-text-faint);
+		border-radius: var(--radius-pill);
+		cursor: pointer;
+	}
+
+	.box:checked {
+		background: var(--color-accent);
+		border-color: var(--color-accent);
+	}
+
+	.box:checked::after {
+		content: '';
+		width: 12px;
+		height: 12px;
+		background: var(--color-bg);
+		clip-path: polygon(12% 55%, 37.5% 81%, 88% 30%, 78% 20%, 37.5% 61%, 21.5% 45%);
+	}
+
+	.box:disabled {
+		opacity: 0.45;
+		cursor: not-allowed;
 	}
 
 	/*
@@ -451,9 +505,17 @@
 		color: var(--color-warning-700);
 	}
 
+	/*
+	 * A card, as the accounts section's are. `overflow: hidden` keeps the header strip's fill inside
+	 * the round corners; the picker dialog inside a panel is `position: fixed`, which an ancestor's
+	 * overflow does not clip.
+	 */
 	.account {
-		margin-top: var(--space-3);
+		margin-top: 22px;
+		overflow: hidden;
+		background: var(--color-surface);
 		border: 1px solid var(--color-divider);
+		border-radius: var(--radius-card);
 	}
 
 	/*
@@ -468,15 +530,14 @@
 		gap: var(--space-2) var(--space-3);
 		padding: 12px 16px;
 		cursor: pointer;
-		border-bottom: 1px solid var(--color-neutral-300);
+		border-bottom: 1px solid var(--color-divider);
 	}
 
 	/*
 	 * The rule under the strip parts it from the body below, so it goes when there is no body: the
 	 * body renders only for an account this configuration uses, so on one it does not the strip is
-	 * the panel's only child, and its own rule lands on the panel's own `--color-divider` edge - 2px
-	 * of doubled line, in two different greys, on the default state of every account a
-	 * configuration has not ticked.
+	 * the panel's only child, and its own rule would land 1px above the card's own edge - a doubled
+	 * line on the default state of every account a configuration has not ticked.
 	 */
 	.account-head:last-child {
 		border-bottom: 0;
@@ -485,21 +546,22 @@
 	/* The fill is the section's answer at a glance: which of these accounts this configuration is
 	   showing photos from, readable without reading a word of any strip. */
 	.account-head.is-used {
-		background: var(--color-neutral-200);
+		background: var(--color-surface-header);
+	}
+
+	.account-head:has(.check:disabled) {
+		cursor: not-allowed;
 	}
 
 	/*
-	 * 003's box at 20px, and it travels with the escape hatch its `appearance: none` needs, for the
-	 * reason `setting-field.svelte` gives at length: forced-colors mode cannot rewrite that
-	 * declaration, so a ticked box would be an empty one. The fill and the rule are that box's too,
-	 * and neither had to be retuned - but not because the ground is the same as there. It is not:
-	 * `checked` and the strip's `is-used` are one variable read twice, so a ticked box is always on
-	 * the strip's `--color-neutral-200` and an empty one always on `--color-bg`.
+	 * The design's 20px box, rounded at the sheet's check-box corner, and it travels with the escape
+	 * hatch its `appearance: none` needs - see the end of this sheet. `checked` and the strip's
+	 * `is-used` are one variable read twice, so a ticked box is always on the header's fill and an
+	 * empty one always on the card.
 	 *
-	 * Both clear 1.4.11 on the ground they get, and would on the other. The ticked fill is 5.66:1
-	 * on neutral-200 and 7.00:1 on `--color-bg`; ticked and inactive, 6.10:1 and 7.56:1. An empty
-	 * box is its rule and nothing else - `--color-surface` is 1.03:1 on the page ground - and that
-	 * rule is 17.74:1 there, 14.33:1 on neutral-200.
+	 * Ticked, the primary is 6.36:1 on the header and the tick white on it, 7.00:1. Empty, the box
+	 * is its ring and nothing else, in the faint tone: 4.72:1 on the card, past the 3:1 WCAG 1.4.11
+	 * asks of a control's boundary.
 	 */
 	.check {
 		appearance: none;
@@ -509,8 +571,8 @@
 		width: 20px;
 		height: 20px;
 		margin: 0;
-		background: var(--color-surface);
-		border: 1px solid var(--color-neutral-900);
+		background: transparent;
+		border: 1px solid var(--color-text-faint);
 		border-radius: var(--radius-sm);
 		cursor: pointer;
 	}
@@ -522,22 +584,17 @@
 
 	.check:checked::after {
 		content: '';
-		width: 10px;
-		height: 10px;
+		width: 13px;
+		height: 13px;
 		background: var(--color-bg);
-		clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
+		clip-path: polygon(12% 55%, 37.5% 81%, 88% 30%, 78% 20%, 37.5% 61%, 21.5% 45%);
 	}
 
-	/* Read-only configurations disable the fieldset around this editor, and the platform's own box
-	   said so before this rule took its rendering away. 003's tones, which say it at full opacity. */
+	/* Read-only configurations disable the fieldset around this editor: the system's disabled
+	   dress, as the design gives a box that cannot be changed. */
 	.check:disabled {
-		border-color: var(--color-neutral-600);
+		opacity: 0.45;
 		cursor: not-allowed;
-	}
-
-	.check:checked:disabled {
-		background: var(--color-neutral-600);
-		border-color: var(--color-neutral-600);
 	}
 
 	/*
@@ -557,14 +614,14 @@
 	   section, which is where this account is described rather than assigned. */
 	.account-name {
 		font-family: var(--font-heading);
-		font-weight: 800;
+		font-weight: 700;
 		font-size: 15px;
 	}
 
 	.account-url {
 		font-family: 'Overpass Mono', ui-monospace, monospace;
 		font-size: 12px;
-		color: var(--color-neutral-700);
+		color: var(--color-text-muted);
 	}
 
 	/* At the far end of the strip whatever else is in it, including a strip whose name has wrapped
@@ -574,7 +631,7 @@
 		font-size: 11px;
 		letter-spacing: 0.1em;
 		text-transform: uppercase;
-		color: var(--color-neutral-700);
+		color: var(--color-text-muted);
 	}
 
 	.account-body {
@@ -584,33 +641,40 @@
 	/*
 	 * The one read-only state this section has, and so the one place the design's read-only note
 	 * belongs: an inheriting profile is shown the default configuration's accounts and cannot
-	 * choose among them. A rule down its left rather than a colour of its own, because nothing
-	 * here is wrong - following the default configuration is where a profile starts.
+	 * choose among them. The header's fill rather than a colour of its own, because nothing here is
+	 * wrong - following the default configuration is where a profile starts. Muted, 6.87:1 on it;
+	 * the corner is the design's 12px, which the sheet names for the inputs that wear it too.
 	 */
 	.inherited-note {
 		max-width: 620px;
-		margin: var(--space-3) 0 0;
-		padding-left: 10px;
+		margin: 18px 0 0;
+		padding: 10px 14px;
 		font-size: 12px;
-		color: var(--color-neutral-700);
-		border-left: 3px solid var(--color-neutral-400);
+		line-height: 1.5;
+		color: var(--color-text-muted);
+		background: var(--color-surface-header);
+		border-radius: var(--radius-input);
 	}
 
 	.inherited {
-		margin: var(--space-3) 0 0;
+		margin: 0;
 		padding: 0;
 		list-style: none;
 	}
 
-	/* The strip above without its box: these are accounts this profile shows and cannot choose. */
+	/*
+	 * The panel above without its box or its body, as a used account's strip: these are accounts
+	 * this profile shows and cannot choose. The name is the strip's, 16.12:1 on its fill.
+	 */
 	.inherited li {
-		padding: 10px 16px;
-		font-size: 14px;
+		margin-top: 22px;
+		padding: 12px 16px;
+		font-family: var(--font-heading);
+		font-weight: 700;
+		font-size: 15px;
+		background: var(--color-surface-header);
 		border: 1px solid var(--color-divider);
-	}
-
-	.inherited li + li {
-		margin-top: var(--space-2);
+		border-radius: var(--radius-card);
 	}
 
 	/*
@@ -628,19 +692,27 @@
 	}
 
 	/*
-	 * The escape hatch that travels with `appearance: none`, and the only rule here that needs one:
-	 * forced-colors mode rewrites colour, background and border into the user's own palette, so
-	 * every other rule above comes through it working. Hand the box back to the platform, which
-	 * draws a tick that mode understands, and drop the clipped mark so it cannot be painted over
-	 * the platform's own.
+	 * The escape hatch that travels with `appearance: none`, for both boxes here: forced-colors mode
+	 * rewrites colour, background and border into the user's own palette, so every other rule above
+	 * comes through it working, but it cannot rewrite that declaration - with the primary and the
+	 * tick's white both forced to `Canvas`, a ticked box would be an empty one. Hand the boxes back
+	 * to the platform, which draws a tick that mode understands and greys it when inactive (so the
+	 * fade goes too), and drop the traced mark so it cannot be painted over the platform's own.
 	 */
 	@media (forced-colors: active) {
+		.box,
 		.check {
 			appearance: auto;
 		}
 
+		.box:checked::after,
 		.check:checked::after {
 			content: none;
+		}
+
+		.box:disabled,
+		.check:disabled {
+			opacity: 1;
 		}
 	}
 </style>

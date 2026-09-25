@@ -115,43 +115,55 @@
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
-		gap: var(--space-2);
+		gap: 10px;
+	}
+
+	/* The design's compact secondary button. Compounded with `.btn`, which sets both properties. */
+	.row .btn {
+		padding: 4px 9px;
+		font-size: 12.5px;
 	}
 
 	/*
-	 * The admin theme has no success role, so "Set" is not a green: it is said by weight against a
-	 * played down "Not set", which is the same pair of tones the rest of this pane tells apart with.
-	 * The played down tone is 10.31:1 on the page, so the subordinate state is read, not dimmed.
+	 * The admin theme has no success role, so "Set" is not a green: it is the primary, 6.83:1 on
+	 * the card the rows sit in, against a muted "Not set" at 7.37:1 - the same pair of tones the
+	 * override pill beside it tells its two states apart with. Both are set at 600, as the design
+	 * sets them, so the subordinate state is read, not dimmed.
 	 */
 	.status {
-		font-size: 14px;
-		color: var(--color-neutral-700);
+		font-size: 13.5px;
+		font-weight: 600;
+		color: var(--color-text-muted);
 	}
 
 	.status.is-set {
-		font-weight: 600;
-		color: var(--color-text);
+		color: var(--color-accent-700);
 	}
 
 	.note {
 		margin: var(--space-1) 0 0;
 		font-size: 12px;
-		color: var(--color-neutral-700);
+		color: var(--color-text-muted);
+	}
+
+	/*
+	 * What saving will do to the secret, said in the primary as the design says it - the colour this
+	 * pane gives what is written into a configuration: 6.83:1 on the card.
+	 */
+	.no-secret {
+		font-size: 13.5px;
+		font-weight: 600;
+		color: var(--color-accent-700);
 	}
 
 	/*
 	 * The warning role, not the danger role. Having no secret and being asked for one are conditions
 	 * to understand before saving, the way the banner's legacy-schema consent is; the danger role is
-	 * what this pane spends on failures. `.note.warning` is compounded so it beats `.note`'s own
-	 * colour on specificity rather than on which rule came second.
+	 * what this pane spends on failures. Compounded so it beats `.note`'s own colour on specificity
+	 * rather than on which rule came second. 7.13:1 on the card.
 	 */
-	.no-secret,
 	.note.warning {
 		color: var(--color-warning-700);
-	}
-
-	.no-secret {
-		font-size: 14px;
 	}
 
 	/*
@@ -163,6 +175,6 @@
 	.input.secret {
 		flex: 1;
 		min-width: 0;
-		max-width: 380px;
+		max-width: 280px;
 	}
 </style>

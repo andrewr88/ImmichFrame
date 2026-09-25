@@ -140,7 +140,7 @@
 
 <section class="section" id="section-accounts">
 	<header class="head">
-		<div>
+		<div class="head-text">
 			<h2 class="title">Immich accounts</h2>
 			<p class="blurb">
 				Every Immich account this installation uses. Each configuration below chooses which of them
@@ -175,7 +175,7 @@
 						{/if}
 					</div>
 					{#if account.label.trim() && account.serverUrl.trim()}
-						<!-- Only beneath a name that is not already it: an account with no label is named by
+						<!-- Only beside a name that is not already it: an account with no label is named by
 						     its server URL, and `accountName` is what decides that. -->
 						<p class="url">{account.serverUrl.trim()}</p>
 					{/if}
@@ -338,10 +338,12 @@
 <style>
 	/*
 	 * The four elements of a section header, in the order and at the sizes `entry-editor.svelte`
-	 * gives the five below this one: this section heads the same page and a second shape for the
-	 * same thing would only say the two are unrelated. 26px against the sheet's 32px and 24px
-	 * between sections are that file's reasoning as well - none of these headings is the page's
-	 * title, and the rail's scroll-spy argues its detection band against this gap.
+	 * gives the six below this one: this section heads the same page and a second shape for the
+	 * same thing would only say the two are unrelated. The design's header - no rule under it, the
+	 * title and blurb kept to a readable measure at one end and the scope note at the other - and
+	 * that file's reasoning for the rest: 26px is held on the title although the sheet's `h2` is
+	 * that size too, since none of these headings is the page's title, and the rail's scroll-spy
+	 * argues its detection band against the 24px between sections.
 	 */
 	.section {
 		margin: var(--space-6) 0;
@@ -352,9 +354,12 @@
 		flex-wrap: wrap;
 		align-items: flex-end;
 		justify-content: space-between;
-		gap: var(--space-3);
-		padding-bottom: var(--space-2);
-		border-bottom: 2px solid var(--color-divider);
+		gap: var(--space-4);
+		padding-bottom: var(--space-1);
+	}
+
+	.head-text {
+		max-width: 620px;
 	}
 
 	.title {
@@ -362,10 +367,11 @@
 		font-size: 26px;
 	}
 
+	/* Muted, 7.56:1, as the scope note opposite it is. */
 	.blurb {
-		margin: 2px 0 0;
+		margin: 4px 0 0;
 		font-size: 13px;
-		color: var(--color-neutral-700);
+		color: var(--color-text-muted);
 	}
 
 	/* Where the sections below say what inherits from them, this one says what it is not part of. */
@@ -373,7 +379,7 @@
 		margin: 0;
 		font-size: 11.5px;
 		text-align: right;
-		color: var(--color-neutral-700);
+		color: var(--color-text-muted);
 	}
 
 	/*
@@ -387,9 +393,20 @@
 		color: var(--color-warning-700);
 	}
 
+	/*
+	 * The design's card: the rule is what draws it, since its fill is 1.03:1 against the page.
+	 * `overflow: hidden` keeps the header strip's and the footer's fills inside the round corners.
+	 */
 	.account {
-		margin-top: var(--space-3);
+		margin-top: 20px;
+		overflow: hidden;
+		background: var(--color-surface);
 		border: 1px solid var(--color-divider);
+		border-radius: var(--radius-card);
+	}
+
+	.account + .account {
+		margin-top: 22px;
 	}
 
 	.strip {
@@ -397,18 +414,22 @@
 		flex-wrap: wrap;
 		align-items: center;
 		justify-content: space-between;
-		gap: var(--space-2);
+		gap: var(--space-3);
 		padding: 12px 16px;
-		background: var(--color-neutral-200);
-		border-bottom: 1px solid var(--color-neutral-300);
+		background: var(--color-surface-header);
+		border-bottom: 1px solid var(--color-divider);
 	}
 
 	/*
-	 * `min-width: 0` on the item and on the heading inside it, so a long name or a long URL is
-	 * truncated rather than widening the card: a flex item refuses to shrink below its own content
-	 * until it is told it may, and an account's name is whatever was typed into the box below.
+	 * The name and the server URL on one line, as the design sets them. `min-width: 0` on the item
+	 * and on the heading inside it, so a long name or a long URL is truncated rather than widening
+	 * the card: a flex item refuses to shrink below its own content until it is told it may, and an
+	 * account's name is whatever was typed into the box below.
 	 */
 	.ident {
+		display: flex;
+		align-items: center;
+		gap: var(--space-3);
 		min-width: 0;
 	}
 
@@ -416,6 +437,7 @@
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
+		min-width: 0;
 	}
 
 	.name,
@@ -427,15 +449,17 @@
 		white-space: nowrap;
 	}
 
-	/* 16px against the sheet's 25px: this is a card's title, not a section's. */
+	/* 16px against the sheet's 18px `h3`, the size the design gives a card's title. 16.12:1 on the
+	   strip's fill. */
 	.name {
 		font-size: 16px;
 	}
 
+	/* Muted, 6.87:1 on the strip's fill. */
 	.url {
 		font-family: 'Overpass Mono', ui-monospace, monospace;
 		font-size: 12px;
-		color: var(--color-neutral-700);
+		color: var(--color-text-muted);
 	}
 
 	/* Compounded with `.tag`: the two carry equal specificity, so a bare `.pill` would be settled
@@ -445,19 +469,18 @@
 	}
 
 	/*
-	 * Removing an account takes its credentials out of every configuration that uses it, so it
-	 * wears the accent at 700 - the same dress, and the same reasoning, as the strip's
-	 * `delete-profile`. Compounded with `.btn`, which sets the colour and the border itself.
+	 * Removing an account takes its credentials out of every configuration that uses it, so it is
+	 * set apart from the other buttons the way the strip's `delete-profile` is: the tint's border
+	 * for an edge rather than the neutral one. The design's compact size. Compounded with `.btn`,
+	 * which sets the size, the colour and the border itself; the label is the secondary button's
+	 * primary, 7.00:1.
 	 */
 	.btn.remove {
 		flex-shrink: 0;
+		padding: 5px 10px;
 		font-size: 12.5px;
 		color: var(--color-accent-700);
 		border-color: var(--color-accent-300);
-	}
-
-	.btn.remove:hover {
-		background: var(--color-accent-100);
 	}
 
 	/*
@@ -474,15 +497,17 @@
 
 	.field-label {
 		display: block;
-		margin-bottom: var(--space-1);
+		margin-bottom: 5px;
 		font-size: 13px;
 		font-weight: 600;
 	}
 
+	/* Muted, 7.37:1 on the card. */
 	.help {
-		margin: var(--space-1) 0 0;
+		margin: 5px 0 0;
 		font-size: 11.5px;
-		color: var(--color-neutral-700);
+		line-height: 1.45;
+		color: var(--color-text-muted);
 	}
 
 	/*
@@ -497,17 +522,35 @@
 	/*
 	 * Its own band rather than a fourth cell of the grid above: three of the key's four states are
 	 * not a text box at all - a paragraph, a word beside a button, or a box with a button beside it
-	 * - and none of them is the shape a column sized for an input was drawn for.
+	 * - and none of them is the shape a column sized for an input was drawn for. The label leads
+	 * the line the control is on, as the design sets it, and a note takes a line of its own below.
 	 */
 	.key {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 5px var(--space-3);
 		padding: 0 16px 18px;
+	}
+
+	/* Beside its control here rather than over it, so the room the other labels keep below them
+	   goes; the band's row gap keeps it between the label and a note on the line below. */
+	.key > .field-label {
+		margin-bottom: 0;
 	}
 
 	.key-row {
 		display: flex;
+		flex: 1;
 		flex-wrap: wrap;
 		align-items: center;
-		gap: var(--space-2);
+		gap: var(--space-3);
+	}
+
+	/* The design's compact secondary button. Compounded with `.btn`, which sets both properties. */
+	.key-row .btn {
+		padding: 4px 9px;
+		font-size: 12.5px;
 	}
 
 	/*
@@ -518,30 +561,34 @@
 	.input.key-input {
 		flex: 1;
 		min-width: 0;
+		max-width: 280px;
 	}
 
 	/*
-	 * The admin theme has no success role to say "Set" in, so it is said by weight at full
-	 * strength against the played-down notes around it - which is how `secret-field.svelte` says
-	 * the same word. Its absence needs no tone of its own here: where there is no stored key the
-	 * word is replaced by a box asking for one, and not by a second word.
+	 * The admin theme has no success role to say "Set" in, so it is the primary at 600 - 6.83:1 on
+	 * the card - which is how `secret-field.svelte` says the same word. Its absence needs no tone
+	 * of its own here: where there is no stored key the word is replaced by a box asking for one,
+	 * and not by a second word.
 	 */
 	.stored {
-		font-size: 14px;
+		font-size: 13px;
 		font-weight: 600;
+		color: var(--color-accent-700);
 	}
 
-	/* Informational, and neither a warning nor a refusal: the played-down tone, at the 14px the
-	   control it stands in for is set in rather than at a caption's size. */
+	/* Informational, and neither a warning nor a refusal: muted, 7.37:1, at the 14px the control
+	   it stands in for is set in rather than at a caption's size. */
 	.key-note {
-		margin: var(--space-1) 0 0;
+		flex-basis: 100%;
+		margin: 0;
 		font-size: 14px;
-		color: var(--color-neutral-700);
+		color: var(--color-text-muted);
 	}
 
 	/* Something to put right before saving rather than something that failed: the warning role. */
 	.key-warning {
-		margin: var(--space-1) 0 0;
+		flex-basis: 100%;
+		margin: 0;
 		font-size: 12px;
 		color: var(--color-warning-700);
 	}
@@ -549,13 +596,15 @@
 	/*
 	 * Both of these are statements about the configurations this account appears in rather than
 	 * about the credentials above, which is why they share the band under the rule: what else is
-	 * true of this account elsewhere.
+	 * true of this account elsewhere. The panel footer's fill; muted is 7.23:1 on it, and the
+	 * warning role's notes 6.99:1.
 	 */
 	.foot {
-		padding: 10px 16px;
+		padding: 12px 16px;
 		font-size: 11.5px;
-		color: var(--color-neutral-700);
-		border-top: 1px solid var(--color-neutral-300);
+		color: var(--color-text-muted);
+		background: var(--color-surface-footer);
+		border-top: 1px solid var(--color-divider);
 	}
 
 	.note {
@@ -583,12 +632,12 @@
 
 	/*
 	 * Tailwind's preflight paints a placeholder at half of `currentColor`, which composites to
-	 * 3.10:1 on the input's own surface - clear of the 3:1 floor but short of AA, and all four of
-	 * these are worked examples of what belongs in the box rather than decoration. Neutral-700 is
-	 * 5.38:1 on that same surface, and is the retune `setting-field.svelte` and the profile strip's
-	 * name box already make.
+	 * 3.29:1 on the input's own fill - clear of the 3:1 floor but short of AA, and all four of
+	 * these are worked examples of what belongs in the box rather than decoration. Muted is 6.80:1
+	 * on that same fill and 7.56:1 on the white a focused box turns, and is the retune
+	 * `setting-field.svelte` and the profile strip's name box already make.
 	 */
 	.input::placeholder {
-		color: var(--color-neutral-700);
+		color: var(--color-text-muted);
 	}
 </style>

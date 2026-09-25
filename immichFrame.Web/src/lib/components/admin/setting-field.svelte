@@ -29,10 +29,13 @@
 </script>
 
 {#if spec.kind === 'boolean'}
+	<!-- `role="switch"` says what the control is drawn as; the checked state stays the element's
+	     own, which is why there is no `aria-checked` beside it to disagree with it. -->
 	<input
 		{id}
 		type="checkbox"
-		class="check"
+		role="switch"
+		class="switch"
 		checked={value === true}
 		{disabled}
 		onchange={(event) => onChange(event.currentTarget.checked)}
@@ -130,96 +133,147 @@
 
 	/*
 	 * Tailwind's preflight paints a placeholder at half of `currentColor`, which composites to
-	 * 3.10:1 on the input's own surface - clear of the 3:1 floor but short of AA, and these
-	 * placeholders are worked examples of a format rather than decoration.
+	 * 3.29:1 on the input's own fill and 3.38:1 on the white a focused box turns - clear of the 3:1
+	 * floor but short of AA, and these placeholders are worked examples of a format rather than
+	 * decoration. Muted is 6.80:1 on the fill and 7.56:1 focused, and still reads as a hint beside
+	 * the value's 15.97:1: the tone the profile strip's name box took for the same reason.
 	 *
-	 * That AA is an enabled field's, and the claim goes no further. The `opacity: 0.7` below fades
-	 * the fill and the hint written on it together, so one of the nine `text` placeholders
-	 * (`admin-config.ts:86-108`) on an inherited row reads 2.91:1 against the fill it sits on and
-	 * 3.08:1 against the page behind that - short of AA again, in the state most rows on this page
-	 * are in. Deliberate, not missed: text in an inactive control is incidental under 1.4.3, and a
-	 * tone chosen to clear AA through the fade would land where the faded value lands, so the hint
-	 * would read as a value. The trade is the hint's contrast for the two staying told apart.
+	 * That AA is an enabled field's, and the claim goes no further. The `opacity: 0.7` on a disabled
+	 * `.input` fades the fill and the hint written on it together, so one of the nine `text`
+	 * placeholders (`admin-config.ts:86-108`) on an inherited row reads 3.35:1 against the faded
+	 * fill it sits on and 3.54:1 against the card behind that - short of AA again, in the state most
+	 * rows on this page are in. Deliberate, not missed: text in an inactive control is incidental
+	 * under 1.4.3, and a tone chosen to clear AA through the fade would land where the faded value
+	 * lands (6.17:1), so the hint would read as a value. The trade is the hint's contrast for the
+	 * two staying told apart.
 	 */
 	.input::placeholder {
-		color: var(--color-neutral-700);
+		color: var(--color-text-muted);
 	}
 
 	/*
-	 * A real checkbox with the platform's box taken off, not a button wearing `aria-pressed`: the
-	 * label association, the space bar and the announced checked state all come with the element and
-	 * none of them come with the button. The mark is clipped out of a solid block rather than typed,
-	 * so it takes a token like everything else here.
+	 * A real checkbox drawn as the design's switch, not a button wearing `aria-pressed`: the label
+	 * association, the space bar and the announced checked state all come with the element and none
+	 * of them come with the button. `appearance: none` takes the platform's box off, the element
+	 * itself is the track and `::before` the knob.
 	 *
-	 * The rule around it is neutral-900 rather than the `--color-divider` the text boxes beside it
-	 * wear: divider reads 2.41:1 on this ground, under 1.4.11, and where a text box is also found by
-	 * its fill and its width an empty check box is that line and nothing else. 12.6:1, and it stays
-	 * 3.27:1 clear of the neutral-600 an inherited box wears below, so the two do not read alike.
+	 * The track is neutral-300 off and the primary on, as the design draws them: 4.75:1 apart, and
+	 * the knob moves between them, so the state reads without the colour. Off, the track is edged
+	 * in the faint tone, 4.72:1 against the card these sit on: its fill alone is 1.44:1 there, and
+	 * the edge is what gives an unchecked switch the 3:1 boundary WCAG 1.4.11 asks of a control. On,
+	 * the edge takes the primary and the track reads as one solid pill, 6.83:1.
+	 *
+	 * The knob sits 2px inside the 1px edge to land 3px from the outside, as the design places it.
+	 * Forced-colors mode is told below what to paint the edge with.
 	 */
-	.check {
+	.switch {
 		appearance: none;
-		display: grid;
-		place-content: center;
-		width: 24px;
+		position: relative;
+		flex: none;
+		width: 42px;
 		height: 24px;
 		margin: 0;
-		background: var(--color-surface);
-		border: 1px solid var(--color-neutral-900);
-		border-radius: var(--radius-sm);
+		background: var(--color-neutral-300);
+		border: 1px solid var(--color-text-faint);
+		border-radius: var(--radius-pill);
 		cursor: pointer;
+		transition:
+			background-color 0.15s,
+			border-color 0.15s;
 	}
 
-	.check:checked {
+	/* White on the primary track is 7.00:1; the shadow is what lifts it off the pale one. */
+	.switch::before {
+		content: '';
+		position: absolute;
+		top: 2px;
+		left: 2px;
+		width: 18px;
+		height: 18px;
+		background: var(--color-bg);
+		border-radius: var(--radius-pill);
+		box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+		transition: transform 0.15s;
+	}
+
+	.switch:checked {
 		background: var(--color-accent);
 		border-color: var(--color-accent);
 	}
 
-	.check:checked::after {
-		content: '';
-		width: 12px;
-		height: 12px;
-		background: var(--color-bg);
-		clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
+	.switch:checked::before {
+		transform: translateX(18px);
 	}
 
 	/*
-	 * `disabled` is how a row says *inherited*, which is the state most rows on this page are in, so
-	 * the box has to stay readable rather than stand down. The system's own disabled dress - 0.45
-	 * opacity, stated once on `.btn` - faded fill and rule together and left an inherited value at
-	 * 1.04:1 against the page: unreadable, and unreadable for the value a reader is most often here
-	 * to read. Tones instead, at full opacity. Neutral-600 is 3.85:1 on the ground, the same tone as
-	 * a fill puts inherited-true 3.55:1 from inherited-false, and against it the tick's `--color-bg`
-	 * is 3.85:1 - while staying plainly inactive beside the resting box's near-black rule.
+	 * Faded as a disabled `.input` is in `admin-theme.css`, to 0.7 rather than a button's 0.45, and
+	 * for the same reason: `disabled` is how a row says *inherited*, and an inherited value is the
+	 * one a reader is most often here to read. Faded, an inherited "on" track is 3.45:1 against the
+	 * card with its knob 3.50:1 on it, and an inherited "off" keeps its edge at 2.71:1. WCAG exempts
+	 * an inactive control from 1.4.11; the two still sit 2.69:1 apart, with the knob at either end.
 	 */
-	.check:disabled {
-		border-color: var(--color-neutral-600);
+	.switch:disabled {
+		opacity: 0.7;
 		cursor: not-allowed;
 	}
 
-	.check:checked:disabled {
-		background: var(--color-neutral-600);
-		border-color: var(--color-neutral-600);
+	@media (prefers-reduced-motion: reduce) {
+		.switch,
+		.switch::before {
+			transition: none;
+		}
 	}
 
 	/*
-	 * The one escape hatch on this sheet, and the only rule that needs one: forced-colors mode
-	 * rewrites `color`, `background-color` and `border-color` into the user's own palette, which is
-	 * why every other rule here comes through it working. `appearance: none` is the declaration it
-	 * cannot rewrite - it removes the rendering that rewriting relies on, and with `--color-accent`
-	 * and `--color-bg` both forced to `Canvas` a checked box would be an empty one. Hand the box
-	 * back to the platform, which draws a tick that mode understands and greys it when it is
-	 * inactive; drop the clipped mark so it cannot be painted over the platform's. The fade on a
-	 * disabled `.input` needs the same escape and now takes it in `admin-theme.css`, beside the rule
-	 * it undoes - stated here it would tie with that rule on specificity and be settled by
-	 * whichever sheet the bundler emitted second.
+	 * Forced-colors mode rewrites colours into the user's own palette, and that is not enough here:
+	 * with `appearance: none` there is no platform switch left to recolour, the fills are forced to
+	 * `Canvas` and the knob's shadow is dropped, so both states would be the same empty outline. Held
+	 * out of the forced palette instead and painted in its system colours: an outlined track with a
+	 * `CanvasText` knob when off, the selected-item pair when on - the pair the rail and the profile
+	 * tabs use for their own selected state - and `GrayText` when inactive, at full opacity, since
+	 * the palette is what says inactive there. Opting out leaves the ring to colour as well.
 	 */
 	@media (forced-colors: active) {
-		.check {
-			appearance: auto;
+		.switch {
+			forced-color-adjust: none;
+			background: Canvas;
+			border-color: CanvasText;
 		}
 
-		.check:checked::after {
-			content: none;
+		.switch::before {
+			background: CanvasText;
+			box-shadow: none;
+		}
+
+		.switch:checked {
+			background: SelectedItem;
+			border-color: SelectedItem;
+		}
+
+		.switch:checked::before {
+			background: SelectedItemText;
+		}
+
+		.switch:disabled {
+			opacity: 1;
+			border-color: GrayText;
+		}
+
+		.switch:disabled::before {
+			background: GrayText;
+		}
+
+		.switch:checked:disabled {
+			background: GrayText;
+			border-color: GrayText;
+		}
+
+		.switch:checked:disabled::before {
+			background: Canvas;
+		}
+
+		.switch:focus-visible {
+			outline-color: CanvasText;
 		}
 	}
 </style>
