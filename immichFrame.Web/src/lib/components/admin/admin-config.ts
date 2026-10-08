@@ -914,6 +914,20 @@ export function profileNameError(name: string, existing: string[]): string | nul
 }
 
 /**
+ * The profiles a save will delete, once a profile called `name` has been added.
+ *
+ * A profile deleted and then added back under its name is not deleted by the save at all: it is
+ * written as a new profile with nothing of its own, and every frame on it keeps working - so the
+ * save bar has to stop saying it will be deleted. What does go is the settings the deleted one had,
+ * and the editor already shows that, since the profile added back declares nothing. Compared
+ * case-insensitively, as {@link profileNameError} compares, because that is how the server tells
+ * one profile from another: 'Kitchen' added back as 'kitchen' is the same profile.
+ */
+export function withoutPendingDeletion(pending: string[], name: string): string[] {
+	return pending.filter((deleted) => deleted.toLowerCase() !== name.toLowerCase());
+}
+
+/**
  * How a message names an account. Its label if it has one, and otherwise the server URL - never a
  * name made up here, because a name this editor invented would be indistinguishable in the settings
  * file from one the administrator chose.
@@ -1146,5 +1160,10 @@ export function validationErrors(config: EditableConfig): string[] {
 		}
 	});
 
-	return errors;
+	// Each problem once, in the order it was first found. One cause can be found more than once in
+	// the same words - two new rows given one label and nothing else each need a server URL and a
+	// key, under the one name, and a third row with that label collides with the second as well as
+	// the first - and this list is read as the things to fix before a save, where a sentence said
+	// twice reads as two of them.
+	return [...new Set(errors)];
 }

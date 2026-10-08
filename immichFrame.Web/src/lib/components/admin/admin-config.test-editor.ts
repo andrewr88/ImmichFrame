@@ -1,6 +1,7 @@
 import type { AdminAccountSettingsDto, AdminConfigUpdateDto } from '$lib/immichFrameApi';
 import {
 	ACCOUNTS_KEY,
+	newAccount,
 	newSelection,
 	toEditable,
 	usedSelections,
@@ -73,6 +74,19 @@ export function declareAccounts(config: EditableConfig, entry: EditableEntry): v
 	}
 
 	entry.declared = [...entry.declared, ACCOUNTS_KEY];
+}
+
+/**
+ * Pressing Add account, as `accounts-section.svelte`'s `addAccount` does: a row with nothing filled
+ * in and no stored key anywhere, given to the default configuration straight away.
+ */
+export function addAccount(config: EditableConfig): EditableAccount {
+	const account = newAccount();
+
+	config.accounts = [...config.accounts, account];
+	config.default.accounts = [...config.default.accounts, newSelection(account.key)];
+
+	return account;
 }
 
 /** What one configuration would be saved with. */

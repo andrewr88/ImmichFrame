@@ -13,6 +13,7 @@ import {
 	toUpdate,
 	usedSelections,
 	validationErrors,
+	withoutPendingDeletion,
 	type GeneralProp
 } from './admin-config';
 import { DEFAULT_NAME } from './admin-config.test-fixtures';
@@ -20,6 +21,7 @@ import {
 	accountLabelled,
 	accountWritten,
 	accountsWritten,
+	addAccount,
 	declareAccounts,
 	entryNamed,
 	open
@@ -566,6 +568,19 @@ describe('declaredKeyOf', () => {
 	});
 });
 
+describe('withoutPendingDeletion', () => {
+	it.each([
+		{ deleted: ['kitchen', 'hall'], added: 'kitchen', left: ['hall'] },
+		{ deleted: ['Kitchen', 'hall'], added: 'kitchen', left: ['hall'] },
+		{ deleted: ['kitchen', 'hall'], added: 'kitchen-2', left: ['kitchen', 'hall'] }
+	])("'$added' added with $deleted to be deleted, leaves $left", ({ deleted, added, left }) => {
+		// Act / Assert: a profile deleted and added back is not deleted by the save - it is written
+		// as a new profile with nothing of its own, and every frame on it keeps working - and a
+		// profile name is case-insensitive, so 'Kitchen' added back as 'kitchen' is that profile too.
+		expect(withoutPendingDeletion(deleted, added)).toEqual(left);
+	});
+});
+
 describe('regression: unticking and re-ticking an account on a profile', () => {
 	it('re-ticking, restores what this profile was showing rather than the default configurations', () => {
 		// Arrange: the profile shows different albums from the same account.
@@ -689,5 +704,50 @@ describe('regression: which configurations use an account', () => {
 		expect(
 			entriesUsingAccount(config, accountLabelled(config, 'Backup')).map((entry) => entry.name)
 		).toEqual([DEFAULT_NAME, 'hall']);
+	});
+});
+
+describe('regression: one problem found more than once', () => {
+	it.each([2, 3])('%i new accounts labelled alike, have each problem listed once', (count) => {
+		// Arrange
+		const { config } = open({ default: { accounts: [{ label: 'Att', url: IMMICH }] } });
+
+		// Act: Add account pressed again and again, and every new row given the same label and
+		// nothing else - so each of them is found to want a server URL and a key, in the same
+		// words, and every label after the first is found to collide with the one before it.
+		for (let added = 0; added < count; added++) addAccount(config).label = 'X';
+
+		const errors = validationErrors(config);
+
+		// Assert: no message twice. The list is read as a list of things to fix, and the save bar
+		// keyed it by message, so a repeat threw in place of the only explanation the refused
+		// save had.
+		expect(errors).toEqual([...new Set(errors)]);
+
+		// Assert: and nothing dropped, in the order it was found.
+		expect(errors).toEqual([
+			expect.stringContaining("two accounts are labelled 'X'"),
+			'X needs an Immich server URL.',
+			'Enter the API key for X.'
+		]);
+	});
+
+	it('three new unlabelled accounts on one server, have each problem listed once', () => {
+		// Arrange
+		const { config } = open({ default: { accounts: [{ label: 'Att', url: IMMICH }] } });
+
+		// Act
+		for (let added = 0; added < 3; added++) addAccount(config).serverUrl = 'https://new.example';
+
+		const errors = validationErrors(config);
+
+		// Assert
+		expect(errors).toEqual([...new Set(errors)]);
+		expect(errors).toEqual([
+			expect.stringContaining(
+				'two accounts with no label are on the same Immich server (https://new.example)'
+			),
+			'Enter the API key for https://new.example.'
+		]);
 	});
 });

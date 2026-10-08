@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { beforeNavigate } from '$app/navigation';
 	import * as api from '$lib/immichFrameApi';
 	import {
 		entryLabel,
@@ -10,6 +11,7 @@
 		toEditable,
 		toUpdate,
 		validationErrors,
+		withoutPendingDeletion,
 		type EditableConfig,
 		type EditableEntry
 	} from './admin-config';
@@ -65,6 +67,37 @@
 	// model knows - dirtiness here is a comparison and has never been a count of edits.
 	let serverPending: string | null = $state(null);
 	let unsaved = $derived(serverPending !== null && serverPending !== pending);
+
+	// Whether leaving now would throw away edits nothing has written yet. Not while a save is in
+	// flight: those are already on their way to the server, which settles them whether or not this
+	// page is still open to hear how.
+	let guardLeaving = $derived(unsaved && !saving);
+
+	// A navigation the app makes itself - back or forward within it, a link, a `goto` - is asked about
+	// here, and called off if the answer is no. One that unloads the page is left to `guardUnload`:
+	// while a page unloads the browser allows no prompt but its own, and asking here as well would
+	// ask twice about a link off the site, once in each voice.
+	beforeNavigate((navigation) => {
+		if (!guardLeaving || navigation.willUnload) return;
+
+		const confirmed = confirm(
+			'Leave without saving?\n\n' +
+				'Your changes to the configuration have not been saved, and leaving discards them.'
+		);
+
+		if (!confirmed) navigation.cancel();
+	});
+
+	// Anything that unloads the page: closing the tab, reloading, typing an address, going back to a
+	// page outside the app. The wording is the browser's - a page is no longer allowed a message of
+	// its own here - so all there is to do is ask for the prompt: `preventDefault`, and `returnValue`
+	// for a browser from before that was honoured.
+	function guardUnload(event: BeforeUnloadEvent) {
+		if (!guardLeaving) return;
+
+		event.preventDefault();
+		event.returnValue = true;
+	}
 
 	// Measured rather than assumed, because the strip wraps on a narrow viewport: the rail offsets
 	// its scroll-spy by whatever the sticky chrome above the pane currently covers.
@@ -167,6 +200,7 @@
 		if (newProfileError) return;
 
 		config.profiles = [...config.profiles, newProfile(name)];
+		pendingDeletions = withoutPendingDeletion(pendingDeletions, name);
 		selected = config.profiles.length;
 		newProfileName = '';
 	}
@@ -191,6 +225,8 @@
 		selected = 0;
 	}
 </script>
+
+<svelte:window onbeforeunload={guardUnload} />
 
 {#if loading}
 	<p class="text-muted loading">Loading the configuration…</p>
@@ -318,7 +354,10 @@
 				<div class="save-bar">
 					{#if problems.length > 0}
 						<ul class="save-problems">
-							{#each problems as problem (problem)}
+							<!-- Keyed by position as well as by text, as the chips in `immich-picker.svelte` are.
+							     `validationErrors` says each problem once, but a duplicate key throws - in
+							     production as well - and this list is the only explanation a refused save gets. -->
+							{#each problems as problem, index (`${problem}\n${index}`)}
 								<li>{problem}</li>
 							{/each}
 						</ul>
