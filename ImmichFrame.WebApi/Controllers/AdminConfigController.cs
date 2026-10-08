@@ -1,4 +1,5 @@
 using ImmichFrame.Core.Exceptions;
+using ImmichFrame.Core.Helpers;
 using ImmichFrame.WebApi.Helpers.Admin;
 using ImmichFrame.WebApi.Helpers.Config;
 using ImmichFrame.WebApi.Models;

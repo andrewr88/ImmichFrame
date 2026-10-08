@@ -57,9 +57,12 @@ or not — re-check the line before trusting it.
    interpolation defeats structured logging and is where the raw value usually
    slips in (`ImmichFrame.Core/Services/IcalCalendarService.cs:87`).
    Safe: sanitize into a local at the top of the action and log that local.
-   `SanitizeString` is a *denylist* — it strips a fixed punctuation set plus
-   CR/LF and leaves other control characters (tab, `\u001B`, `\u0085`, `\u2028`)
-   intact — so treat it as "safe for this log sink", never as general escaping.
+   `SanitizeString` keeps every printable character and replaces each control
+   character (C0 and C1: CR, LF, tab, `\u001B`, `\u0085`, `\u009B`) and the
+   Unicode line and paragraph separators with a space — so treat it as "safe for
+   this log sink", never as general escaping. `ToLegacyWebhookClientIdentifier`,
+   beside it, is the webhook payload's old punctuation-stripping transform and is
+   not a log sanitiser.
 
 3. **Server-only setting leaking into the client DTO** *(C#)* —
    `ClientSettingsDto` is the *unauthenticated* `/api/Config` payload

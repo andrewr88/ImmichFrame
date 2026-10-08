@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.RegularExpressions;
 using ImmichFrame.Core.Api;
 using ImmichFrame.Core.Exceptions;
+using ImmichFrame.Core.Helpers;
 using ImmichFrame.Core.Interfaces;
 using ImmichFrame.Core.Models;
 using ImmichFrame.WebApi.Models;
@@ -112,7 +113,8 @@ namespace ImmichFrame.WebApi.Controllers
 
             if (string.IsNullOrEmpty(rangeHeader))
             {
-                var notification = new AssetRequestedNotification(id, sanitizedClientIdentifier);
+                // Not the value logged above: the payload keeps the form existing automations match on.
+                var notification = new AssetRequestedNotification(id, clientIdentifier.ToLegacyWebhookClientIdentifier());
                 _ = _logic.SendWebhookNotification(notification);
             }
 
@@ -166,7 +168,9 @@ namespace ImmichFrame.WebApi.Controllers
                 throw new AssetNotFoundException("No image asset was found");
 
             var asset = await _logic.GetAsset(randomAsset.Id, AssetTypeEnum.IMAGE);
-            var notification = new AssetRequestedNotification(randomAsset.Id, sanitizedClientIdentifier);
+
+            // Not the value logged above: the payload keeps the form existing automations match on.
+            var notification = new AssetRequestedNotification(randomAsset.Id, clientIdentifier.ToLegacyWebhookClientIdentifier());
             _ = _logic.SendWebhookNotification(notification);
 
             // The image is copied out whole, so nothing reads the asset after this and releasing it

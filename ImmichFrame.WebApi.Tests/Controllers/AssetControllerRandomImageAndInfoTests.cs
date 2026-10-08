@@ -139,6 +139,27 @@ public class AssetControllerRandomImageAndInfoTests
         });
     }
 
+    /// <summary>
+    /// The client identifier a webhook receives is a contract with whatever automation reads it, so it
+    /// stays what it has always been - punctuation stripped, 'Frame_Kitchen' arriving as
+    /// 'FrameKitchen' - now that the log's sanitiser no longer strips punctuation.
+    /// </summary>
+    [Test]
+    public async Task GetRandomImageAndInfo_WebhookNotification_CarriesTheClientIdentifierAsItAlwaysHas()
+    {
+        // Arrange
+        IWebhookNotification? sent = null;
+        _logic.Setup(logic => logic.SendWebhookNotification(It.IsAny<IWebhookNotification>()))
+            .Callback<IWebhookNotification>(notification => sent = notification)
+            .Returns(Task.CompletedTask);
+
+        // Act
+        await CreateController().GetRandomImageAndInfo("Frame_Kitchen");
+
+        // Assert
+        Assert.That((sent as AssetRequestedNotification)?.ClientIdentifier, Is.EqualTo("FrameKitchen"));
+    }
+
     private AssetController CreateController() =>
         new(NullLogger<AssetController>.Instance, _logic.Object, _settings);
 
