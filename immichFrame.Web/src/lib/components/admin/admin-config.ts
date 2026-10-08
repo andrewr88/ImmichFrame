@@ -965,6 +965,22 @@ export function withoutPendingDeletion(pending: string[], name: string): string[
 }
 
 /**
+ * The profiles a save will delete, once the profile called `name` has been deleted.
+ *
+ * Only a profile the server holds is deleted by a save, so `onServer` is the profile names the last
+ * read or save returned. One added since then never reached the settings file, and deleting it
+ * again leaves nothing for a save to delete - listing it had the save bar say that a profile nobody
+ * ever saved will be deleted when you save. Compared case-insensitively, as
+ * {@link withoutPendingDeletion} compares: a profile deleted and added back in another case is still
+ * the one the server holds, and deleting it a second time deletes that.
+ */
+export function withPendingDeletion(pending: string[], name: string, onServer: string[]): string[] {
+	const held = onServer.some((stored) => stored.toLowerCase() === name.toLowerCase());
+
+	return held ? [...pending, name] : pending;
+}
+
+/**
  * How a message names an account. Its label if it has one, and otherwise the server URL - never a
  * name made up here, because a name this editor invented would be indistinguishable in the settings
  * file from one the administrator chose.
@@ -1061,8 +1077,18 @@ const INT32_MIN = -2147483648;
 const INT32_MAX = 2147483647;
 
 /**
+ * The account settings the server holds to a narrower range than an int's. `ImagesFromDays` is
+ * bounded by `ServerAccountSettings.MaxImagesFromDays`: a negative number moves the cut-off into the
+ * future, and one a date cannot count back from today failed every request for the account's photos.
+ * The server refuses either, but in words that name neither the configuration nor the account.
+ */
+const accountRanges: Partial<Record<AccountProp, readonly [min: number, max: number]>> = {
+	imagesFromDays: [0, 36500]
+};
+
+/**
  * What a box holding a whole-number setting needs to hold instead, or null where the server can take
- * what it holds.
+ * what it holds. The range is an int's, unless the setting has a narrower one of its own.
  *
  * One answer per box, and the range comes first: a number past it is told the range whether or not
  * it is also a fraction, because that one sentence is everything it needs - told only that it needs
@@ -1070,9 +1096,12 @@ const INT32_MAX = 2147483647;
  * inside the range is told only that, because the range has nothing to do with what is wrong with
  * it, and two billion is no help to someone who typed a rating of 2.5.
  */
-function wholeNumberNeed(value: NonNullable<FieldValue>): string | null {
-	if (typeof value === 'number' && (value < INT32_MIN || value > INT32_MAX)) {
-		return `a whole number between ${INT32_MIN} and ${INT32_MAX}`;
+function wholeNumberNeed(
+	value: NonNullable<FieldValue>,
+	[min, max]: readonly [number, number] = [INT32_MIN, INT32_MAX]
+): string | null {
+	if (typeof value === 'number' && (value < min || value > max)) {
+		return `a whole number between ${min} and ${max}`;
 	}
 
 	return Number.isInteger(value) ? null : 'a whole number';
@@ -1184,7 +1213,10 @@ export function validationErrors(config: EditableConfig): string[] {
 
 			for (const prop of wholeNumberAccountProps) {
 				const value = selection.values[prop];
-				const need = value === null || value === undefined ? null : wholeNumberNeed(value);
+				const need =
+					value === null || value === undefined
+						? null
+						: wholeNumberNeed(value, accountRanges[prop]);
 
 				if (!need) continue;
 

@@ -11,6 +11,7 @@
 		toEditable,
 		toUpdate,
 		validationErrors,
+		withPendingDeletion,
 		withoutPendingDeletion,
 		type EditableConfig,
 		type EditableEntry
@@ -47,6 +48,9 @@
 	let newProfileName = $state('');
 	let newProfileError = $state('');
 	let pendingDeletions: string[] = $state([]);
+	// The profiles the server holds, as of the last read or save: the only ones a save can delete.
+	// Read by the delete button alone, so not state - nothing on the page is drawn from it.
+	let serverProfiles: string[] = [];
 
 	let entries: EditableEntry[] = $derived(config ? [config.default, ...config.profiles] : []);
 	let current = $derived(entries[Math.min(selected, entries.length - 1)]);
@@ -133,6 +137,7 @@
 			const loaded = toEditable(response.data);
 
 			config = loaded;
+			serverProfiles = loaded.profiles.map((profile) => profile.name);
 			serverPending = JSON.stringify(toUpdate(loaded));
 			selected = 0;
 			onSource(loaded.source.path ?? loaded.source.format ?? 'unknown');
@@ -166,6 +171,7 @@
 				const reloaded = toEditable(response.data);
 
 				config = reloaded;
+				serverProfiles = reloaded.profiles.map((profile) => profile.name);
 				pendingDeletions = [];
 				// Raised here as well as in `load`: a save can rewrite the file it read from - converting a
 				// legacy schema changes its format - and the header pill is the only place that is shown.
@@ -221,7 +227,7 @@
 		if (!confirmed) return;
 
 		config.profiles = config.profiles.filter((profile) => profile !== entry);
-		pendingDeletions = [...pendingDeletions, entry.name];
+		pendingDeletions = withPendingDeletion(pendingDeletions, entry.name, serverProfiles);
 		selected = 0;
 	}
 </script>
@@ -253,7 +259,12 @@
 				<!-- `aria-pressed` says to assistive technology what the fill says on screen: which of
 				     these configurations is the one being edited. -->
 				<div class="tabs">
-					{#each entries as entry, index (entry.name + index)}
+					<!-- Keyed by name alone, because a name is already unique here: the server and
+					     `profileNameError` both refuse two profiles named alike in any case, 'default' is
+					     reserved, and nothing renames one. Name and position run together were not - 'a1'
+					     second and 'a' twelfth are both 'a12' - and a duplicate key throws, in production
+					     as well. -->
+					{#each entries as entry, index (entry.name)}
 						<button
 							type="button"
 							class="tab"

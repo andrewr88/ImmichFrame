@@ -34,7 +34,11 @@
 	>
 		<!-- <div class="text-4xl mx-8 font-bold">Appointments</div> -->
 		<div class="">
-			{#each appointments as appointment}
+			<!-- Keyed by position, because nothing else will do. An appointment has no id, and a key
+			     built from its fields can repeat - the same event arrives once from each calendar it is
+			     on - and a repeated key throws, in production as well. Keyed by the object, every
+			     refresh would remount every row, since each fetch hands back new ones. -->
+			{#each appointments as appointment, index (index)}
 				<div class="bg-gray-600/90 mb-2 text-left rounded-md p-3">
 					<p class="text-xs">
 						{formatDates(appointment.startTime ?? '', appointment.endTime ?? '', $configStore)}

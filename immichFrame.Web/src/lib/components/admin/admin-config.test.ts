@@ -14,6 +14,7 @@ import {
 	toUpdate,
 	usedSelections,
 	validationErrors,
+	withPendingDeletion,
 	withoutPendingDeletion,
 	type AccountProp,
 	type GeneralProp
@@ -583,6 +584,77 @@ describe('withoutPendingDeletion', () => {
 	});
 });
 
+describe('withPendingDeletion', () => {
+	/** One press of Add profile or Delete profile, and the name it was pressed for. */
+	type Step = [action: 'add' | 'delete', name: string];
+
+	/** What the save bar lists after a run of steps, taken the way `config-editor.svelte` takes them. */
+	function deletedAfter(onServer: string[], steps: Step[]) {
+		return steps.reduce<string[]>(
+			(deleted, [action, name]) =>
+				action === 'add'
+					? withoutPendingDeletion(deleted, name)
+					: withPendingDeletion(deleted, name, onServer),
+			[]
+		);
+	}
+
+	it.each<{ case: string; onServer: string[]; steps: Step[]; left: string[] }>([
+		{
+			case: 'a profile the server holds, deleted',
+			onServer: ['kitchen'],
+			steps: [['delete', 'kitchen']],
+			left: ['kitchen']
+		},
+		{
+			case: 'a profile added and deleted again before a save',
+			onServer: ['kitchen'],
+			steps: [
+				['add', 'hall'],
+				['delete', 'hall']
+			],
+			left: []
+		},
+		{
+			case: 'a profile the server holds, deleted, added back and deleted again',
+			onServer: ['kitchen'],
+			steps: [
+				['delete', 'kitchen'],
+				['add', 'kitchen'],
+				['delete', 'kitchen']
+			],
+			left: ['kitchen']
+		},
+		{
+			case: 'the same, added back in another case',
+			onServer: ['Kitchen'],
+			steps: [
+				['delete', 'Kitchen'],
+				['add', 'kitchen'],
+				['delete', 'kitchen']
+			],
+			left: ['kitchen']
+		},
+		{
+			case: 'two profiles the server holds, deleted either side of one that never reached it',
+			onServer: ['kitchen', 'hall'],
+			steps: [
+				['delete', 'kitchen'],
+				['add', 'lounge'],
+				['delete', 'lounge'],
+				['delete', 'hall']
+			],
+			left: ['kitchen', 'hall']
+		}
+	])('$case, leaves $left to be deleted', ({ onServer, steps, left }) => {
+		// Assert: a save deletes only what the settings file holds. A profile added since it was read
+		// never reached it, so deleting that one again deletes nothing - and the save bar said it
+		// would be deleted when you save. Compared case-insensitively, as the server tells one profile
+		// from another.
+		expect(deletedAfter(onServer, steps)).toEqual(left);
+	});
+});
+
 describe('regression: unticking and re-ticking an account on a profile', () => {
 	it('re-ticking, restores what this profile was showing rather than the default configurations', () => {
 		// Arrange: the profile shows different albums from the same account.
@@ -862,6 +934,26 @@ describe('regression: a whole number past the range the server holds it in', () 
 			// Assert: both ends of the range are an int's own.
 			expect(errorsAfter({ entry: DEFAULT_NAME, on, prop, value })).toEqual([]);
 		});
+	});
+});
+
+describe('regression: a number of days the server will not count back', () => {
+	const prop = 'imagesFromDays';
+
+	it.each([-1, 36501, 2147483647, 36500.5])('imagesFromDays at %s, is refused by name', (value) => {
+		// Assert: the server refuses ImagesFromDays outside 0 to 36500 - a negative number moves the
+		// cut-off into the future, and one a date cannot count back failed every request for the
+		// account's photos - but says so naming neither the configuration nor the account. Past the
+		// range is told the range, fraction or not, as it is for an int's.
+		expect(errorsAfter({ entry: DEFAULT_NAME, on: 'account', prop, value })).toEqual([
+			"the default configuration: 'Images from the last' for Att needs a whole number between 0 " +
+				'and 36500, or to be left blank.'
+		]);
+	});
+
+	it.each([0, 36500])('imagesFromDays at %s, is accepted', (value) => {
+		// Assert: 0 is today's photos alone, and both ends of the range are its own.
+		expect(errorsAfter({ entry: DEFAULT_NAME, on: 'account', prop, value })).toEqual([]);
 	});
 });
 
