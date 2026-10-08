@@ -10,6 +10,13 @@ namespace ImmichFrame.Core.Helpers
 
             foreach (var line in File.ReadAllLines(filePath))
             {
+                // docker compose reads this same file and skips its comments, so this has to as well.
+                // Split on '=' like any other line, "# IMMICHFRAME_CONFIG_PATH=/app/Config" set a
+                // variable named "# IMMICHFRAME_CONFIG_PATH".
+                var trimmed = line.Trim();
+                if (trimmed.Length == 0 || trimmed.StartsWith('#'))
+                    continue;
+
                 var index = line.IndexOf('=');
 
                 if (index == -1)

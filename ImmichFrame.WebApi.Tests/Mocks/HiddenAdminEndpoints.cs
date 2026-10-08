@@ -46,8 +46,9 @@ public class BareAuthorizeAdminEndpoint : ControllerBase
 }
 
 /// <summary>
-/// Authorization that names a real policy, but not the admin one. Anything the frame already knows
-/// how to satisfy is not an admin guard.
+/// Authorization that names a policy, but not the admin one. The guard goes by the name alone and
+/// never resolves it, so it makes no difference that no policy by this name is registered: anything
+/// but <c>AdminOnly</c> is not an admin guard.
 /// </summary>
 [NonController]
 [Route("api/admin/probe")]

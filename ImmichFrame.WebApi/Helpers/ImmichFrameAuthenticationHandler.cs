@@ -4,7 +4,11 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Encodings.Web;
+
+namespace ImmichFrame.WebApi.Helpers;
 
 public class ImmichFrameAuthenticationHandler : AuthenticationHandler<AuthenticationSchemeOptions>
 {
@@ -47,17 +51,21 @@ public class ImmichFrameAuthenticationHandler : AuthenticationHandler<Authentica
             return Task.FromResult(AuthenticateResult.Success(ticket));
         }
 
-        if (!Request.Headers.ContainsKey("Authorization"))
+        var authHeader = Request.Headers.Authorization.ToString();
+        if (string.IsNullOrEmpty(authHeader))
         {
             return Task.FromResult(AuthenticateResult.Fail("Missing Authorization Header"));
         }
 
-        var authHeader = Request.Headers["Authorization"].ToString();
         if (authHeader.StartsWith("Bearer ", System.StringComparison.OrdinalIgnoreCase))
         {
             var token = authHeader.Substring("Bearer ".Length).Trim();
 
-            if (token == authenticationSecret)
+            // Constant time, so how long a wrong token takes to refuse says nothing about how much
+            // of it was right. Only the length can still show - FixedTimeEquals refuses a length
+            // mismatch at once - and that is accepted: it is the content that a timing attack would
+            // otherwise recover one byte at a time.
+            if (CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(token), Encoding.UTF8.GetBytes(authenticationSecret)))
             {
                 var claims = new[] { new Claim(ClaimTypes.NameIdentifier, "authenticatedUser") };
                 var identity = new ClaimsIdentity(claims, Scheme.Name);

@@ -1,6 +1,8 @@
 using ImmichFrame.WebApi.Helpers.Admin;
 using Microsoft.AspNetCore.Authentication;
 
+namespace ImmichFrame.WebApi.Helpers;
+
 public class CustomAuthenticationMiddleware
 {
     private readonly RequestDelegate _next;

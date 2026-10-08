@@ -111,6 +111,29 @@ public class FrameAuthenticationTests
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
     }
 
+    /// <summary>
+    /// Nothing above sends a wrong token, so without this a handler that let every bearer token
+    /// through would pass the whole fixture. Each case is a near miss that some broken comparison
+    /// accepts: one that ignores case, and one that stops at the end of the shorter input - which
+    /// takes a prefix of the secret, or the secret with more after it.
+    /// </summary>
+    [TestCase("a-real-secreT")]
+    [TestCase("a-real-secre")]
+    [TestCase("a-real-secret-and-more")]
+    public async Task RealSecret_NearMissBearerToken_IsRefused(string token)
+    {
+        // Arrange
+        using var factory = CreateFactory(RealSecret);
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/Calendar");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        // Act
+        var response = await factory.CreateClient().SendAsync(request);
+
+        // Assert
+        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Unauthorized));
+    }
+
     private static WebApplicationFactory<Program> CreateFactory(string? authenticationSecret)
     {
         var versionHandler = new Mock<HttpMessageHandler>().WithServerVersion();

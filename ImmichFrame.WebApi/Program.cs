@@ -19,6 +19,20 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Development only: gives dotnet run the docker/.env that docker compose hands the container. It
+// has to come before anything below reads the environment - LOG_LEVEL, IMMICHFRAME_CONFIG_PATH and
+// the admin surface's OpenID Connect settings are each read once, during startup, so loaded any
+// later the file sets them too late to matter.
+if (builder.Environment.IsDevelopment())
+{
+    var root = Directory.GetCurrentDirectory();
+    var dotenv = Path.Combine(root, "..", "docker", ".env");
+
+    dotenv = Path.GetFullPath(dotenv);
+    DotEnv.Load(dotenv);
+}
+
 //log the version number
 var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "unknown";
 Console.WriteLine($@"
@@ -33,11 +47,11 @@ Console.WriteLine();
 // Add services to the container.
 builder.Services.AddLogging(builder =>
 {
-    LogLevel level = LogLevel.Information;
     var logLevel = Environment.GetEnvironmentVariable("LOG_LEVEL");
-    if (!string.IsNullOrWhiteSpace(logLevel))
+    var level = LogLevelSetting.Parse(logLevel, out var rejected);
+    if (rejected)
     {
-        Enum.TryParse(logLevel, true, out level);
+        Console.WriteLine($"LOG_LEVEL '{logLevel}' is not one of {string.Join(", ", Enum.GetNames<LogLevel>())}; ignoring it");
     }
 
     Console.WriteLine($"LogLevel: {level}");
@@ -176,20 +190,16 @@ if (adminOidcOptions.TrustProxyHeaders)
     });
 }
 
-builder.Services.AddAuthorization(options =>
-{
-    options.AddPolicy("AllowAnonymous", policy => policy.RequireAssertion(context => true));
-
+builder.Services.AddAuthorizationBuilder()
     // The scheme is named rather than inherited: the default is still ImmichFrameScheme, whose
     // handler succeeds anonymously whenever no secret is configured, so a policy that inherited the
     // default would treat every caller on an unsecured frame as an authenticated administrator.
-    options.AddPolicy(AdminAuthentication.AdminOnlyPolicy, policy =>
+    .AddPolicy(AdminAuthentication.AdminOnlyPolicy, policy =>
     {
         policy.AddAuthenticationSchemes(AdminAuthentication.CookieScheme);
         policy.RequireAuthenticatedUser();
         policy.AddRequirements(new AdminAllowlistRequirement());
     });
-});
 
 var authenticationBuilder = builder.Services.AddAuthentication("ImmichFrameScheme")
     .AddScheme<AuthenticationSchemeOptions, ImmichFrameAuthenticationHandler>("ImmichFrameScheme", options => { });
@@ -270,19 +280,6 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseStaticFiles();
-if (app.Environment.IsProduction())
-{
-    app.UseDefaultFiles();
-}
-
-if (app.Environment.IsDevelopment())
-{
-    var root = Directory.GetCurrentDirectory();
-    var dotenv = Path.Combine(root, "..", "docker", ".env");
-
-    dotenv = Path.GetFullPath(dotenv);
-    DotEnv.Load(dotenv);
-}
 
 // app.UseHttpsRedirection();
 // Outside everything that resolves a profile, including UnknownProfileMiddleware's own catalog
