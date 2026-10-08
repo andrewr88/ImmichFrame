@@ -272,6 +272,39 @@ or not — re-check the line before trusting it.
     Safe: `\A` and `\z` for validators. `\Z` is not the fix — it has the same
     trailing-newline behaviour as `$`.
 
+15. **Operator-trust setting made writable by the admin editor** *(C#)* — the
+    settings schema was written for an operator who already controls the
+    process, so a setting that names a file to read, a command to run or a URL
+    to fetch server-side needed no checks: whoever wrote it could do that
+    anyway. The admin editor turns every setting into request input from an
+    OIDC-allowlisted administrator — a role in the identity provider, not
+    access to the host — so each such setting is now a privilege boundary.
+    `ApiKeyFile` was the instance: `ValidateAndInitialize` reads whatever path
+    it names (`ImmichFrame.WebApi/Models/ServerSettings.cs:119`) and the
+    account then sends the contents as `X-API-KEY` to its `ImmichServerUrl`,
+    so one save read any file the process could and posted it to a host the
+    administrator chose, while a missing path came back as the OS's "Could not
+    find a part of the path" — a file-existence oracle. The editor now keeps an
+    `ApiKeyFile` only when it is exactly the path stored on the account the
+    handle names (`ImmichFrame.WebApi/Helpers/Config/AdminConfigService.cs:655`),
+    and reports an unreadable one without the OS message
+    (`ImmichFrame.WebApi/Helpers/Config/AdminConfigService.cs:153`).
+    Tell: a property `AdminConfigService` writes from `AdminConfigUpdateDto` —
+    anything on `GeneralSettings` or `ServerAccountSettings` — that is a
+    filesystem path, a command, or a URL the server dials, with no check on the
+    save path; validation that touches the disk or the network before deciding
+    whether the value may be used at all; an OS or network error message
+    returned to the editor. `ImmichServerUrl`, `Webcalendars` and `Webhook`
+    are the untouched siblings: editor-writable and dialed by the frame's own
+    clients with no allowlist, so class 7's "operator-supplied" premise no
+    longer holds for them.
+    Safe: restrict the editor path, not the loader — the operator's own file
+    still loads as written. Keep a server-acted value only when it is exactly
+    what the operator stored, or validate it against an allowlist (scheme and
+    resolved host for URLs, per class 7) *before* anything reads or dials it;
+    map file-system and network failures on that path to a generic message and
+    log the detail for the operator.
+
 ---
 
 This list is maintained: when a new recurring class is found and fixed, add it

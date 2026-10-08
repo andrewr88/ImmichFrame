@@ -19,6 +19,12 @@ import type { StoredAccount } from './admin-config.test-fixtures';
  * save the editor could have prevented), and general settings are only checked for being settings
  * the server knows about.
  *
+ * A third it does not model although the grid does vary it: `Accounts` refuses an `ApiKeyFile` that
+ * is not exactly the one stored on the account the handle names - a typed path, or one copy of an
+ * account written with another copy's path. `validationErrors` does not refuse those saves itself
+ * yet, so the server's message is what the administrator sees, and transcribing the rule here would
+ * turn the grid red until the editor learns it too.
+ *
  * ## Which of these rules the suite actually exercises
  *
  * One of the eight: `no-credential`. Every one of the 674 refusals the credential grid provokes is

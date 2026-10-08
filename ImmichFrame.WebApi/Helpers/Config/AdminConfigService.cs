@@ -81,9 +81,8 @@ public sealed class AdminConfigService(
     /// Writes <paramref name="request"/> to the settings file and applies it without a restart.
     /// </summary>
     /// <exception cref="ConfigSaveRefusedException">
-    /// Nothing was written: the version token is stale, the configuration came from the environment,
-    /// the file is in the v1 schema and the request did not consent to converting it, or the
-    /// directory cannot be written to.
+    /// Nothing was written: the version token is stale, because another save landed after the editor
+    /// read the configuration - in this process, or in another one sharing the database.
     /// </exception>
     /// <exception cref="SettingsNotValidException">
     /// Nothing was written: the configuration in the request does not load.
@@ -93,7 +92,6 @@ public sealed class AdminConfigService(
         lock (_saveLock)
         {
             var settings = _store.Read();
-            var source = new ConfigSource(settings.Format, null, false);
 
             // Checked here as well as inside the store: this lock is what makes the token meaningful
             // within the process, and refusing before anything is rendered keeps the message about
@@ -104,7 +102,7 @@ public sealed class AdminConfigService(
                     "The settings have changed since they were loaded into the editor. Reload the configuration and apply your changes again.");
             }
 
-            var stored = StoredSecrets(source, settings.Text, request.Version);
+            var stored = StoredSecrets(settings.Format, settings.Text, request.Version);
             var rewritten = Render(settings.Format, BuildDocument(request, stored));
 
             // Bind and validate before the file is touched. Validation is local - it reads ApiKeyFile
@@ -136,8 +134,14 @@ public sealed class AdminConfigService(
     /// <see cref="InvalidOperationException"/> straight through, so without this a missing API key -
     /// the likeliest mistake there is - would reach the client as a 500 rather than as the sentence
     /// that says which account is wrong.
+    /// <para>
+    /// The one failure not passed on in its own words is an API key file that cannot be read. The
+    /// operating system's message says whether the path is missing, a directory or merely unreadable
+    /// - a fact about the server's file system rather than about the configuration - so the operator
+    /// gets it in the log, and the editor a sentence that names no path.
+    /// </para>
     /// </summary>
-    private static ConfigCatalog Validated(ConfigFormat format, string text)
+    private ConfigCatalog Validated(ConfigFormat format, string text)
     {
         try
         {
@@ -145,6 +149,16 @@ public sealed class AdminConfigService(
             catalog.Validate();
 
             return catalog;
+        }
+        catch (Exception ex) when (UnreadableFile(ex) is { } failure)
+        {
+            _logger.LogWarning("An API key file could not be read while validating a configuration save: {reason}",
+                failure.Message);
+
+            throw new SettingsNotValidException(
+                "An API key file in this configuration could not be read. Check that the file still exists on the " +
+                "server and that ImmichFrame can read it, or enter the account's API key instead.",
+                ex);
         }
         catch (SettingsNotValidException)
         {
@@ -154,6 +168,21 @@ public sealed class AdminConfigService(
         {
             throw new SettingsNotValidException(ex.Message, ex);
         }
+    }
+
+    /// <summary>
+    /// The file-system failure behind <paramref name="exception"/>, if that is what it is. Reading an
+    /// ApiKeyFile is the only thing validation does on disk, and a profile's failure arrives wrapped
+    /// in <see cref="ConfigCatalog.Validate"/>'s own exception, so the whole chain is searched.
+    /// </summary>
+    private static Exception? UnreadableFile(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is IOException or UnauthorizedAccessException) return current;
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -209,41 +238,12 @@ public sealed class AdminConfigService(
     /// Entries the request is about to delete or rename are in there too: an account of theirs may
     /// be the one moving elsewhere in this very save.
     /// </para>
-    /// <para>
-    /// A v1 file has no declared-versus-inherited distinction to preserve - it is one flat
-    /// configuration with no profiles - so its secrets come from the running settings instead, and
-    /// its accounts are the default configuration's alone. Without that, converting a file to the
-    /// current schema would blank the API key it is being converted around.
-    /// </para>
     /// </summary>
-    private StoredConfiguration StoredSecrets(ConfigSource source, string current, string version)
+    private static StoredConfiguration StoredSecrets(ConfigFormat format, string current, string version)
     {
         var declaredByName = new Dictionary<string, JsonObject>(StringComparer.OrdinalIgnoreCase);
 
-        if (source.LegacySchema)
-        {
-            var settings = _catalog.Default;
-
-            declaredByName[ConfigCatalog.DefaultProfileName] = new JsonObject
-            {
-                [GeneralKey] = new JsonObject
-                {
-                    [nameof(GeneralSettings.WeatherApiKey)] = settings.GeneralSettings.WeatherApiKey,
-                    [nameof(GeneralSettings.Webhook)] = settings.GeneralSettings.Webhook,
-                    [nameof(GeneralSettings.AuthenticationSecret)] = settings.GeneralSettings.AuthenticationSecret
-                },
-                [AccountsKey] = new JsonArray(settings.Accounts
-                    .Select(account => (JsonNode)new JsonObject
-                    {
-                        [nameof(ServerAccountSettings.ApiKey)] = account.ApiKey
-                    })
-                    .ToArray())
-            };
-
-            return new StoredConfiguration(declaredByName, AccountsById(version, declaredByName));
-        }
-
-        var document = ConfigLoader.CreateDocument(source.Format, current);
+        var document = ConfigLoader.CreateDocument(format, current);
 
         declaredByName[ConfigCatalog.DefaultProfileName] = document.DeclaredOverrides(null);
 
@@ -253,7 +253,7 @@ public sealed class AdminConfigService(
             // both resolved out of this dictionary by entry name, so a second entry answering to a
             // name already in it would quietly source the first one's secrets - the default
             // configuration's three general secrets and its accounts' stored keys among them - from
-            // somewhere else in the file. No file that reaches this branch can do that today: the
+            // somewhere else in the file. No document that reaches here can do that today: the
             // loader refuses both collisions, and one that trips either is read as v1 instead. The
             // refusal is repeated here because that guarantee lives two files away, and nothing on
             // this side would notice it being relaxed.
@@ -305,14 +305,13 @@ public sealed class AdminConfigService(
     private AdminConfigDto ReadCurrent()
     {
         var settings = _store.Read();
-        var source = new ConfigSource(settings.Format, null, false);
         var version = VersionOf(settings);
 
         // Nothing has ever configured this instance, so there is no document to project. The editor
         // gets the empty default configuration to fill in rather than an error.
         if (_store.IsUnconfigured)
         {
-            return NotFromAFile(source, version, null);
+            return NotFromAFile(settings.Format, version);
         }
 
         var document = ConfigLoader.CreateDocument(settings.Format, settings.Text);
@@ -323,28 +322,26 @@ public sealed class AdminConfigService(
 
         return new AdminConfigDto(
             version,
-            new AdminConfigSourceDto(FormatName(source.Format), null, false, true, null),
+            new AdminConfigSourceDto(FormatName(settings.Format), null, false, true, null),
             Entry(version, ConfigCatalog.DefaultProfileName,
                 document.Bind<ServerSettings>(null), document.DeclaredOverrides(null)),
             profiles);
     }
 
     /// <summary>
-    /// The view for a configuration that has no current-schema document behind it - one loaded from
-    /// the environment, or through the v1 fallback. The values come from the running catalog, and
-    /// every key counts as declared, since neither shape has anything to inherit from.
+    /// The view for an instance nothing has configured yet, which has no stored document behind it.
+    /// The values come from the running catalog, and every key counts as declared, since there is
+    /// nothing to inherit from. Always editable: configuring such an instance is what the editor is
+    /// for.
     /// </summary>
-    private AdminConfigDto NotFromAFile(ConfigSource source, string version, string? notEditableReason)
+    private AdminConfigDto NotFromAFile(ConfigFormat format, string version)
     {
         var settings = _catalog.Default;
 
         // Every account is declared here, so every one has a stored key the save can put back.
         //
         // The label has to be read off the concrete settings, because it is not on IAccountSettings
-        // and must not be put there - and this branch only has the interface. An environment
-        // configuration and a v1 file both arrive as adapters over their own schema, neither of
-        // which can express a label, so reporting none for them is the honest answer rather than a
-        // gap: the cast fails exactly when there is nothing to read.
+        // and must not be put there - and this branch only has the interface.
         var accounts = settings.Accounts
             .Select((account, index) => new AdminAccountSettingsDto(account)
             {
@@ -361,8 +358,7 @@ public sealed class AdminConfigService(
 
         return new AdminConfigDto(
             version,
-            new AdminConfigSourceDto(FormatName(source.Format), source.Path, source.LegacySchema,
-                notEditableReason is null, notEditableReason),
+            new AdminConfigSourceDto(FormatName(format), null, false, true, null),
             entry,
             []);
     }
@@ -645,6 +641,27 @@ public sealed class AdminConfigService(
                 }
             }
 
+            // A key file is kept only where it is exactly the one already stored on the account the
+            // handle names, so it is always a path the operator wrote. Validating the save reads the
+            // file into the account's API key, and the account then sends it to its server as
+            // X-API-KEY: a path taken from the editor would let an administrator - an allowlisted
+            // identity, not someone with access to this machine - read any file ImmichFrame can and
+            // post it to a server of their choosing. So a new path, a changed one, and one on an
+            // account no handle resolves are all refused, before anything opens them.
+            //
+            // The server URL beside a kept path stays editable. That sends the operator's own key
+            // wherever the administrator points it, which is no more than moving any stored key to a
+            // new URL - the exposure AccountId already accepts.
+            if (!string.IsNullOrWhiteSpace(account.ApiKeyFile) &&
+                !string.Equals(account.ApiKeyFile,
+                    stored?[nameof(ServerAccountSettings.ApiKeyFile)]?.GetValue<string>(), StringComparison.Ordinal))
+            {
+                throw new SettingsNotValidException(
+                    $"'{Describe(account)}' in {where} names an API key file the stored settings do not give that " +
+                    "account. An API key file can only be set in the settings on the server, since ImmichFrame reads " +
+                    "whatever file it names - enter the API key instead.");
+            }
+
             var apiKey = account.ApiKey;
 
             if (AdminSecret.KeepsStored(apiKey))
@@ -770,11 +787,18 @@ public sealed class AdminConfigService(
     /// stays YAML and one imported from JSON stays JSON. Not a cosmetic choice: YAML's
     /// representation model carries no resolved scalar type, so rewriting a YAML document as JSON
     /// would have to guess whether a quoted '10' was a number or a string.
+    /// <para>
+    /// The same fact is why YAML strings are quoted wherever plain would read as something else. The
+    /// serializer writes a string bare by default, so a secret of "null" or a tag of "~" reloaded as
+    /// null - and an <c>AuthenticationSecret</c> that reloads as null turns the frame's
+    /// authentication off. Real booleans and numbers are unaffected: they reach here typed, and are
+    /// still written plain.
+    /// </para>
     /// </summary>
     private static string Render(ConfigFormat format, Dictionary<string, object?> root) => format switch
     {
         ConfigFormat.Json => JsonSerializer.Serialize(root, JsonOutput),
-        ConfigFormat.Yaml => new SerializerBuilder().Build().Serialize(root),
+        ConfigFormat.Yaml => new SerializerBuilder().WithQuotingNecessaryStrings().Build().Serialize(root),
         _ => throw new ConfigSaveRefusedException($"There is no settings document to write for {format}.")
     };
 

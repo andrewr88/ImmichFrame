@@ -114,13 +114,24 @@ internal sealed class YamlConfigDocument(string _yaml) : IConfigDocument
         {
             YamlMappingNode mapping => ToJson(mapping),
             YamlSequenceNode sequence => new JsonArray(sequence.Children.Select(ToJson).ToArray()),
-            // A plain empty, '~' or 'null' scalar is YAML's null; quoted, the same characters are a
-            // string the user meant to write.
-            YamlScalarNode { Style: ScalarStyle.Plain, Value: null or "" or "~" or "null" } => null,
+            _ when IsNull(node) => null,
             YamlScalarNode { Value: { } value } => JsonValue.Create(value),
             _ => null
         };
     }
+
+    /// <summary>
+    /// Whether a node is YAML's null: a plain empty, <c>~</c>, <c>null</c>, <c>Null</c> or
+    /// <c>NULL</c> scalar. Quoted, the same characters are a string the user meant to write.
+    /// <para>
+    /// The binder's definition, spelling for spelling - YamlDotNet reads exactly these as null - and
+    /// the one definition everything here uses. Two copies is how <c>Profiles: ~</c> came to be
+    /// refused while <c>Profiles:</c> was not, and a projection that took <c>NULL</c> for a string
+    /// the binder took for null would hand a save that string to write back, quoted, as a value.
+    /// </para>
+    /// </summary>
+    private static bool IsNull(YamlNode? node) =>
+        node is null or YamlScalarNode { Style: ScalarStyle.Plain, Value: null or "" or "~" or "null" or "Null" or "NULL" };
 
     /// <summary>
     /// Refuses a document that uses YAML anchors, rather than quietly flattening one.
@@ -185,7 +196,12 @@ internal sealed class YamlConfigDocument(string _yaml) : IConfigDocument
     private static YamlMappingNode? ProfilesOf(YamlMappingNode root)
     {
         if (!TryFindChild(root, ProfilesKey, StringComparison.Ordinal, out _, out var profiles)) return null;
-        if (profiles is null or YamlScalarNode { Value: null or "" }) return null;
+
+        // Null, however it is spelled, declares no profiles - and so does a quoted empty string,
+        // which was always read that way and names none either. Refusing any of them is worse than
+        // unhelpful: the refusal sends the whole file down the loader's v1 fallback, which binds a
+        // current-schema file to a single account with no server and no key.
+        if (IsNull(profiles) || profiles is YamlScalarNode { Value: "" }) return null;
 
         return profiles as YamlMappingNode
                ?? throw new SettingsNotValidException($"'{ProfilesKey}' must be a mapping of profile names to their settings.");

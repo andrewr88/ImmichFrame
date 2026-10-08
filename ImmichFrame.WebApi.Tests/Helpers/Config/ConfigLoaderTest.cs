@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Globalization;
 using System.Reflection;
 using ImmichFrame.Core.Interfaces;
 using ImmichFrame.WebApi.Helpers;
@@ -48,6 +49,27 @@ public class ConfigLoaderTest
         var config = _configLoader.LoadConfigYaml<ServerSettings>(Path.Combine(
             TestContext.CurrentContext.TestDirectory, "Resources/TestV2.yml"));
         VerifyConfig(config);
+    }
+
+    /// <summary>
+    /// The built-in weather location is New York, 40.7128 N 74.0060 W, and west is negative: without
+    /// the sign the same digits are a point in Central Asia, which is whose weather a frame nobody
+    /// gave a location would show. Both schemas carry their own copy of the default.
+    /// </summary>
+    [Test]
+    public void DefaultWeatherLocationIsWestOfGreenwichInBothSchemas()
+    {
+        var defaults = new[]
+        {
+            new GeneralSettings().WeatherLatLong,
+            new ServerSettingsV1Adapter(new ServerSettingsV1()).GeneralSettings.WeatherLatLong
+        };
+
+        foreach (var latLong in defaults)
+        {
+            double.Parse(latLong!.Split(',')[1], CultureInfo.InvariantCulture)
+                .Should().BeNegative("'{0}' is meant to be New York", latLong);
+        }
     }
 
     private void VerifyConfig(IServerSettings serverSettings)

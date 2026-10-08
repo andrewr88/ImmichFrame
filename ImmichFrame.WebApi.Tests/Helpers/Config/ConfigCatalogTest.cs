@@ -311,6 +311,59 @@ public class ConfigCatalogTest
         });
     }
 
+    /// <summary>
+    /// A YAML <c>Profiles</c> key spelled as null declares no profiles, however the null is spelled -
+    /// the spellings the binder itself reads as null, so the two cannot disagree about one file.
+    /// </summary>
+    [TestCase("")]
+    [TestCase("~")]
+    [TestCase("null")]
+    [TestCase("Null")]
+    [TestCase("NULL")]
+    public void YamlProfilesSpelledAsNullDeclareNoProfiles(string value)
+    {
+        new YamlConfigDocument($"General:\n  Interval: 45\nProfiles: {value}\n").ProfileNames.Should().BeEmpty();
+    }
+
+    /// <summary>Quoted, the same characters are a string - which is not a mapping of profiles either.</summary>
+    [TestCase("'null'")]
+    [TestCase("'~'")]
+    [TestCase("\"null\"")]
+    public void YamlProfilesQuotedAsAStringAreRejected(string value)
+    {
+        var document = new YamlConfigDocument($"General:\n  Interval: 45\nProfiles: {value}\n");
+
+        document.Invoking(d => d.ProfileNames).Should().Throw<SettingsNotValidException>()
+            .WithMessage("*must be a mapping*");
+    }
+
+    /// <summary>
+    /// What refusing <c>Profiles: ~</c> actually cost: the refusal sent a perfectly good current-schema
+    /// file down the loader's v1 fallback, which binds it to a single account with no server and no
+    /// key - and on first run that is what got imported in place of the real ones.
+    /// </summary>
+    [Test]
+    public void YamlSettingsFileWithNullProfilesLoadsItsOwnAccountsRatherThanTheV1Fallback()
+    {
+        const string settings = """
+                                General:
+                                  Interval: 12
+                                Accounts:
+                                - ImmichServerUrl: https://base.example.com
+                                  ApiKey: base-key
+                                Profiles: ~
+                                """;
+
+        InConfigDirectory("Settings.yml", settings, directory =>
+        {
+            var catalog = _configLoader.LoadCatalog(directory);
+
+            catalog.Default.Accounts.Select(account => account.ImmichServerUrl).Should().Equal("https://base.example.com");
+            catalog.Default.GeneralSettings.Interval.Should().Be(12);
+            catalog.ProfileNames.Should().BeEmpty();
+        });
+    }
+
     private static string ResourcePath(string resource)
         => Path.Combine(TestContext.CurrentContext.TestDirectory, "Resources", resource);
 

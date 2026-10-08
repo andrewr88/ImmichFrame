@@ -57,9 +57,13 @@ const URL_CHANGED =
 	'which belongs to the server that was there before. Browsing would list that server under the ' +
 	'new address. Save the configuration first, or enter the API key for the new server.';
 
+/**
+ * Only ever an account the read issued no handle for, so its key file was typed here - which the
+ * server refuses to read, and saving first would not help.
+ */
 const KEY_FROM_FILE =
-	"This account's API key is read from the file named above, and ImmichFrame reads that file when " +
-	'the configuration is saved. Save it first, then choose from Immich.';
+	'ImmichFrame will not read an API key file named in this editor, only one the settings on the ' +
+	"server already give this account. Enter the account's API key instead to choose from Immich.";
 
 /**
  * A server URL reduced to what actually decides which server is talked to, so that a rewrite which

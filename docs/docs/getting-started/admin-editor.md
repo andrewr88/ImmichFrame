@@ -219,8 +219,10 @@ in which case the stored value survives the save untouched — replace it, or cl
 
 An account whose key comes from `ApiKeyFile` is shown as such; there is nothing to type, because
 ImmichFrame refuses a configuration that names both a key file and a key. Clear the path if you want
-to type a key instead. An account you have added but not yet saved cannot browse Immich from a key
-file — ImmichFrame reads that file when the configuration is saved, so save first and then pick.
+to type a key instead. The path itself can only be kept or cleared here, never changed or added:
+ImmichFrame reads whatever file an account names and sends it to that account's Immich server as its
+key, so it will not read a file named in the editor. A new key file has to come from the settings on
+the server.
 
 Giving a profile its own account list does not make you type those keys again. The editor only ever
 learns whether a key is set, never what it is, so the copying happens on the server: ImmichFrame

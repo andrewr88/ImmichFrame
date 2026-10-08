@@ -236,6 +236,13 @@
 						value={account.apiKeyFile}
 						oninput={(event) => (account.apiKeyFile = event.currentTarget.value)}
 					/>
+					<!-- Said here rather than discovered on save: `AdminConfigService` refuses any path but
+					     the one already stored for the account, because the server would read whatever
+					     file is named and send it to the account's Immich server as its key. -->
+					<p class="help">
+						Can only be kept or cleared here: ImmichFrame will not read a file named in this editor,
+						so a new key file has to come from the settings on the server.
+					</p>
 				</div>
 			</div>
 

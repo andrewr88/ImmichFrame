@@ -709,6 +709,82 @@ public class AdminConfigControllerTests
         });
     }
 
+    /// <summary>
+    /// A string whose value is spelled like YAML's null has to be written quoted, or the next load
+    /// reads it as null instead. For <c>AuthenticationSecret</c> that is the difference between a
+    /// frame that asks for a token and one that does not: a secret of "null" written bare reloads as
+    /// no secret at all.
+    /// </summary>
+    [Test]
+    public async Task SaveConfig_YamlStringsSpelledLikeNull_ReloadAsThoseStrings()
+    {
+        // Arrange
+        WriteSettings("Settings.yml", SettingsYaml);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var config = await GetConfig(client);
+        config.Default.General.AuthenticationSecret = "null";
+        config.Default.Accounts[0].Tags = ["null", "~", "ok"];
+        config = config with
+        {
+            Default = config.Default with
+            {
+                DeclaredKeys = [.. config.Default.DeclaredKeys, "General.AuthenticationSecret"]
+            }
+        };
+
+        // Act
+        var response = await Put(client, config);
+        var body = await response.Content.ReadAsStringAsync();
+
+        // What the next start would load: the stored document, bound afresh.
+        var reloaded = factory.Services.GetRequiredService<SettingsService>().LoadCatalog().Default;
+        var frame = await client.GetAsync("/api/Calendar");
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK), body);
+            Assert.That(reloaded.GeneralSettings.AuthenticationSecret, Is.EqualTo("null"));
+            Assert.That(reloaded.Accounts.Single().Tags, Is.EqualTo(new[] { "null", "~", "ok" }));
+            Assert.That(frame.StatusCode, Is.EqualTo(HttpStatusCode.Unauthorized),
+                "the frame has a secret now, so it has to ask for it");
+        });
+    }
+
+    /// <summary>
+    /// The other side of that quoting: a value YAML reads as null has to stay null through a save
+    /// nobody edited, however the file spelled it. The binder reads <c>NULL</c> as null, so this frame
+    /// has no secret - and a save that read the stored value back as the string "NULL" would now
+    /// write it quoted, handing the frame a secret nobody set.
+    /// </summary>
+    [Test]
+    public async Task SaveConfig_YamlSecretSpelledAsAnotherNull_StaysNullThroughAnUneditedSave()
+    {
+        // Arrange
+        WriteSettings("Settings.yml",
+            SettingsYaml.Replace("  PrimaryColor: '#base'", "  PrimaryColor: '#base'\n  AuthenticationSecret: NULL"));
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var config = await GetConfig(client);
+
+        Assume.That(config.Default.DeclaredKeys, Does.Contain("General.AuthenticationSecret"),
+            "the fixture has to start out declaring it");
+
+        // Act
+        var response = await Put(client, config);
+        var frame = await client.GetAsync("/api/Calendar");
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(frame.StatusCode, Is.EqualTo(HttpStatusCode.OK), "no secret was ever set");
+        });
+    }
+
     [Test]
     public async Task SaveConfig_LegacySchemaFile_IsConvertedOnImportAndNeedsNoConsent()
     {
@@ -841,6 +917,183 @@ public class AdminConfigControllerTests
             Assert.That((bool?)account?["hasApiKey"], Is.True);
             Assert.That((bool?)account?["apiKeyFromFile"], Is.True);
             Assert.That(body, Does.Not.Contain("key-from-a-file"), "the key itself still never travels");
+        });
+    }
+
+    /// <summary>
+    /// An API key file is read by the server, and its contents are then sent to the account's Immich
+    /// server as the key. Taken from the editor, that would let an administrator - an allowlisted
+    /// identity, not someone with access to this machine - read any file ImmichFrame can and post it
+    /// to a server of their choosing. So a path the editor names is refused before it is opened, and
+    /// in the same words whether or not it exists: reading it first answered a missing path with the
+    /// operating system's "Could not find a part of the path", which made the refusal a probe of the
+    /// server's file system.
+    /// </summary>
+    [TestCase(true, TestName = "SaveConfig_NewAccountNamingAnExistingFileAsItsApiKeyFile_IsRefused")]
+    [TestCase(false, TestName = "SaveConfig_NewAccountNamingAMissingFileAsItsApiKeyFile_IsRefusedWithoutSayingSo")]
+    public async Task SaveConfig_NewAccountNamingAnApiKeyFile_IsRefusedBeforeTheFileIsRead(bool exists)
+    {
+        // Arrange
+        var path = Path.Combine(_directory, "not-for-the-editor", "secret");
+        if (exists)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, "server-side-secret");
+        }
+
+        WriteSettings("Settings.json", SettingsJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var before = StoredText(factory);
+        var config = await GetConfig(client);
+
+        config = config with
+        {
+            Default = config.Default with
+            {
+                Accounts =
+                [
+                    .. config.Default.Accounts,
+                    new AdminAccountSettingsDto { ImmichServerUrl = "http://collector.example.com", ApiKeyFile = path }
+                ]
+            }
+        };
+
+        // Act
+        var response = await Put(client, config);
+        var problem = await response.Content.ReadAsStringAsync();
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+            Assert.That(problem, Does.Contain("can only be set in the settings on the server"));
+            Assert.That(problem, Does.Contain("collector.example.com"), "the message has to name the account");
+            Assert.That(problem, Does.Not.Contain("Could not find"));
+            Assert.That(problem, Does.Not.Contain(path));
+            Assert.That(StoredText(factory), Is.EqualTo(before));
+            Assert.That(RunningApiKeys(factory), Does.Not.Contain("server-side-secret"),
+                "the file's contents must never become a credential");
+        });
+    }
+
+    /// <summary>
+    /// The same refusal for an account that is already stored: its handle vouches for the account,
+    /// not for a path it never had. Changing an ApiKeyFile and giving one to an account that stores
+    /// its key inline both introduce a path the operator did not write.
+    /// </summary>
+    [TestCase(true, TestName = "SaveConfig_ChangingTheApiKeyFileOfAStoredAccount_IsRefused")]
+    [TestCase(false, TestName = "SaveConfig_GivingAStoredAccountAnApiKeyFile_IsRefused")]
+    public async Task SaveConfig_StoredAccountNamingAnotherApiKeyFile_IsRefused(bool storedFromAFile)
+    {
+        // Arrange
+        var keyPath = Path.Combine(_directory, "api-key");
+        var otherPath = Path.Combine(_directory, "other-file");
+        File.WriteAllText(keyPath, "key-from-a-file\n");
+        File.WriteAllText(otherPath, "server-side-secret\n");
+        WriteSettings("Settings.json", storedFromAFile ? ApiKeyFileJson.Replace("API_KEY_PATH", keyPath) : SettingsJson);
+
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var before = StoredText(factory);
+        var config = await GetConfig(client);
+
+        // The handle still names the stored account; only the path is new.
+        config.Default.Accounts[0].ApiKeyFile = otherPath;
+
+        // Act
+        var response = await Put(client, config);
+        var problem = await response.Content.ReadAsStringAsync();
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+            Assert.That(problem, Does.Contain("can only be set in the settings on the server"));
+            Assert.That(StoredText(factory), Is.EqualTo(before));
+            Assert.That(RunningApiKeys(factory), Does.Not.Contain("server-side-secret"));
+        });
+    }
+
+    /// <summary>
+    /// What still has to work: an account keeping the key file it is stored with can be edited
+    /// freely - server URL included - and handed to a profile by its handle, path and all.
+    /// </summary>
+    [Test]
+    public async Task SaveConfig_KeepingTheStoredApiKeyFile_SavesWhileTheRestOfTheAccountIsEdited()
+    {
+        // Arrange
+        var keyPath = Path.Combine(_directory, "api-key");
+        File.WriteAllText(keyPath, "key-from-a-file\n");
+        WriteSettings("Settings.json", ApiKeyFileJson.Replace("API_KEY_PATH", keyPath));
+
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var config = await GetConfig(client);
+        var account = config.Default.Accounts[0];
+
+        account.ImmichServerUrl = "http://moved.example.com";
+        account.ShowVideos = true;
+
+        var hallway = new AdminConfigEntryDto("hallway", ["Accounts"], new AdminGeneralSettingsDto(),
+        [
+            new AdminAccountSettingsDto { Id = account.Id, ImmichServerUrl = account.ImmichServerUrl, ApiKeyFile = keyPath }
+        ]);
+
+        config = config with { Profiles = [hallway] };
+
+        // Act
+        var response = await Put(client, config);
+        var body = await response.Content.ReadAsStringAsync();
+        var saved = JsonNode.Parse(StoredText(factory));
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK), body);
+            Assert.That((string?)saved?["Accounts"]?[0]?["ApiKeyFile"], Is.EqualTo(keyPath));
+            Assert.That((string?)saved?["Accounts"]?[0]?["ImmichServerUrl"], Is.EqualTo("http://moved.example.com"));
+            Assert.That((bool?)saved?["Accounts"]?[0]?["ShowVideos"], Is.True);
+            Assert.That((string?)saved?["Profiles"]?["hallway"]?["Accounts"]?[0]?["ApiKeyFile"], Is.EqualTo(keyPath));
+        });
+    }
+
+    /// <summary>
+    /// The operator's own key file can still be unreadable - moved, deleted or re-permissioned since
+    /// it was stored. That is refused without the operating system's message as well, which would
+    /// otherwise tell the editor whether the path is missing, a directory or merely unreadable; the
+    /// operator finds it in the log instead.
+    /// </summary>
+    [Test]
+    public async Task SaveConfig_StoredApiKeyFileThatCanNoLongerBeRead_IsRefusedWithoutTheOperatingSystemsMessage()
+    {
+        // Arrange
+        var keyPath = Path.Combine(_directory, "api-key");
+        File.WriteAllText(keyPath, "key-from-a-file\n");
+        WriteSettings("Settings.json", ApiKeyFileJson.Replace("API_KEY_PATH", keyPath));
+
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var before = StoredText(factory);
+        var config = await GetConfig(client);
+        File.Delete(keyPath);
+
+        // Act
+        var response = await Put(client, config);
+        var problem = await response.Content.ReadAsStringAsync();
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+            Assert.That(problem, Does.Contain("could not be read"));
+            Assert.That(problem, Does.Not.Contain("Could not find"));
+            Assert.That(problem, Does.Not.Contain(keyPath));
+            Assert.That(StoredText(factory), Is.EqualTo(before));
         });
     }
 
@@ -1749,6 +2002,13 @@ public class AdminConfigControllerTests
     /// </summary>
     private static string StoredText(WebApplicationFactory<Program> factory) =>
         factory.Services.GetRequiredService<SettingsService>().Read().Text;
+
+    /// <summary>
+    /// The API keys the default configuration is running with. Validation has already replaced each
+    /// ApiKeyFile with what that file holds, so a file read on a save shows up here as a key.
+    /// </summary>
+    private static IEnumerable<string> RunningApiKeys(WebApplicationFactory<Program> factory) =>
+        factory.Services.GetRequiredService<IConfigCatalog>().Default.Accounts.Select(account => account.ApiKey);
 
     /// <summary>The stored row's version - the token the editor round-trips as its concurrency check.</summary>
     private static long StoredVersion(WebApplicationFactory<Program> factory) =>

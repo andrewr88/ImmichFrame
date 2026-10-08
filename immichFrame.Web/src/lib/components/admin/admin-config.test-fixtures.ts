@@ -152,7 +152,7 @@ function defaultGeneral(): Required<AdminGeneralSettingsDto> {
 		language: 'en',
 		webcalendars: [],
 		refreshAlbumPeopleInterval: 12,
-		weatherLatLong: '40.7128,74.0060',
+		weatherLatLong: '40.7128,-74.0060',
 		unitSystem: 'imperial',
 		weatherApiKey: null,
 		webhook: null,
