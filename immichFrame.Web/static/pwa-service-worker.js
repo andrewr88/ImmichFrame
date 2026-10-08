@@ -1,5 +1,4 @@
 // Service worker for ImmichFrame PWA
-const CACHE_NAME = 'immichframe-v1';
 
 // Auth secrets for video streaming requests, keyed by configuration profile.
 // One worker controls every open tab, and two tabs may be serving different profiles with
@@ -16,15 +15,11 @@ self.addEventListener('install', (event) => {
 
 self.addEventListener('activate', (event) => {
     console.log('Service worker activating...');
+    // This worker keeps no cache, so every one found is a leftover from an older version of it
+    // ('immichframe-v1' among them).
     event.waitUntil(
         caches.keys().then((cacheNames) => {
-            return Promise.all(
-                cacheNames.map((cacheName) => {
-                    if (cacheName !== CACHE_NAME) {
-                        return caches.delete(cacheName);
-                    }
-                })
-            );
+            return Promise.all(cacheNames.map((cacheName) => caches.delete(cacheName)));
         }).then(() => self.clients.claim())
     );
 });
@@ -121,8 +116,7 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
-    // Basic network-first strategy for other requests
-    event.respondWith(
-        fetch(event.request).catch(() => caches.match(event.request))
-    );
+    // Every other request is left to the browser: with no respondWith it goes straight to the
+    // network. There is no cache to fall back on offline, so proxying it would only put every
+    // request the page makes - cross-origin and admin ones included - through the worker.
 });

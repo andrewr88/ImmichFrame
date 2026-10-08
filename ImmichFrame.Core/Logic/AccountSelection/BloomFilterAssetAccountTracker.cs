@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using BloomFilter;
+using ImmichFrame.Core.Api;
 using ImmichFrame.Core.Exceptions;
 using ImmichFrame.Core.Interfaces;
 using Microsoft.Extensions.Logging;
@@ -31,12 +32,12 @@ public class BloomFilterAssetAccountTracker(ILogger<BloomFilterAssetAccountTrack
         return await filter.AddAsync(assetId.ToString());
     }
 
-    private async Task<IBloomFilter> NewFilter(IImmichFrameLogic account)
+    private static async Task<IBloomFilter> NewFilter(IImmichFrameLogic account)
     {
         return FilterBuilder.Build(await account.GetTotalAssets());
     }
 
-    public T ForAsset<T>(Guid assetId, Func<IAccountImmichFrameLogic, T> f)
+    public async Task<T> ForAsset<T>(Guid assetId, Func<IAccountImmichFrameLogic, Task<T>> f)
     {
         foreach (var entry in logicToFilter)
         {
@@ -46,11 +47,16 @@ public class BloomFilterAssetAccountTracker(ILogger<BloomFilterAssetAccountTrack
 
             if (filterTask.Result.Contains(assetId.ToString()))
             {
+                // Awaited here rather than handed back: an account's failure arrives inside the
+                // Task, so only awaiting it lets the lookup move on to the next account. A 416 is
+                // let through: that account does hold the asset and is saying the requested range
+                // lies outside it, which is no false positive - and AssetController.GetAsset
+                // answers exactly that exception with a 416 of its own.
                 try
                 {
-                    return f(entry.Key);
+                    return await f(entry.Key);
                 }
-                catch (Exception e)
+                catch (Exception e) when (e is not ApiException { StatusCode: 416 })
                 {
                     _logger.LogWarning(e, "Failed to locate asset {assetId} in {entry.Key}. Must be false positive, trying next account.", assetId, entry.Key);
                 }

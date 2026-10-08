@@ -97,6 +97,6 @@ public class TotalAccountImagesSelectionStrategy(
         return assets;
     }
 
-    public T ForAsset<T>(Guid assetId, Func<IAccountImmichFrameLogic, T> f)
+    public Task<T> ForAsset<T>(Guid assetId, Func<IAccountImmichFrameLogic, Task<T>> f)
         => _tracker.ForAsset(assetId, f);
 }
