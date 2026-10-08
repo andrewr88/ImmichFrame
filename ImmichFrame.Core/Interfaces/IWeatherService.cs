@@ -1,4 +1,4 @@
-using ImmichFrame.Core.Interfaces;
+namespace ImmichFrame.Core.Interfaces;
 
 public interface IWeatherService
 {
