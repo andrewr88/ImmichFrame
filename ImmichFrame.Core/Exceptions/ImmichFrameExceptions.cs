@@ -39,10 +39,24 @@
         public ProfileNotFoundException(string message, Exception innerException) : base(message, innerException) { }
     }
     /// <summary>
-    /// A configuration save that was refused before anything was written, for a reason the operator
-    /// can act on: the file changed underneath the editor, there is no file to write, the file is in
-    /// the old schema, or the directory is not writable. Distinct from
-    /// <see cref="SettingsNotValidException"/>, which means the configuration itself is wrong.
+    /// A configuration save refused before anything was written, because the stored settings are no
+    /// longer the ones the save was based on - which the operator resolves by reloading the editor
+    /// and applying the change again. Distinct from <see cref="SettingsNotValidException"/>, which
+    /// means the configuration itself is wrong. On a save it means one of:
+    /// <list type="bullet">
+    /// <item>A stale version token: another save landed after the editor read the settings.
+    /// <c>AdminConfigService.Save</c> checks the editor's token against the stored version, and
+    /// <c>SettingsService.Save</c> checks the version its caller read against the stored row's.</item>
+    /// <item>A concurrent writer: another process sharing the settings database updated the row
+    /// while this save was in flight, which <c>SettingsService.Save</c> learns from EF's concurrency
+    /// check on the row's version.</item>
+    /// </list>
+    /// <para>
+    /// It is also thrown outside the save path, by <c>ConfigLoader.DescribeSource</c> through
+    /// <c>ConfigLoader.Unreadable</c>, for a settings file that is present but cannot be read in
+    /// either the current or the old schema. The first-run import that calls it catches it, logs the
+    /// message and starts unconfigured.
+    /// </para>
     /// </summary>
     public class ConfigSaveRefusedException : ImmichFrameException
     {
