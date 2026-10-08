@@ -17,7 +17,7 @@ namespace ImmichFrame.Core.Tests.Logic.Pool
         private Mock<IAssetPool> _mockPool1;
         private Mock<IAssetPool> _mockPool2;
         private Mock<IAssetPool> _mockPool3;
-        private MultiAssetPool _multiPool;
+        private MultiAssetPool _multiPool = null!;
 
         [SetUp]
         public void Setup()
