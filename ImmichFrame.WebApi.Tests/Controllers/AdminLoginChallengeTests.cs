@@ -103,7 +103,7 @@ public class AdminLoginChallengeTests
 
         // Honouring these would make the login an open redirect that borrows the identity
         // provider's credibility: the victim really does sign in, and lands somewhere else.
-        Assert.Multiple(async () =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(await RedirectUriAfterLogin(factory, "?returnUrl=https://evil.example"), Is.EqualTo(AdminAuthentication.SpaPath));
             Assert.That(await RedirectUriAfterLogin(factory, "?returnUrl=//evil.example"), Is.EqualTo(AdminAuthentication.SpaPath));
