@@ -13,12 +13,12 @@ public class ConfigLoader(ILogger<ConfigLoader> _logger)
     {
         if (!Directory.Exists(dir))
         {
-            return Path.Combine(dir, fileNames.First());
+            return Path.Combine(dir, fileNames[0]);
         }
 
         return Directory.EnumerateFiles(dir, "*", SearchOption.TopDirectoryOnly)
             .FirstOrDefault(f => fileNames.Any(name => string.Equals(Path.GetFileName(f), name, StringComparison.OrdinalIgnoreCase)))
-            ?? Path.Combine(dir, fileNames.First());
+            ?? Path.Combine(dir, fileNames[0]);
     }
 
     /// <summary>
@@ -223,8 +223,7 @@ public class ConfigLoader(ILogger<ConfigLoader> _logger)
             if (File.Exists(configPath))
             {
                 var json = File.ReadAllText(configPath);
-                var doc = JsonDocument.Parse(json);
-                return doc.Deserialize<T>() ?? throw new FileLoadException("Failed to load config file", configPath);
+                return JsonSerializer.Deserialize<T>(json) ?? throw new FileLoadException("Failed to load config file", configPath);
             }
 
             throw new FileNotFoundException(configPath);
