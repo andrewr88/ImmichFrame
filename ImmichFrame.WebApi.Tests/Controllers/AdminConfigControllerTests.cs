@@ -1911,6 +1911,46 @@ public class AdminConfigControllerTests
         }
     }
 
+    /// <summary>
+    /// A legacy environment setup is recognised by its variables being set, not by their values
+    /// parsing: nothing reads the values any more. A boolean spelled "yes" used to make the loader
+    /// give up on the environment altogether, so the administrator was told there was no
+    /// configuration to import rather than that configuring through environment variables is no
+    /// longer supported.
+    /// </summary>
+    [Test]
+    public void FirstRun_LegacyEnvironmentWithAnUnparseableValue_IsStillRecognisedAsTheEnvironment()
+    {
+        string[] variables = ["ImmichServerUrl", "ApiKey", "ShowClock"];
+        var restore = variables.ToDictionary(name => name, Environment.GetEnvironmentVariable);
+        Environment.SetEnvironmentVariable("ImmichServerUrl", "http://mock-immich-server.com");
+        Environment.SetEnvironmentVariable("ApiKey", "env-api-key");
+        Environment.SetEnvironmentVariable("ShowClock", "yes");
+
+        try
+        {
+            using var factory = CreateFactory();
+
+            // What the first-run import branches on: Environment is the "no longer supported"
+            // warning, a throw is "no configuration to import".
+            var source = factory.Services.GetRequiredService<ConfigLoader>().DescribeSource(_directory);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(source.Format, Is.EqualTo(ConfigFormat.Environment));
+                Assert.That(factory.Services.GetRequiredService<SettingsService>().IsUnconfigured, Is.True,
+                    "the environment still configures nothing");
+            });
+        }
+        finally
+        {
+            foreach (var (name, value) in restore)
+            {
+                Environment.SetEnvironmentVariable(name, value);
+            }
+        }
+    }
+
     [Test]
     public async Task AdminConfig_IsBehindTheAllowlist_NotJustAuthentication()
     {

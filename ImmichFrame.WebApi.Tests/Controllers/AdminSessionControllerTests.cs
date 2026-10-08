@@ -112,7 +112,7 @@ public class AdminSessionControllerTests
     }
 
     /// <summary>
-    /// The two flags on <c>[AdminEndpoint]</c> are independent, and this is where that shows.
+    /// The flags on <c>[AdminEndpoint]</c> are independent, and this is where that shows.
     /// <c>login</c> declares <c>Anonymous</c> but not <c>VisibleWhenUnconfigured</c>, so being
     /// deliberately reachable without a session does not make it answer on an installation that has
     /// no admin surface; only <c>session</c> claims both and survives. The prefix is hidden by

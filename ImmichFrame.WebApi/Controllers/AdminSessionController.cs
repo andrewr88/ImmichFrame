@@ -22,10 +22,11 @@ public record AdminSessionDto(bool Configured, bool Authenticated, bool IsAdmin,
 public class AdminSessionController(AdminOidcOptions _options) : ControllerBase
 {
     /// <summary>
-    /// The one admin endpoint that answers without authentication, and the only one that still
-    /// answers when the surface is unconfigured - the SPA has to be able to tell "log in",
-    /// "you are not an administrator" and "this installation has no admin surface" apart, and it
-    /// cannot do that if the endpoint that would say so is itself behind the login.
+    /// One of the two admin endpoints that answer without authentication - <see cref="Login"/> is
+    /// the other - and the only one that still answers when the surface is unconfigured. The SPA has
+    /// to be able to tell "log in", "you are not an administrator" and "this installation has no
+    /// admin surface" apart, and it cannot do that if the endpoint that would say so is itself
+    /// behind the login.
     /// </summary>
     [HttpGet("session", Name = "GetAdminSession")]
     [AllowAnonymous]

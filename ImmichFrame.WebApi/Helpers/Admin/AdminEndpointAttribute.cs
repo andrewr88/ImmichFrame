@@ -1,13 +1,13 @@
 namespace ImmichFrame.WebApi.Helpers.Admin;
 
 /// <summary>
-/// Declares the two deliberate exceptions an endpoint under <c>/api/admin</c> may claim. Both
-/// default to the safe answer, so an endpoint that says nothing gets the strictest treatment and a
-/// forgotten attribute cannot open anything.
+/// Declares the three deliberate exceptions an endpoint under <c>/api/admin</c> may claim. All
+/// three default to the safe answer, so an endpoint that says nothing gets the strictest treatment
+/// and a forgotten attribute cannot open anything.
 /// <para>
-/// One attribute rather than two, because these are two properties of a single decision - how far
-/// this endpoint steps outside the admin surface's defaults - and splitting them into separate
-/// markers invites applying one and forgetting the other.
+/// One attribute rather than three, because these are three properties of a single decision - how
+/// far this endpoint steps outside the admin surface's defaults - and splitting them into separate
+/// markers invites applying one and forgetting another.
 /// </para>
 /// <para>
 /// Pure endpoint metadata rather than a filter: <see cref="AdminSurfaceMiddleware"/> reads it before

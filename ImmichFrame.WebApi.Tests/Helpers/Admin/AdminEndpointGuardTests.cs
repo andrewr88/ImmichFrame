@@ -145,7 +145,7 @@ public class AdminEndpointGuardTests
     [Test]
     public void Validate_VisibleWhenUnconfiguredAloneDoesNotExcuseMissingAuthorization()
     {
-        // The two flags are independent: being answerable on an unconfigured install says nothing
+        // The flags are independent: being answerable on an unconfigured install says nothing
         // about who may call it once the surface is on.
         var visibleOnly = AdminEndpoint("api/admin/config", new AdminEndpointAttribute { VisibleWhenUnconfigured = true });
 

@@ -1,4 +1,3 @@
-using System.Collections;
 using System.Text.Json;
 using ImmichFrame.Core.Exceptions;
 using ImmichFrame.Core.Interfaces;
@@ -31,8 +30,6 @@ public class ConfigLoader(ILogger<ConfigLoader> _logger)
         catalog.Validate();
         return catalog;
     }
-
-    public IServerSettings LoadConfig(string configPath) => LoadCatalog(configPath).Default;
 
     /// <summary>
     /// Which file a restart would load out of <paramref name="configPath"/>, and in what shape.
@@ -136,8 +133,17 @@ public class ConfigLoader(ILogger<ConfigLoader> _logger)
         try
         {
             // Environment variables are flat, so they can only ever describe a single configuration.
-            var v1 = LoadConfigFromDictionary<ServerSettingsV1>(Environment.GetEnvironmentVariables());
-            return (new ConfigCatalog(new ServerSettingsV1Adapter(v1)),
+            // Only their names are checked: SettingsService refuses to import them, so nothing reads
+            // the values any more, and parsing them anyway let one bad value turn the "no longer
+            // supported" warning into a parse error.
+            var environment = Environment.GetEnvironmentVariables();
+            var recognised = typeof(ServerSettingsV1).GetProperties().Count(property => environment.Contains(property.Name));
+            if (recognised < 2)
+            {
+                throw new ImmichFrameException("No environment variables found");
+            }
+
+            return (new ConfigCatalog(new ServerSettingsV1Adapter(new ServerSettingsV1())),
                 new ConfigSource(ConfigFormat.Environment, null, true));
         }
         catch (Exception e)
@@ -188,32 +194,6 @@ public class ConfigLoader(ILogger<ConfigLoader> _logger)
             .ToList();
 
         return new ConfigCatalog(document.Bind<ServerSettings>(null), profiles);
-    }
-
-    internal T LoadConfigFromDictionary<T>(IDictionary env) where T : IConfigSettable, new()
-    {
-        var config = new T();
-        var propertiesSet = 0;
-
-        foreach (var key in env.Keys)
-        {
-            if (key == null) continue;
-
-            var propertyInfo = typeof(T).GetProperty(key.ToString() ?? string.Empty);
-
-            if (propertyInfo != null)
-            {
-                config.SetValue(propertyInfo, env[key]?.ToString() ?? string.Empty);
-                propertiesSet++;
-            }
-        }
-
-        if (propertiesSet < 2)
-        {
-            throw new ImmichFrameException("No environment variables found");
-        }
-
-        return config;
     }
 
     internal T LoadConfigJson<T>(string configPath) where T : IConfigSettable, new()
