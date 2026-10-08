@@ -52,22 +52,30 @@ public class ServerSettingsV1 : IConfigSettable
 
     private List<Guid> _people = [];
 
-    /// <inheritdoc cref="Albums"/>
+    /// <summary>
+    /// Normalised as <see cref="Albums"/> is, and rid of empty entries as the current schema's
+    /// <see cref="Models.ServerAccountSettings.Tags"/> is: the adapter below hands every tag on to a
+    /// lookup that fails on a null one.
+    /// </summary>
     public List<string> Tags
     {
         get => _tags;
-        set => _tags = value ?? [];
+        set => _tags = value?.Where(tag => !string.IsNullOrWhiteSpace(tag)).ToList() ?? [];
     }
 
     private List<string> _tags = [];
 
     public int? Rating { get; set; }
 
-    /// <inheritdoc cref="Albums"/>
+    /// <summary>
+    /// Normalised as <see cref="Albums"/> is, and rid of empty entries as the current schema's
+    /// <see cref="Models.GeneralSettings.Webcalendars"/> is: the adapter below hands every URL on to a
+    /// calendar poll that fails on a null one.
+    /// </summary>
     public List<string> Webcalendars
     {
         get => _webcalendars;
-        set => _webcalendars = value ?? [];
+        set => _webcalendars = value?.Where(url => !string.IsNullOrWhiteSpace(url)).ToList() ?? [];
     }
 
     private List<string> _webcalendars = [];

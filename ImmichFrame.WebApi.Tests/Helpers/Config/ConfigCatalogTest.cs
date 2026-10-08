@@ -1,3 +1,4 @@
+using System.Globalization;
 using AwesomeAssertions;
 using ImmichFrame.Core.Exceptions;
 using ImmichFrame.Core.Interfaces;
@@ -353,6 +354,70 @@ public class ConfigCatalogTest
     }
 
     /// <summary>
+    /// An empty entry in a list of strings - a null in JSON, a bare <c>-</c> or a <c>~</c> in YAML -
+    /// binds as a null string, which a setter replacing only a null list let through. The calendar
+    /// service calls <c>Replace</c> on every calendar URL on every poll and <c>TagAssetsPool</c> looks
+    /// every tag up as a dictionary key, so one null failed every <c>GET /api/Calendar</c>, or every
+    /// request for the account's photos. An entry that is only whitespace names nothing either.
+    /// </summary>
+    [TestCase(ConfigFormat.Json, """
+                                 {
+                                   "General": { "Webcalendars": [null, "https://calendar.example.com/c.ics", " "] },
+                                   "Accounts": [{
+                                     "ImmichServerUrl": "https://base.example.com",
+                                     "ApiKey": "base-key",
+                                     "Tags": [null, "Travel", ""]
+                                   }]
+                                 }
+                                 """, TestName = "SettingsFileListEntriesSpelledAsNullAreDropped")]
+    [TestCase(ConfigFormat.Yaml, """
+                                 General:
+                                   Webcalendars:
+                                   -
+                                   - https://calendar.example.com/c.ics
+                                   - ' '
+                                 Accounts:
+                                 - ImmichServerUrl: https://base.example.com
+                                   ApiKey: base-key
+                                   Tags:
+                                   - ~
+                                   - Travel
+                                   -
+                                 """, TestName = "YamlListEntriesLeftEmptyAreDropped")]
+    public void ListEntriesSpelledAsNullAreDropped(ConfigFormat format, string settings)
+    {
+        var catalog = ConfigLoader.BuildCatalog(ConfigLoader.CreateDocument(format, settings));
+
+        catalog.Default.GeneralSettings.Webcalendars.Should().Equal("https://calendar.example.com/c.ics");
+        catalog.Default.Accounts.Single().Tags.Should().Equal("Travel");
+    }
+
+    /// <summary>
+    /// The same empty entries in a v1 file, whose lists the adapter hands straight on - as a
+    /// configuration here, and into the conversion on import.
+    /// </summary>
+    [Test]
+    public void LegacySettingsFileListEntriesSpelledAsNullAreDropped()
+    {
+        const string settings = """
+                                {
+                                  "ImmichServerUrl": "https://v1.example.com",
+                                  "ApiKey": "v1-key",
+                                  "Webcalendars": [null, "https://calendar.example.com/c.ics", " "],
+                                  "Tags": [null, "Travel", ""]
+                                }
+                                """;
+
+        InConfigDirectory("Settings.json", settings, directory =>
+        {
+            var catalog = _configLoader.LoadCatalog(directory);
+
+            catalog.Default.GeneralSettings.Webcalendars.Should().Equal("https://calendar.example.com/c.ics");
+            catalog.Default.Accounts.Single().Tags.Should().Equal("Travel");
+        });
+    }
+
+    /// <summary>
     /// A YAML <c>Profiles</c> key spelled as null declares no profiles, however the null is spelled -
     /// the spellings the binder itself reads as null, so the two cannot disagree about one file.
     /// </summary>
@@ -494,6 +559,52 @@ public class ConfigCatalogTest
                 .Should().Throw<SettingsNotValidException>()
                 .Which.Message.Should().Contain("API key").And.NotContain("abc").And.NotContain("123"));
     }
+
+    /// <summary>
+    /// <c>ImagesFromDays</c> is taken off today's date on every request for the account's photos. A
+    /// number of days <see cref="DateTime"/> cannot count back - <c>int.MaxValue</c>, or
+    /// <c>int.MinValue</c>, whose negation is itself - threw there, so every one of those requests
+    /// failed; and any other negative number moved the cut-off into the future, where no photo is.
+    /// Refused while the settings are validated, which the admin editor's save runs as well.
+    /// </summary>
+    [TestCase(int.MaxValue)]
+    [TestCase(36501)]
+    [TestCase(-1)]
+    [TestCase(int.MinValue)]
+    public void ImagesFromDaysOutsideItsRangeIsRefused(int days)
+    {
+        var catalog = ConfigLoader.BuildCatalog(ConfigLoader.CreateDocument(ConfigFormat.Json, AccountShowingImagesFromDays(days)));
+
+        catalog.Invoking(c => c.Validate())
+            .Should().Throw<SettingsNotValidException>().WithMessage("*ImagesFromDays*0*36500*");
+    }
+
+    /// <summary>
+    /// Left out, it is no limit at all; 0 is today's photos alone, the cut-off being today's
+    /// midnight; and both ends of the range are its own.
+    /// </summary>
+    [TestCase(null)]
+    [TestCase(0)]
+    [TestCase(30)]
+    [TestCase(36500)]
+    public void ImagesFromDaysInsideItsRangeIsAccepted(int? days)
+    {
+        var catalog = ConfigLoader.BuildCatalog(ConfigLoader.CreateDocument(ConfigFormat.Json, AccountShowingImagesFromDays(days)));
+
+        catalog.Invoking(c => c.Validate()).Should().NotThrow();
+        catalog.Default.Accounts.Single().ImagesFromDays.Should().Be(days);
+    }
+
+    private static string AccountShowingImagesFromDays(int? days) =>
+        $$"""
+          {
+            "Accounts": [{
+              "ImmichServerUrl": "https://base.example.com",
+              "ApiKey": "base-key",
+              "ImagesFromDays": {{days?.ToString(CultureInfo.InvariantCulture) ?? "null"}}
+            }]
+          }
+          """;
 
     private static string ResourcePath(string resource)
         => Path.Combine(TestContext.CurrentContext.TestDirectory, "Resources", resource);

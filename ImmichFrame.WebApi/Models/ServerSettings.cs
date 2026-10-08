@@ -99,11 +99,17 @@ public class GeneralSettings : IGeneralSettings, IConfigSettable
     /// setter with null over the initialiser. The calendar service enumerates this list on every poll,
     /// so a null here answered every <c>GET /api/Calendar</c> with a 500 - for a frame whose settings
     /// only say it has no calendars.
+    /// <para>
+    /// An empty entry - <c>[null]</c> in JSON, a bare <c>-</c> in YAML - is dropped here too. It binds
+    /// as a null URL, which the service failed the whole poll on rather than that one calendar, and
+    /// an entry that is only whitespace names no calendar either. Nothing is lost by dropping them,
+    /// and the admin editor never writes one back.
+    /// </para>
     /// </summary>
     public List<string> Webcalendars
     {
         get => _webcalendars;
-        set => _webcalendars = value ?? [];
+        set => _webcalendars = value?.Where(url => !string.IsNullOrWhiteSpace(url)).ToList() ?? [];
     }
 
     private List<string> _webcalendars = [];
@@ -141,7 +147,22 @@ public class ServerAccountSettings : IAccountSettings, IConfigSettable
     public bool ShowArchived { get; set; } = false;
     public bool ShowVideos { get; set; } = false;
 
+    /// <summary>
+    /// How many days back from today the account's photos may be from. Taken off today's midnight on
+    /// every request for them, so 0 is today's photos alone; bounded by <see cref="MaxImagesFromDays"/>.
+    /// </summary>
     public int? ImagesFromDays { get; set; }
+
+    /// <summary>
+    /// The most <see cref="ImagesFromDays"/> may be: a century. A cut-off that far back already
+    /// reaches past nearly every photo a library holds - <see cref="ImagesFromDate"/> is there for one
+    /// further back, and leaving the setting out is no limit at all - and it is far inside what
+    /// <see cref="DateTime"/> can count back from any date the server's clock could show. A number it
+    /// cannot, <c>int.MaxValue</c> among them, threw on every request for the account's photos. The
+    /// admin editor holds the same bound, in <c>admin-config.ts</c>.
+    /// </summary>
+    public const int MaxImagesFromDays = 36500;
+
     public DateTime? ImagesFromDate { get; set; }
     public DateTime? ImagesUntilDate { get; set; }
 
@@ -178,11 +199,17 @@ public class ServerAccountSettings : IAccountSettings, IConfigSettable
 
     private List<Guid> _people = [];
 
-    /// <inheritdoc cref="Albums"/>
+    /// <summary>
+    /// Never null, for the reason <see cref="Albums"/> is not, and never holding an empty entry
+    /// either. A null in JSON or a bare <c>-</c> in YAML binds as a null tag, and <c>TagAssetsPool</c>
+    /// looks every tag up as a dictionary key, so one failed every request for the account's photos;
+    /// an entry that is only whitespace names no tag either. The three lists of ids cannot hold such
+    /// an entry: both binders refuse an empty one where a Guid belongs, so the file never loads.
+    /// </summary>
     public List<string> Tags
     {
         get => _tags;
-        set => _tags = value ?? [];
+        set => _tags = value?.Where(tag => !string.IsNullOrWhiteSpace(tag)).ToList() ?? [];
     }
 
     private List<string> _tags = [];
@@ -222,6 +249,19 @@ public class ServerAccountSettings : IAccountSettings, IConfigSettable
             throw new SettingsNotValidException(
                 "An account's API key contains a character an HTTP header cannot carry, such as a line break. " +
                 "Copy the key again from Immich into the settings - or into the file the account's ApiKeyFile names.");
+        }
+
+        // After the key, so that an account refused here has still been given the one its file holds:
+        // stored settings that fail validation are run regardless, and a number of days past the bound
+        // but short of what DateTime refuses is one that account goes on serving photos with. A
+        // negative number is refused with the rest - it moves the cut-off into the future, where no
+        // photo is, and the frame shows nothing without saying why.
+        if (ImagesFromDays is < 0 or > MaxImagesFromDays)
+        {
+            throw new SettingsNotValidException(
+                $"An account's ImagesFromDays is {ImagesFromDays}, and has to be a number of days back from today " +
+                $"between 0, for today's photos alone, and {MaxImagesFromDays}. Use ImagesFromDate for a cut-off " +
+                "further back than that, or leave ImagesFromDays out for no limit.");
         }
     }
 }

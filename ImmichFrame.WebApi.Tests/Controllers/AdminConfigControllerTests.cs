@@ -661,6 +661,37 @@ public class AdminConfigControllerTests
         });
     }
 
+    /// <summary>
+    /// The endpoint takes any number an int holds for <c>ImagesFromDays</c>. One that
+    /// <see cref="DateTime"/> cannot count back from today was saved and swapped in, and then failed
+    /// every request for the configuration's photos; it has to be refused instead, by name.
+    /// </summary>
+    [Test]
+    public async Task SaveConfig_ImagesFromDaysPastWhatADateCanCountBack_IsRefused()
+    {
+        // Arrange
+        WriteSettings("Settings.json", SettingsJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var before = StoredText(factory);
+        var config = await GetConfig(client);
+        config.Default.Accounts[0].ImagesFromDays = int.MaxValue;
+
+        // Act
+        var response = await Put(client, config);
+        var detail = (string?)JsonNode.Parse(await response.Content.ReadAsStringAsync())?["detail"];
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+            Assert.That(detail, Does.Contain("ImagesFromDays"), "the operator has to be told what is wrong");
+            Assert.That(StoredText(factory), Is.EqualTo(before),
+                "a rejected configuration must never reach the store");
+        });
+    }
+
     [Test]
     public async Task SaveConfig_StaleVersionToken_Is409WithTheStoredDocumentUntouched()
     {
