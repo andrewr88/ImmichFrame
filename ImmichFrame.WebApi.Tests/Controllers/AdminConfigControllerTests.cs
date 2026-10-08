@@ -1758,6 +1758,48 @@ public class AdminConfigControllerTests
     }
 
     /// <summary>
+    /// A current-schema file that names no accounts. The import only checks that a file binds, so it
+    /// is stored as it stands, and it has to run as an ImmichFrame with nothing to show yet. Bound to a
+    /// null account list instead, it failed every request the host served: the frame's services are
+    /// built for the authentication handler, ahead of any controller, and building them dereferenced
+    /// the null - so the editor's own read answered 500 too, and the one tool that could add the
+    /// missing account was locked out.
+    /// </summary>
+    [TestCase("""{ "General": { "Interval": 45 } }""",
+        TestName = "Config_ImportedSettingsWithNoAccountsKey_KeepTheEditorAndTheFrameAnswering")]
+    [TestCase("""{ "General": { "Interval": 45 }, "Accounts": null }""",
+        TestName = "Config_ImportedSettingsWithNullAccounts_KeepTheEditorAndTheFrameAnswering")]
+    public async Task Config_ImportedSettingsWithoutAccounts_KeepTheEditorAndTheFrameAnswering(string settings)
+    {
+        WriteSettings("Settings.json", settings);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        Assume.That(StoredText(factory), Is.EqualTo(settings),
+            "the file has to have been imported as it stands, or this is the unconfigured case instead");
+
+        var read = await Send(client, HttpMethod.Get, ConfigUrl);
+        var frame = await client.GetAsync("/api/Asset");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(read.StatusCode, Is.EqualTo(HttpStatusCode.OK),
+                "the editor is the one tool that can add the missing account");
+            Assert.That(frame.StatusCode, Is.EqualTo(HttpStatusCode.OK),
+                "a frame with nothing to show is not a failed one");
+        });
+
+        var config = await GetConfig(client);
+        var assets = JsonNode.Parse(await frame.Content.ReadAsStringAsync())?.AsArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(config.Default.Accounts, Is.Empty);
+            Assert.That(assets, Is.Empty);
+        });
+    }
+
+    /// <summary>
     /// YamlStream resolves an alias to the very node the anchor named, so an aliased mapping is
     /// indistinguishable from one written out longhand: every inherited value would be reported as a
     /// key the profile declares, and the save would write them all literally. Refusing is the
@@ -1784,9 +1826,11 @@ public class AdminConfigControllerTests
 
     /// <summary>
     /// The default configuration is the only one with nothing to inherit from, so it is the only one
-    /// an empty account list breaks outright. Both shapes have to say so in words: an absent Accounts
-    /// key otherwise reaches the loader as a null dereference reported as "Object reference not set to
-    /// an instance of an object."
+    /// an empty account list breaks outright. Both shapes have to be refused, and in words: the
+    /// settings bind and validate without an account - no accounts is a state ImmichFrame can run in -
+    /// so nothing after the editor would stop either from being saved. An absent Accounts key used to
+    /// reach the loader as a null dereference instead, reported as "Object reference not set to an
+    /// instance of an object."
     /// </summary>
     [TestCase(false, TestName = "SaveConfig_DefaultConfigurationWithNoAccountsKey_IsRefusedReadably")]
     [TestCase(true, TestName = "SaveConfig_DefaultConfigurationWithAnEmptyAccountList_IsRefusedReadably")]

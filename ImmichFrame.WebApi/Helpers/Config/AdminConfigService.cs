@@ -130,10 +130,11 @@ public sealed class AdminConfigService(
 
     /// <summary>
     /// Binds and validates a rewritten file, with every way it can be wrong reported as one
-    /// exception. <c>ServerSettings.Validate</c> lets <c>ValidateAndInitialize</c>'s own
-    /// <see cref="InvalidOperationException"/> straight through, so without this a missing API key -
-    /// the likeliest mistake there is - would reach the client as a 500 rather than as the sentence
-    /// that says which account is wrong.
+    /// exception. Validation's own refusals - a missing API key, the likeliest mistake there is,
+    /// among them - are <see cref="SettingsNotValidException"/>s already and pass straight through.
+    /// The catch-all after them is the defensive half: whatever else binding or validating can throw,
+    /// an exception from the framework rather than from ImmichFrame, still reaches the client as a
+    /// refusal carrying its message rather than as a 500.
     /// <para>
     /// The one failure not passed on in its own words is an API key file that cannot be read. The
     /// operating system's message says whether the path is missing, a directory or merely unreadable
@@ -445,9 +446,9 @@ public sealed class AdminConfigService(
 
         // The default configuration is the one thing with nothing above it to inherit from, so an
         // absent or empty account list here is not a sparse override - it is an ImmichFrame that
-        // cannot show a single photo. Refused by name, because ServerSettings.Validate would
-        // otherwise dereference a null Accounts and report the whole thing as 'Object reference not
-        // set to an instance of an object.'
+        // cannot show a single photo. Refused by name here because nothing later refuses it: no
+        // accounts is a state ImmichFrame can run in - an instance nothing has configured yet starts
+        // in it - so the settings bind and validate without one, and this save would go through.
         if (root.GetValueOrDefault(AccountsKey) is not List<Dictionary<string, object?>> { Count: > 0 })
         {
             throw new SettingsNotValidException(

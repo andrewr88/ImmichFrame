@@ -364,6 +364,52 @@ public class ConfigCatalogTest
         });
     }
 
+    /// <summary>
+    /// A current-schema file that names no accounts - no <c>Accounts</c> key at all, or one spelled
+    /// null - is a configuration with nothing to show, not a broken one. It used to bind to a null
+    /// account list, which validation dereferenced as "Object reference not set to an instance of an
+    /// object." The explicit null is its own case because it overwrites whatever the settings class
+    /// starts the list out as.
+    /// </summary>
+    [TestCase("""{ "General": { "Interval": 45 } }""",
+        TestName = "SettingsFileWithNoAccountsKeyLoadsWithAnEmptyAccountList")]
+    [TestCase("""{ "General": { "Interval": 45 }, "Accounts": null }""",
+        TestName = "SettingsFileWithNullAccountsLoadsWithAnEmptyAccountList")]
+    public void SettingsFileNamingNoAccountsLoadsWithAnEmptyAccountList(string settings)
+    {
+        InConfigDirectory("Settings.json", settings, directory =>
+        {
+            var catalog = _configLoader.Invoking(loader => loader.LoadCatalog(directory))
+                .Should().NotThrow().Subject;
+
+            catalog.Default.Accounts.Should().NotBeNull().And.BeEmpty();
+        });
+    }
+
+    /// <summary>
+    /// A profile's own <c>Accounts:</c> with nothing after it. The merge replaces the inherited list
+    /// with that null outright, as it replaces any list, so the profile has to bind to an empty list
+    /// rather than a null one - everything downstream of the binder enumerates it.
+    /// </summary>
+    [Test]
+    public void YamlProfileWithAnEmptyAccountsKeyBindsToAnEmptyAccountList()
+    {
+        const string settings = """
+                                General:
+                                  Interval: 45
+                                Accounts:
+                                - ImmichServerUrl: https://base.example.com
+                                  ApiKey: base-key
+                                Profiles:
+                                  kitchen:
+                                    Accounts:
+                                """;
+
+        var kitchen = ConfigLoader.BuildCatalog(new YamlConfigDocument(settings)).Get("kitchen");
+
+        kitchen.Accounts.Should().NotBeNull().And.BeEmpty();
+    }
+
     private static string ResourcePath(string resource)
         => Path.Combine(TestContext.CurrentContext.TestDirectory, "Resources", resource);
 

@@ -1,4 +1,5 @@
 ﻿using System.Text.Json.Serialization;
+using ImmichFrame.Core.Exceptions;
 using ImmichFrame.Core.Interfaces;
 using ImmichFrame.WebApi.Helpers;
 using YamlDotNet.Serialization;
@@ -11,9 +12,26 @@ public class ServerSettings : IServerSettings, IConfigSettable
     [JsonPropertyName("General")]
     public GeneralSettings? GeneralSettingsImpl { get; set; }
 
+    /// <summary>
+    /// Never null, whatever the settings document says. A configuration with no accounts is one
+    /// ImmichFrame runs - the slideshow has nothing to show, and the admin editor is there to add an
+    /// account - but a null list is dereferenced on every request, the editor's own included.
+    /// <para>
+    /// Normalised in the setter because an initialiser alone only covers a document that leaves the
+    /// key out. An explicit <c>"Accounts": null</c> - YAML's bare <c>Accounts:</c> too, and a profile
+    /// overriding the inherited list with either - has the binder call the setter with null, which
+    /// would overwrite it. One place here, rather than a null check at every reader.
+    /// </para>
+    /// </summary>
     [YamlMember(Alias = "Accounts")]
     [JsonPropertyName("Accounts")]
-    public IEnumerable<ServerAccountSettings> AccountsImpl { get; set; }
+    public IEnumerable<ServerAccountSettings> AccountsImpl
+    {
+        get => _accounts;
+        set => _accounts = value ?? [];
+    }
+
+    private IEnumerable<ServerAccountSettings> _accounts = [];
 
     //Covariance not allowed on interface impls
     [JsonIgnore]
@@ -114,14 +132,14 @@ public class ServerAccountSettings : IAccountSettings, IConfigSettable
         {
             if (!string.IsNullOrWhiteSpace(ApiKey))
             {
-                throw new Exception("Cannot specify both ApiKey and ApiKeyFile. Please provide only one.");
+                throw new SettingsNotValidException("Cannot specify both ApiKey and ApiKeyFile. Please provide only one.");
             }
             ApiKey = File.ReadAllText(ApiKeyFile).Trim();
         }
 
         if (string.IsNullOrWhiteSpace(ApiKey))
         {
-            throw new InvalidOperationException("Either ApiKey or ApiKeyFile must be provided.");
+            throw new SettingsNotValidException("Either ApiKey or ApiKeyFile must be provided.");
         }
     }
 }
