@@ -291,11 +291,19 @@ public sealed class AdminConfigService(
             // are another entry's, and they are already indexed under that entry's handles.
             if (declared[AccountsKey] is not JsonArray stored) continue;
 
-            for (var index = 0; index < stored.Count; index++)
+            // Positions are counted over the accounts alone, as Entry counts them. An empty entry
+            // binds to no account, so the read shows every account after it one place earlier than
+            // the document stores it. Counted over the whole list, each of those accounts would
+            // answer to the stored slot before its own: the empty entry's, which has no key to keep,
+            // or the previous account's - whose key it would then be saved with, under its own
+            // server URL.
+            var position = 0;
+
+            foreach (var node in stored)
             {
-                if (stored[index] is JsonObject account)
+                if (node is JsonObject account)
                 {
-                    byId[AccountId(version, name, index)] = new StoredAccount(name, account);
+                    byId[AccountId(version, name, position++)] = new StoredAccount(name, account);
                 }
             }
         }
@@ -367,17 +375,18 @@ public sealed class AdminConfigService(
     private static AdminConfigEntryDto Entry(string version, string name, ServerSettings settings, JsonObject declared)
     {
         // A declared Accounts list replaces the inherited one outright, so where the list is declared
-        // the bound accounts are exactly the declared ones, in order. Where it is not, the accounts
-        // shown are inherited and get no handle: there is no stored key of this configuration's own
-        // for a later save to put back.
-        var stored = declared[AccountsKey] as JsonArray;
+        // the bound accounts are exactly the declared ones, in order - less any empty entry, which
+        // binds to no account, so only the entries that are accounts are counted. Where it is not, the
+        // accounts shown are inherited and get no handle: there is no stored key of this
+        // configuration's own for a later save to put back.
+        var declaredAccounts = (declared[AccountsKey] as JsonArray)?.Count(node => node is JsonObject) ?? 0;
 
         // AccountsImpl rather than Accounts: the label is not on IAccountSettings and must not be
         // put there, and this is the one path that already knows the concrete type.
         var accounts = settings.AccountsImpl
             .Select((account, index) => new AdminAccountSettingsDto(account)
             {
-                Id = index < (stored?.Count ?? 0) ? AccountId(version, name, index) : null,
+                Id = index < declaredAccounts ? AccountId(version, name, index) : null,
                 Label = NormalizedLabel(account.Label)
             })
             .ToList();
@@ -596,9 +605,22 @@ public sealed class AdminConfigService(
         var labelled = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var defaults = new ServerAccountSettings();
         var result = new List<Dictionary<string, object?>>();
+        var position = 0;
 
         foreach (var account in accounts ?? [])
         {
+            position++;
+
+            // Refused, where the same entry in the stored settings is dropped: binding a stored
+            // document has to keep the frame running on whatever it holds, but a save is a request,
+            // and the editor never sends an empty entry. Said in words rather than dereferenced below.
+            if (account is null)
+            {
+                throw new SettingsNotValidException(
+                    $"Accounts entry {position} in {where} is empty: every entry in an account list has to be " +
+                    "an account. Remove the empty entry and save again.");
+            }
+
             var label = NormalizedLabel(account.Label);
 
             // Case-insensitively and after trimming, because "Mum" and "mum " would read as one

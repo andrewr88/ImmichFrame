@@ -71,6 +71,28 @@ namespace ImmichFrame.WebApi.Tests.Mocks
         }
 
         /// <summary>
+        /// Sets up the handler to answer the random search an unnarrowed account makes for
+        /// <c>GetAssets</c> with no assets at all, so a frame whose account is a real one can be asked
+        /// for its slideshow without a photo library behind it.
+        /// </summary>
+        public static Mock<HttpMessageHandler> WithNoRandomAssets(this Mock<HttpMessageHandler> handler)
+        {
+            handler.Protected()
+                .Setup<Task<HttpResponseMessage>>(
+                    "SendAsync",
+                    ItExpr.Is<HttpRequestMessage>(req => req.RequestUri!.ToString().Contains("search/random")),
+                    ItExpr.IsAny<CancellationToken>()
+                )
+                .ReturnsAsync(() => new HttpResponseMessage
+                {
+                    StatusCode = HttpStatusCode.OK,
+                    Content = new StringContent("[]")
+                });
+
+            return handler;
+        }
+
+        /// <summary>
         /// Registers the mock handler as the primary <see cref="HttpMessageHandler"/> for every named
         /// <see cref="System.Net.Http.HttpClient"/> created by <see cref="IHttpClientFactory"/>.
         /// </summary>

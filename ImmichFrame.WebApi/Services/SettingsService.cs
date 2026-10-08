@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ImmichFrame.Core.Exceptions;
 using ImmichFrame.WebApi.Database;
 using ImmichFrame.WebApi.Helpers;
@@ -107,7 +108,10 @@ public class SettingsService(
             });
         }
 
-        var catalog = ConfigLoader.BuildCatalog(ConfigLoader.CreateDocument(stored.Format, stored.Text));
+        var document = ConfigLoader.CreateDocument(stored.Format, stored.Text);
+        var catalog = ConfigLoader.BuildCatalog(document);
+
+        WarnAboutEmptyAccountEntries(document);
 
         try
         {
@@ -123,6 +127,55 @@ public class SettingsService(
         }
 
         return catalog;
+    }
+
+    /// <summary>
+    /// Warns about every empty entry - a null in JSON, a bare <c>-</c> in YAML - in an account list the
+    /// stored document declares. <c>ServerSettings</c> drops each one, so the frame runs on the
+    /// accounts around it; this is what keeps that from happening silently.
+    /// <para>
+    /// A warning rather than a validation failure. <see cref="ConfigCatalog.Validate"/> validates the
+    /// default configuration first and stops at the first configuration that throws, so refusing an
+    /// empty entry there would skip <c>ValidateAndInitialize</c> for every profile after it - their
+    /// ApiKeyFiles never read, their accounts left with no key - and would put an entry that is
+    /// already ignored in the Critical line in place of whatever is actually wrong.
+    /// </para>
+    /// <para>
+    /// Read off what each configuration declares rather than off the bound settings, because a
+    /// profile that declares no account list binds the default configuration's: the bound lists would
+    /// blame every such profile for the default configuration's empty entries.
+    /// </para>
+    /// </summary>
+    private void WarnAboutEmptyAccountEntries(IConfigDocument document)
+    {
+        string?[] configurations = [null, .. document.ProfileNames];
+
+        foreach (var name in configurations)
+        {
+            JsonObject declared;
+            try
+            {
+                declared = document.DeclaredOverrides(name);
+            }
+            catch (SettingsNotValidException)
+            {
+                // A YAML document using anchors, which the declared view refuses to project. The
+                // admin editor says so itself; here it only means there is nothing to look at.
+                continue;
+            }
+
+            if (declared["Accounts"] is not JsonArray accounts) continue;
+
+            for (var index = 0; index < accounts.Count; index++)
+            {
+                if (accounts[index] is not null) continue;
+
+                _logger.LogWarning(
+                    "Accounts entry {position} in {configuration} is empty, so it is ignored. Saving the configuration in the admin editor at /admin removes it.",
+                    index + 1,
+                    name is null ? "the default configuration" : $"configuration profile '{name}'");
+            }
+        }
     }
 
     /// <summary>The stored document, for the admin editor to read and write back.</summary>

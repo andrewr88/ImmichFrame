@@ -13,14 +13,23 @@ public class ServerSettings : IServerSettings, IConfigSettable
     public GeneralSettings? GeneralSettingsImpl { get; set; }
 
     /// <summary>
-    /// Never null, whatever the settings document says. A configuration with no accounts is one
-    /// ImmichFrame runs - the slideshow has nothing to show, and the admin editor is there to add an
-    /// account - but a null list is dereferenced on every request, the editor's own included.
+    /// Never null, and never holding a null, whatever the settings document says. A configuration with
+    /// no accounts is one ImmichFrame runs - the slideshow has nothing to show, and the admin editor is
+    /// there to add an account - but a null list is dereferenced on every request, the editor's own
+    /// included.
     /// <para>
     /// Normalised in the setter because an initialiser alone only covers a document that leaves the
     /// key out. An explicit <c>"Accounts": null</c> - YAML's bare <c>Accounts:</c> too, and a profile
     /// overriding the inherited list with either - has the binder call the setter with null, which
     /// would overwrite it. One place here, rather than a null check at every reader.
+    /// </para>
+    /// <para>
+    /// An empty entry in the list - <c>[null]</c> in JSON, a bare <c>-</c> in YAML - binds to a null
+    /// account, and is dropped here for the same reason: building a configuration's services makes an
+    /// account of every entry, so one null failed every request the configuration served. The
+    /// accounts either side of it run as they would without it. Dropping it is not silent -
+    /// <c>SettingsService</c> warns about each one at startup - and the admin editor never writes one
+    /// back, so the next save removes it from the stored settings.
     /// </para>
     /// </summary>
     [YamlMember(Alias = "Accounts")]
@@ -28,7 +37,7 @@ public class ServerSettings : IServerSettings, IConfigSettable
     public IEnumerable<ServerAccountSettings> AccountsImpl
     {
         get => _accounts;
-        set => _accounts = value ?? [];
+        set => _accounts = value?.Where(account => account is not null).ToList() ?? [];
     }
 
     private IEnumerable<ServerAccountSettings> _accounts = [];

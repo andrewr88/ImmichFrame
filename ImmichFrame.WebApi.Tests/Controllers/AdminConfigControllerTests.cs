@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -14,6 +15,7 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Moq;
 using NUnit.Framework;
 
@@ -194,6 +196,71 @@ public class AdminConfigControllerTests
           "ImmichServerUrl": "http://mock-immich-server.com",
           "ApiKey": "base-api-key",
           "Interval": 45
+        }
+        """;
+
+    /// <summary>
+    /// An empty entry after the first account. It binds to no account, so every account after it is
+    /// shown one place earlier than it is stored - which is what a handle has to survive.
+    /// </summary>
+    private const string AccountsAroundAnEmptyEntryJson = """
+        {
+          "General": {
+            "Interval": 45
+          },
+          "Accounts": [
+            {
+              "ImmichServerUrl": "http://server-x.example.com",
+              "ApiKey": "key-x"
+            },
+            null,
+            {
+              "ImmichServerUrl": "http://server-y.example.com",
+              "ApiKey": "key-y"
+            },
+            {
+              "ImmichServerUrl": "http://server-z.example.com",
+              "ApiKey": "key-z"
+            }
+          ]
+        }
+        """;
+
+    /// <summary>
+    /// Empty account entries in two places - after the default configuration's real account, and as
+    /// the whole of a profile's own list - beside a profile that inherits the default configuration's
+    /// list, and one whose account keeps its key in a file.
+    /// </summary>
+    private const string EmptyAccountEntriesJson = """
+        {
+          "General": {
+            "Interval": 45
+          },
+          "Accounts": [
+            {
+              "ImmichServerUrl": "http://mock-immich-server.com",
+              "ApiKey": "base-api-key"
+            },
+            null
+          ],
+          "Profiles": {
+            "kitchen": {
+              "Accounts": [ null ]
+            },
+            "living-room": {
+              "General": {
+                "Interval": 10
+              }
+            },
+            "studio": {
+              "Accounts": [
+                {
+                  "ImmichServerUrl": "http://server-z.example.com",
+                  "ApiKeyFile": "API_KEY_PATH"
+                }
+              ]
+            }
+          }
         }
         """;
 
@@ -1192,6 +1259,79 @@ public class AdminConfigControllerTests
     }
 
     /// <summary>
+    /// An empty entry in a stored account list shifts every account after it: the read shows those
+    /// accounts one position earlier than the document stores them. A handle issued by one count and
+    /// resolved by the other landed the account after the empty entry on the empty entry's own slot,
+    /// which holds no stored account - so it could not keep its key, and an unedited save was refused.
+    /// </summary>
+    [Test]
+    public async Task SaveConfig_AccountListWithAnEmptyEntry_KeepsEachKeyOnItsOwnAccount()
+    {
+        // Arrange
+        WriteSettings("Settings.json", AccountsAroundAnEmptyEntryJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var config = await GetConfig(client);
+
+        // Act - saved as it was read: every key masked, each account carrying the handle it was issued
+        var response = await Put(client, config);
+        var body = await response.Content.ReadAsStringAsync();
+        var saved = JsonNode.Parse(StoredText(factory));
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(config.Default.Accounts.Select(account => account.ImmichServerUrl),
+                Is.EqualTo(new[] { "http://server-x.example.com", "http://server-y.example.com", "http://server-z.example.com" }),
+                "the editor is shown the accounts, and nothing for the empty entry");
+
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK), body);
+            Assert.That(saved?["Accounts"]?.AsArray(), Has.Exactly(3).Items,
+                "a save writes the empty entry out of the stored settings");
+            Assert.That((string?)saved?["Accounts"]?[0]?["ApiKey"], Is.EqualTo("key-x"));
+            Assert.That((string?)saved?["Accounts"]?[1]?["ImmichServerUrl"], Is.EqualTo("http://server-y.example.com"));
+            Assert.That((string?)saved?["Accounts"]?[1]?["ApiKey"], Is.EqualTo("key-y"),
+                "the account after the empty entry keeps its own key");
+            Assert.That((string?)saved?["Accounts"]?[2]?["ApiKey"], Is.EqualTo("key-z"));
+        });
+    }
+
+    /// <summary>
+    /// The same shift, where it would leak a credential rather than refuse a save. Asked to retype the
+    /// key of the account after the empty entry, an administrator does; the account after that one
+    /// then resolved its handle to the retyped account's stored slot, and was saved with that
+    /// account's old key under its own server URL - one Immich server sent another's credential,
+    /// silently, by a save that validated and went through.
+    /// </summary>
+    [Test]
+    public async Task SaveConfig_AccountAfterAnEmptyEntry_IsNeverSavedWithAnotherAccountsKey()
+    {
+        // Arrange
+        WriteSettings("Settings.json", AccountsAroundAnEmptyEntryJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var config = await GetConfig(client);
+        config.Default.Accounts[1].ApiKey = "key-y-retyped";
+
+        // Act
+        var response = await Put(client, config);
+        var body = await response.Content.ReadAsStringAsync();
+        var saved = JsonNode.Parse(StoredText(factory));
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK), body);
+            Assert.That((string?)saved?["Accounts"]?[1]?["ApiKey"], Is.EqualTo("key-y-retyped"));
+            Assert.That((string?)saved?["Accounts"]?[2]?["ImmichServerUrl"], Is.EqualTo("http://server-z.example.com"));
+            Assert.That((string?)saved?["Accounts"]?[2]?["ApiKey"], Is.EqualTo("key-z"),
+                "server z keeps its own key, never the one stored for server y");
+        });
+    }
+
+    /// <summary>
     /// When the handle cannot name exactly one stored account the save is refused outright. There is
     /// no positional fallback to quietly land on, so both an absent handle and one two accounts in the
     /// same list claim have to end the same way: ask for the key again. Two accounts in <em>different</em>
@@ -1831,6 +1971,108 @@ public class AdminConfigControllerTests
     }
 
     /// <summary>
+    /// An account list holding an empty entry - JSON's null, or the bare '-' a YAML list is left with
+    /// - imported as it stands, since the import only checks that the file binds. The entry bound to a
+    /// null account. In the default configuration's list that failed every request the host served,
+    /// building the frame's services for the authentication handler, so the editor's own read
+    /// answered 500 with the frame; in a profile's own list it failed that profile's frame and the
+    /// editor's read. The file is imported once, so correcting it changed nothing either.
+    /// </summary>
+    [TestCase("Settings.json", """{ "General": { "Interval": 45 }, "Accounts": [null] }""", null, 0,
+        TestName = "Config_ImportedAccountListOfOneNull_KeepsTheEditorAndTheFrameAnswering")]
+    [TestCase("Settings.json", """
+        {
+          "General": { "Interval": 45 },
+          "Accounts": [{ "ImmichServerUrl": "http://mock-immich-server.com", "ApiKey": "base-api-key" }, null]
+        }
+        """, null, 1, TestName = "Config_ImportedAccountListEndingInNull_KeepsTheEditorAndTheFrameAnswering")]
+    [TestCase("Settings.yml", "General:\n  Interval: 45\nAccounts:\n-\n", null, 0,
+        TestName = "Config_ImportedYamlAccountListOfABareDash_KeepsTheEditorAndTheFrameAnswering")]
+    [TestCase("Settings.json", """
+        {
+          "General": { "Interval": 45 },
+          "Accounts": [{ "ImmichServerUrl": "http://mock-immich-server.com", "ApiKey": "base-api-key" }],
+          "Profiles": { "kitchen": { "Accounts": [null] } }
+        }
+        """, "kitchen", 0, TestName = "Config_ImportedProfileAccountListOfOneNull_KeepsTheEditorAndTheFrameAnswering")]
+    public async Task Config_ImportedAccountListWithAnEmptyEntry_KeepsTheEditorAndTheFrameAnswering(
+        string fileName, string settings, string? profile, int accounts)
+    {
+        // A real account is asked for its slideshow, so its server has to answer: with no photos.
+        WriteSettings(fileName, settings);
+        using var factory = CreateFactory(
+            immich: new Mock<HttpMessageHandler>().WithServerVersion().WithAssetStatistics(0).WithNoRandomAssets());
+        var client = factory.CreateClient();
+
+        Assume.That(StoredText(factory), Is.EqualTo(settings),
+            "the file has to have been imported as it stands, or this is the unconfigured case instead");
+
+        var read = await Send(client, HttpMethod.Get, ConfigUrl);
+        var frame = await client.GetAsync("/api/Asset");
+        var profileFrame = profile is null ? null : await client.GetAsync($"/api/Asset?profile={profile}");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(read.StatusCode, Is.EqualTo(HttpStatusCode.OK),
+                "the editor is the one tool that can remove the empty entry");
+            Assert.That(frame.StatusCode, Is.EqualTo(HttpStatusCode.OK), "the frame runs on the accounts that are there");
+            Assert.That(profileFrame?.StatusCode, profile is null ? Is.Null : Is.EqualTo(HttpStatusCode.OK),
+                "and so does the profile's");
+        });
+
+        var config = await GetConfig(client);
+        var entry = profile is null ? config.Default : config.Profiles.Single(candidate => candidate.Name == profile);
+
+        Assert.That(entry.Accounts.Select(account => account?.ImmichServerUrl),
+            Is.EqualTo(Enumerable.Repeat("http://mock-immich-server.com", accounts)),
+            "the editor shows the real accounts, and nothing for the empty entry");
+    }
+
+    /// <summary>
+    /// An empty entry is dropped rather than refused, so the startup log is where it shows: by
+    /// position, against the configuration that declares it - a profile inheriting the default
+    /// configuration's list is not blamed for that list's empty entry - and as a warning that leaves
+    /// validation to run on. Refusing it in validation would have stopped there: the configurations
+    /// are validated in turn and the first failure ends it, so every profile after the default
+    /// configuration would have gone unvalidated, its key file never read and its account left with
+    /// no key, and an entry that is already ignored would have taken the Critical line from whatever
+    /// is actually wrong.
+    /// </summary>
+    [Test]
+    public void Config_ImportedEmptyAccountEntries_AreEachNamedWithoutStoppingValidation()
+    {
+        // Arrange
+        var keyPath = Path.Combine(_directory, "api-key");
+        File.WriteAllText(keyPath, "key-from-a-file\n");
+        WriteSettings("Settings.json", EmptyAccountEntriesJson.Replace("API_KEY_PATH", keyPath));
+
+        var logs = new LogSink();
+        using var factory = CreateFactory(logs: logs);
+
+        // Act - the first use of the catalog seeds it from the stored settings, and validates them
+        var studio = factory.Services.GetRequiredService<IConfigCatalog>().Get("studio");
+
+        var warnings = logs.Entries.Where(entry => entry.Level == LogLevel.Warning).Select(entry => entry.Message).ToList();
+        var critical = logs.Entries.Where(entry => entry.Level == LogLevel.Critical).Select(entry => entry.Message).ToList();
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(warnings, Has.Exactly(1).Matches<string>(message =>
+                message.Contains("Accounts entry 2") && message.Contains("the default configuration")));
+            Assert.That(warnings, Has.Exactly(1).Matches<string>(message =>
+                message.Contains("Accounts entry 1") && message.Contains("'kitchen'")));
+            Assert.That(warnings, Has.None.Contains("'living-room'"),
+                "a profile inheriting the default configuration's list declares no entry of its own");
+
+            Assert.That(studio.Accounts.Single().ApiKey, Is.EqualTo("key-from-a-file"),
+                "a profile validated after the empty entries still has its key file read");
+            Assert.That(critical, Has.None.Contains("not valid"),
+                "an entry that is ignored does not make the stored settings invalid");
+        });
+    }
+
+    /// <summary>
     /// YamlStream resolves an alias to the very node the anchor named, so an aliased mapping is
     /// indistinguishable from one written out longhand: every inherited value would be reported as a
     /// key the profile declares, and the save would write them all literally. Refusing is the
@@ -1888,6 +2130,52 @@ public class AdminConfigControllerTests
         {
             Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
             Assert.That(problem, Does.Contain("at least one Immich account"));
+            Assert.That(problem, Does.Not.Contain("Object reference"));
+            Assert.That(StoredText(factory), Is.EqualTo(before));
+        });
+    }
+
+    /// <summary>
+    /// The request's half of the empty account entry. A save is not a settings file to be read
+    /// leniently - the editor never sends an empty entry - so one is a malformed request, and is
+    /// refused by name with the stored settings untouched. It used to reach the label check as a null
+    /// dereference and answer 500.
+    /// </summary>
+    [TestCase(null, TestName = "SaveConfig_EmptyAccountInTheDefaultConfiguration_IsRefusedReadably")]
+    [TestCase("kitchen", TestName = "SaveConfig_EmptyAccountInAProfile_IsRefusedReadably")]
+    public async Task SaveConfig_EmptyAccountInTheRequest_IsRefusedReadably(string? profileName)
+    {
+        // Arrange
+        WriteSettings("Settings.json", SettingsJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var before = StoredText(factory);
+        var config = await GetConfig(client);
+
+        config = profileName is null
+            ? config with { Default = config.Default with { Accounts = [.. config.Default.Accounts, null!] } }
+            : config with
+            {
+                Profiles =
+                [
+                    .. config.Profiles.Select(profile => profile.Name == profileName
+                        ? profile with { DeclaredKeys = [.. profile.DeclaredKeys, "Accounts"], Accounts = [null!] }
+                        : profile)
+                ]
+            };
+
+        // Act
+        var response = await Put(client, config);
+        var problem = await response.Content.ReadAsStringAsync();
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest), problem);
+            Assert.That(problem, Does.Contain("empty"));
+            Assert.That(problem, Does.Contain(profileName is null ? "the default configuration" : $"'{profileName}'"),
+                "the message has to say which list to fix");
             Assert.That(problem, Does.Not.Contain("Object reference"));
             Assert.That(StoredText(factory), Is.EqualTo(before));
         });
@@ -2137,9 +2425,15 @@ public class AdminConfigControllerTests
 
     private void WriteSettings(string name, string contents) => File.WriteAllText(SettingsPath(name), contents);
 
-    private WebApplicationFactory<Program> CreateFactory()
+    /// <param name="immich">
+    /// What the Immich servers answer. By default only the startup version check, which is all a test
+    /// that never asks the frame for a photo needs.
+    /// </param>
+    /// <param name="logs">Where the host's log entries are kept, for a test that asserts on them.</param>
+    private WebApplicationFactory<Program> CreateFactory(
+        Mock<HttpMessageHandler>? immich = null, LogSink? logs = null)
     {
-        var versionHandler = new Mock<HttpMessageHandler>().WithServerVersion();
+        var immichHandler = immich ?? new Mock<HttpMessageHandler>().WithServerVersion();
         var directory = _directory;
 
         return new WebApplicationFactory<Program>()
@@ -2147,7 +2441,12 @@ public class AdminConfigControllerTests
             {
                 builder.ConfigureTestServices(services =>
                 {
-                    services.UseMockHandler(versionHandler);
+                    services.UseMockHandler(immichHandler);
+
+                    if (logs is not null)
+                    {
+                        services.AddSingleton<ILoggerProvider>(logs);
+                    }
 
                     // One override moves everything: the catalog is seeded from ConfigLocation too,
                     // so the running configuration and the file the editor writes are the same file.
@@ -2171,5 +2470,33 @@ public class AdminConfigControllerTests
                         options => options.ForwardAuthenticate = TestAdminAuthHandler.SchemeName);
                 });
             });
+    }
+
+    /// <summary>
+    /// Every entry the host logs, for the tests that are about what an operator is told. Concurrent,
+    /// because the startup version check logs from a thread of its own.
+    /// </summary>
+    private sealed class LogSink : ILoggerProvider
+    {
+        private readonly ConcurrentQueue<(LogLevel Level, string Message)> _entries = new();
+
+        public IEnumerable<(LogLevel Level, string Message)> Entries => _entries;
+
+        public ILogger CreateLogger(string categoryName) => new Logger(_entries);
+
+        public void Dispose()
+        {
+        }
+
+        private sealed class Logger(ConcurrentQueue<(LogLevel Level, string Message)> _entries) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+                Func<TState, Exception?, string> formatter) =>
+                _entries.Enqueue((logLevel, formatter(state, exception)));
+        }
     }
 }
