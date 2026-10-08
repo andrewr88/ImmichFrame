@@ -99,7 +99,9 @@
 	}
 
 	function GetFace(i: number) {
-		const faces = asset[2] as AssetFaceResponseDto[];
+		// loadAsset already sees to it that this is a list. Checked again all the same, as a throw
+		// from here halts the update that brings the photo in.
+		const faces: AssetFaceResponseDto[] = Array.isArray(asset[2]) ? asset[2] : [];
 		const namedFaces = faces.filter((x) => x.person?.name);
 		return namedFaces[i] ?? null;
 	}

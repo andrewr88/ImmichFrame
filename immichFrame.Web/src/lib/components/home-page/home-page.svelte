@@ -17,6 +17,7 @@
 	import { page } from '$app/state';
 	import { ProgressBarLocation, ProgressBarStatus } from '../elements/progress-bar.types';
 	import { isImageAsset, isVideoAsset } from '$lib/constants/asset-type';
+	import { isBirthdayToday, okArray } from './home-page';
 
 	interface AssetsState {
 		assets: [string, api.AssetResponseDto, api.AssetFaceResponseDto[], api.AlbumResponseDto[]][];
@@ -294,8 +295,7 @@
 
 		for (let asset of assets) {
 			for (let person of asset.people ?? []) {
-				let birthdate = new Date(person.birthDate ?? '');
-				if (birthdate.getDate() === today.getDate() && birthdate.getMonth() === today.getMonth()) {
+				if (isBirthdayToday(person.birthDate, today)) {
 					hasBday = true;
 					break;
 				}
@@ -387,7 +387,7 @@
 				clientIdentifier: $clientIdentifierStore,
 				profile: $profileStore
 			});
-			album = albumReq.data ?? [];
+			album = okArray(albumReq, 'albums', assetResponse.id);
 		}
 
 		// if the people array is already populated, there is no need to call the API again
@@ -396,7 +396,15 @@
 				clientIdentifier: $clientIdentifierStore,
 				profile: $profileStore
 			});
-			assetResponse.people = assetInfoRequest.data.people;
+			// Only 200 is declared, hence the widening. Anything but a 200 with a list is warned about,
+			// as okArray warns for the albums and faces, and leaves the asset's people as they were.
+			const status: number = assetInfoRequest.status;
+			const people = status === 200 ? assetInfoRequest.data?.people : undefined;
+			if (Array.isArray(people)) {
+				assetResponse.people = people;
+			} else {
+				console.warn(`Failed to load people for asset ${assetResponse.id}: status ${status}`);
+			}
 		}
 
 		let faces: api.AssetFaceResponseDto[] = [];
@@ -405,7 +413,7 @@
 				clientIdentifier: $clientIdentifierStore,
 				profile: $profileStore
 			});
-			faces = facesRequest.data;
+			faces = okArray(facesRequest, 'faces', assetResponse.id);
 		}
 
 		return [assetUrl, assetResponse, faces, album] as [
