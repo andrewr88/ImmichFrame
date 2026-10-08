@@ -14,6 +14,7 @@ import {
 	usedSelections,
 	validationErrors,
 	withoutPendingDeletion,
+	type AccountProp,
 	type GeneralProp
 } from './admin-config';
 import { DEFAULT_NAME } from './admin-config.test-fixtures';
@@ -749,5 +750,83 @@ describe('regression: one problem found more than once', () => {
 			),
 			'Enter the API key for https://new.example.'
 		]);
+	});
+});
+
+describe('regression: a fraction in a setting the server holds as a whole number', () => {
+	/** One number box in one configuration, and what it is given. */
+	interface NumberEdit {
+		entry: string;
+		/** One of the entry's general settings, or of what it shows from the account labelled Att. */
+		on: 'general' | 'account';
+		prop: GeneralProp | AccountProp;
+		value: number | null;
+	}
+
+	function errorsAfter({ entry, on, prop, value }: NumberEdit): string[] {
+		// Arrange: both settings overridden and the account declared, in both configurations, so
+		// that every box edited below is one a save writes out.
+		const declaring = {
+			declares: ['General.Interval', 'General.TransitionDuration'],
+			accounts: [{ label: 'Att' }]
+		};
+		const { config } = open({ default: declaring, profiles: [{ name: 'hall', ...declaring }] });
+		const edited = entryNamed(config, entry);
+
+		// Act: what the number box commits, where `entry-editor.svelte` and `account-editor.svelte`
+		// write it.
+		Object.assign(on === 'general' ? edited.general : usedSelections(edited)[0].values, {
+			[prop]: value
+		});
+
+		return validationErrors(config);
+	}
+
+	it.each<NumberEdit & { refusal: string }>([
+		{
+			entry: DEFAULT_NAME,
+			on: 'general',
+			prop: 'interval',
+			value: 2.5,
+			refusal: "the default configuration: 'Interval' needs a whole number."
+		},
+		{
+			entry: 'hall',
+			on: 'general',
+			prop: 'interval',
+			value: 2.5,
+			refusal: "profile 'hall': 'Interval' needs a whole number."
+		},
+		{
+			entry: DEFAULT_NAME,
+			on: 'account',
+			prop: 'rating',
+			value: 2.5,
+			refusal:
+				"the default configuration: 'Rating' for Att needs a whole number, or to be left blank."
+		},
+		{
+			entry: 'hall',
+			on: 'account',
+			prop: 'rating',
+			value: 2.5,
+			refusal: "profile 'hall': 'Rating' for Att needs a whole number, or to be left blank."
+		}
+	])('$on $prop at $value in $entry, is refused by name', (edit) => {
+		// Assert: the server holds this as an int, and refused the fraction in the model binder's
+		// words instead - a JSON path and a CLR type name, the path naming a profile by its position
+		// in the request rather than by its name.
+		expect(errorsAfter(edit)).toEqual([edit.refusal]);
+	});
+
+	it.each<NumberEdit>([
+		{ entry: DEFAULT_NAME, on: 'general', prop: 'interval', value: 2 },
+		{ entry: DEFAULT_NAME, on: 'general', prop: 'transitionDuration', value: 2.5 },
+		{ entry: DEFAULT_NAME, on: 'account', prop: 'imagesFromDays', value: 30 },
+		{ entry: DEFAULT_NAME, on: 'account', prop: 'imagesFromDays', value: null }
+	])('$on $prop at $value in $entry, is accepted', (edit) => {
+		// Assert: a whole number where the server holds an int, a fraction where it holds a double,
+		// and an account setting left blank - which is no limit, rather than a number missing.
+		expect(errorsAfter(edit)).toEqual([]);
 	});
 });

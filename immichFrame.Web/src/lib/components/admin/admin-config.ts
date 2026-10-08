@@ -227,6 +227,15 @@ export const accountFields: Record<AccountProp, FieldSpec> = {
 export const accountProps = Object.keys(accountFields) as AccountProp[];
 
 /**
+ * The account settings the server holds as whole numbers, `int?` on `AdminAccountSettingsDto`. Read
+ * off their kind rather than listed by name, so that one added to {@link accountFields} as an
+ * integer is checked as one without anything here having to remember it.
+ */
+const wholeNumberAccountProps = accountProps.filter(
+	(prop) => accountFields[prop].kind === 'integer'
+);
+
+/**
  * `DeclaredKeys` names general settings the way the C# settings class spells them
  * (`General.ShowClock`), while the JSON DTO is camel-cased.
  */
@@ -1036,6 +1045,16 @@ export function validationErrors(config: EditableConfig): string[] {
 				const value = entry.general[prop];
 				if (typeof value !== 'number' || !Number.isFinite(value)) {
 					errors.push(`${entryLabel(entry)}: '${spec.label}' needs a number.`);
+				} else if (spec.kind === 'integer' && !Number.isInteger(value)) {
+					// The server holds an 'integer' setting as an int, and System.Text.Json refuses a
+					// fraction for one before the save is so much as looked at. What came back was the
+					// model binder's message rather than anything about this setting: a JSON path and
+					// a CLR type name, and on a profile a path naming the profile by its position in
+					// the request rather than by its name. The number box's step of 1 marks 2.5 invalid
+					// without stopping it being committed, and rounding it there would save a number
+					// nobody typed - so it is refused here, by name. Asked only of a number, since a
+					// box with none in it has just been told so.
+					errors.push(`${entryLabel(entry)}: '${spec.label}' needs a whole number.`);
 				}
 
 				continue;
@@ -1097,6 +1116,24 @@ export function validationErrors(config: EditableConfig): string[] {
 			if (!account) continue;
 
 			used.set(account.key, [...(used.get(account.key) ?? []), entry.name]);
+
+			// The same refusal as a general setting's, for what this entry shows from the account -
+			// where the binder's path was worse still, naming the account by its place in a list,
+			// and on a profile the profile by its place in the request. Blank is a value of its own
+			// here, no limit or any rating, so only a value that is there and is not a whole number
+			// is refused.
+			const name = accountName(account, config.accounts.indexOf(account));
+
+			for (const prop of wholeNumberAccountProps) {
+				const value = selection.values[prop];
+
+				if (value === null || value === undefined || Number.isInteger(value)) continue;
+
+				errors.push(
+					`${entryLabel(entry)}: '${accountFields[prop].label}' for ${name} needs a whole ` +
+						'number, or to be left blank.'
+				);
+			}
 
 			const label = account.label.trim();
 
