@@ -228,15 +228,15 @@ public static class QueuingAssetPoolTestExtensions
     public static Task<AssetResponseDto?> GetNextAssetForTesting(this QueuingAssetPool pool, CancellationToken ct)
     {
         // Using reflection to call protected GetNextAsset
-        var methodInfo = typeof(AggregatingAssetPool).GetMethod("GetNextAsset", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        return (Task<AssetResponseDto?>)methodInfo.Invoke(pool, new object[] { ct });
+        var methodInfo = typeof(AggregatingAssetPool).GetMethod("GetNextAsset", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        return (Task<AssetResponseDto?>)methodInfo.Invoke(pool, new object[] { ct })!;
     }
 
     // Helper to write to channel for test setup
     public static async Task WriteToChannelForTesting(this QueuingAssetPool pool, AssetResponseDto asset)
     {
-        var fieldInfo = typeof(QueuingAssetPool).GetField("_assetQueue", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        var channel = (Channel<AssetResponseDto>)fieldInfo.GetValue(pool);
+        var fieldInfo = typeof(QueuingAssetPool).GetField("_assetQueue", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        var channel = (Channel<AssetResponseDto>)fieldInfo.GetValue(pool)!;
         await channel.Writer.WriteAsync(asset);
     }
 }

@@ -26,7 +26,7 @@ public class TagAssetsPoolTests
         _cache.Setup(c => c.GetOrAddAsync(It.IsAny<string>(), It.IsAny<Func<Task<ICollection<TagResponseDto>>>>()))
             .Returns<string, Func<Task<ICollection<TagResponseDto>>>>((_, f) => f());
 
-        _api = new Mock<ImmichApi>(null, null);
+        _api = new Mock<ImmichApi>(null!, null!);
         _settings = new Mock<IAccountSettings>();
         _pool = new TestableTagAssetsPool(_cache.Object, _api.Object, _settings.Object);
     }
@@ -74,7 +74,7 @@ public class TagAssetsPoolTests
     [Test]
     public async Task LoadAssets_NullTagsConfigured_ReturnsEmpty()
     {
-        _settings.SetupGet(s => s.Tags).Returns(null as List<string>);
+        _settings.SetupGet(s => s.Tags).Returns((List<string>)null!);
         _api.Setup(a => a.GetAllTagsAsync(default)).ReturnsAsync([]);
 
         var result = await _pool.LoadAssetsPublic();

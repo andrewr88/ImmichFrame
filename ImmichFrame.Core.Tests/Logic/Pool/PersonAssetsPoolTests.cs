@@ -34,7 +34,7 @@ public class PersonAssetsPoolTests // Renamed from PeopleAssetsPoolTests to matc
     public void Setup()
     {
         _mockApiCache = new Mock<IApiCache>();
-        _mockImmichApi = new Mock<ImmichApi>(null, null);
+        _mockImmichApi = new Mock<ImmichApi>(null!, null!);
         _mockAccountSettings = new Mock<IAccountSettings>();
         _personAssetsPool = new TestablePersonAssetsPool(_mockApiCache.Object, _mockImmichApi.Object, _mockAccountSettings.Object);
 
@@ -98,7 +98,7 @@ public class PersonAssetsPoolTests // Renamed from PeopleAssetsPoolTests to matc
     [Test]
     public async Task LoadAssets_NullPeople_ReturnsEmpty()
     {
-        _mockAccountSettings.SetupGet(s => s.People).Returns((List<Guid>)null);
+        _mockAccountSettings.SetupGet(s => s.People).Returns((List<Guid>)null!);
 
         var result = (await _personAssetsPool.TestLoadAssets()).ToList();
         Assert.That(result, Is.Empty);
