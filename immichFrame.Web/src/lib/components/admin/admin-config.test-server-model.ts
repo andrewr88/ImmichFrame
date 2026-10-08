@@ -19,18 +19,15 @@ import type { StoredAccount } from './admin-config.test-fixtures';
  * save the editor could have prevented), and general settings are only checked for being settings
  * the server knows about.
  *
- * A third it does not model although the grid does vary it: `Accounts` refuses an `ApiKeyFile` that
- * is not exactly the one stored on the account the handle names - a typed path, or one copy of an
- * account written with another copy's path. `validationErrors` does not refuse those saves itself
- * yet, so the server's message is what the administrator sees, and transcribing the rule here would
- * turn the grid red until the editor learns it too.
- *
  * ## Which of these rules the suite actually exercises
  *
- * One of the eight: `no-credential`. Every one of the 674 refusals the credential grid provokes is
- * that class, and the two regression tests in `admin-config.test.ts` name it.
+ * Two of the nine: `no-credential` and `unstored-key-file`. Between them they are every one of the
+ * 1790 refusals the credential grid provokes - 674 and 1116 respectively - and the regression tests
+ * in `admin-config.test.ts` name both. Since the grid asks its question in both directions, either
+ * one transcribed too eagerly or too laxly turns it red: the editor would then refuse a save this
+ * model takes, or take one it refuses.
  *
- * `duplicate-label` is reached but not asserted on. 3585 of the no-duplicate-handle invariant's
+ * `duplicate-label` is reached but not asserted on. 3543 of the no-duplicate-handle invariant's
  * 12 096 documents are refused for it, because that test deliberately builds documents whose labels
  * collide and does not ask `validationErrors` - which refuses colliding labels outright - what it
  * makes of them. The only outcome it reads is `ambiguous-handle`, so a document refused for its
@@ -47,7 +44,7 @@ import type { StoredAccount } from './admin-config.test-fixtures';
  *   in both directions.
  * - `key-and-key-file` - `toAccountDto` sends no `apiKey` at all for a row naming a key file.
  *
- * So seven of the eight rules are carried on inspection against the C# alone, and a wrong
+ * So seven of the nine rules are carried on inspection against the C# alone, and a wrong
  * transcription of one would not turn anything red. The single exception is half of one rule: the
  * no-duplicate-handle invariant treats an `ambiguous-handle` verdict as a failure, so that rule made
  * too eager would be caught, though made too lax it would not. Do not close the gap with synthetic
@@ -120,6 +117,8 @@ export type SaveRefusal =
 	| 'ambiguous-handle'
 	/** `Accounts`: a kept key whose handle names no stored account. */
 	| 'unmatched-handle'
+	/** `Accounts`: a key file other than exactly the one stored on the account the handle names. */
+	| 'unstored-key-file'
 	/** `BuildDocument`: the default configuration declares no account. */
 	| 'default-has-no-accounts'
 	/** `BuildEntry`: a declared key that is not a setting. */
@@ -231,6 +230,19 @@ function buildAccounts(
 					stored = match;
 				}
 			}
+		}
+
+		// A key file is kept only where it is exactly - ordinally, untrimmed - the one stored on the
+		// account the handle names, because validating the save reads the file into the account's
+		// key. `stored` is that account from whichever entry owns it, and stays undefined for a handle
+		// the document does not hold or one this list has already claimed, so a path typed on a new
+		// account is refused here as well. Before the key is looked at, as the C# checks it.
+		if (!blank(account.apiKeyFile) && account.apiKeyFile !== stored?.apiKeyFile) {
+			throw new Refusal(
+				'unstored-key-file',
+				entryName,
+				`An account in ${where} names an API key file the stored settings do not give it.`
+			);
 		}
 
 		let apiKey = account.apiKey ?? null;

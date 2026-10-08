@@ -1,10 +1,7 @@
 import type { AdminAccountSettingsDto, AdminConfigUpdateDto } from '$lib/immichFrameApi';
 import {
-	ACCOUNTS_KEY,
-	newAccount,
-	newSelection,
 	toEditable,
-	usedSelections,
+	toggleAccounts,
 	type EditableAccount,
 	type EditableConfig,
 	type EditableEntry
@@ -60,33 +57,12 @@ export function accountLabelled(config: EditableConfig, label: string): Editable
 }
 
 /**
- * Turning a profile's account override on, as `entry-editor.svelte`'s `toggleAccounts` does: the
- * profile starts from what it was inheriting, and only the first time, so that turning the override
- * off and on again does not discard what it has been given since.
+ * Turning a configuration's account override on, as `entry-editor.svelte` does: through
+ * {@link toggleAccounts} itself, handed what `config-editor.svelte` hands that editor to inherit
+ * from - nothing for the default configuration, and the default configuration for a profile.
  */
 export function declareAccounts(config: EditableConfig, entry: EditableEntry): void {
-	if (entry.declared.includes(ACCOUNTS_KEY)) return;
-
-	if (!entry.accountsWereDeclared && entry.accounts.length === 0) {
-		entry.accounts = usedSelections(config.default).map((selection) =>
-			newSelection(selection.accountKey, selection.values)
-		);
-	}
-
-	entry.declared = [...entry.declared, ACCOUNTS_KEY];
-}
-
-/**
- * Pressing Add account, as `accounts-section.svelte`'s `addAccount` does: a row with nothing filled
- * in and no stored key anywhere, given to the default configuration straight away.
- */
-export function addAccount(config: EditableConfig): EditableAccount {
-	const account = newAccount();
-
-	config.accounts = [...config.accounts, account];
-	config.default.accounts = [...config.default.accounts, newSelection(account.key)];
-
-	return account;
+	toggleAccounts(entry, true, entry.isDefault ? null : config.default);
 }
 
 /** What one configuration would be saved with. */

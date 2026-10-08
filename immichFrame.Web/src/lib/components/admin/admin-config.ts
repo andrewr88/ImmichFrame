@@ -33,11 +33,24 @@ export const SECRET_PROPS = ['weatherApiKey', 'webhook', 'authenticationSecret']
 
 export type SecretProp = (typeof SECRET_PROPS)[number];
 
+/** The read-only flags a read reports each secret's presence through. */
+type SecretPresence = 'hasWeatherApiKey' | 'hasWebhook' | 'hasAuthenticationSecret';
+
+/**
+ * Which flag says whether each secret is stored, since the secret itself never reaches the browser.
+ *
+ * Exhaustive over {@link SecretProp} on purpose, as {@link generalFields} is over `GeneralProp`: a
+ * secret added to the API fails to compile here until it is given its flag, rather than falling
+ * through to another secret's and reporting that one's presence as its own.
+ */
+export const SECRET_PRESENCE: Record<SecretProp, SecretPresence> = {
+	weatherApiKey: 'hasWeatherApiKey',
+	webhook: 'hasWebhook',
+	authenticationSecret: 'hasAuthenticationSecret'
+};
+
 /** Every general setting the editor can write; the `has…` flags are read-only presence reports. */
-export type GeneralProp = Exclude<
-	keyof AdminGeneralSettingsDto,
-	'hasWeatherApiKey' | 'hasWebhook' | 'hasAuthenticationSecret'
->;
+export type GeneralProp = Exclude<keyof AdminGeneralSettingsDto, SecretPresence>;
 
 /**
  * Every account setting rendered by the generic field renderer; the rest have bespoke UI.
@@ -326,7 +339,9 @@ export interface EditableAccount {
 	/**
 	 * Entries whose stored copy of this account describes it differently - another server URL, or
 	 * another key file. Recorded rather than reconciled: a save writes the values above over every
-	 * copy, so which entry is about to lose its version of them has to be visible first.
+	 * copy, so which entry is about to lose its version of them has to be visible first. All but a key
+	 * file, which the server keeps only for a copy that already reads it, so that where the copies
+	 * disagree about one `validationErrors` refuses the save rather than write it.
 	 */
 	disagreeing: string[];
 }
@@ -673,6 +688,79 @@ export function setAccountUse(
 }
 
 /**
+ * Turns one entry's override of a general setting on or off, as the setting's override control
+ * does.
+ *
+ * Off stops declaring the key and leaves the value where it is, unsent: only what an entry declares
+ * is written. On starts the override from what was being inherited - every time, since that is what
+ * the row was showing a moment before - so a profile's override turned off and on again starts again
+ * from the default configuration's value rather than from the one it held. The default
+ * configuration's is not seeded at all, and so gets back what it held. A secret is not seeded
+ * either way: what it is set to lives in {@link EditableEntry.secrets}, which this leaves alone.
+ */
+export function toggleGeneral(
+	entry: EditableEntry,
+	prop: GeneralProp,
+	declared: boolean,
+	inheritFrom: EditableEntry | null
+): void {
+	const key = declaredKeyOf(prop);
+
+	if (!declared) {
+		entry.declared = entry.declared.filter((other) => other !== key);
+		return;
+	}
+
+	if (entry.declared.includes(key)) return;
+
+	// An override starts from what was being inherited, so adding one and saving without further
+	// edits changes nothing but which configuration the value is written in. The default
+	// configuration needs no seeding: what it shows for an undeclared key is already the
+	// setting's built-in default, straight off the merged read.
+	if (inheritFrom) Object.assign(entry.general, { [prop]: inheritFrom.general[prop] });
+
+	entry.declared = [...entry.declared, key];
+}
+
+/**
+ * Turns one entry's account override on or off, as the photo selection's override control does.
+ *
+ * Off stops declaring the list and keeps every selection in it, ticked or not, for the override
+ * being turned on again; a list an entry does not declare is not sent. On where it is already on
+ * changes nothing: the default configuration always declares its accounts, and is asked to by
+ * anything that turns every entry's override on.
+ */
+export function toggleAccounts(
+	entry: EditableEntry,
+	declared: boolean,
+	inheritFrom: EditableEntry | null
+): void {
+	if (!declared) {
+		entry.declared = entry.declared.filter((other) => other !== ACCOUNTS_KEY);
+		return;
+	}
+
+	if (entry.declared.includes(ACCOUNTS_KEY)) return;
+
+	// A declared account list replaces the inherited one outright, so the profile starts from what
+	// it was inheriting: the same accounts, ticked, showing the same photos. Each keeps the handle
+	// the read issued for it under the default configuration, so their stored API keys come across
+	// on save without the administrator retyping a key they were already using.
+	//
+	// Only when this profile has nothing of its own, which is the first time the override is
+	// turned on and no other. Seeding again would overwrite whatever it had been given since -
+	// including selections it is holding unticked - with the default configuration's, and turning
+	// an override off and on again is not a request to discard the override's contents.
+	if (!entry.accountsWereDeclared && entry.accounts.length === 0) {
+		entry.accounts = (inheritFrom ? usedSelections(inheritFrom) : []).map((selection) =>
+			newSelection(selection.accountKey, selection.values)
+		);
+	}
+
+	entry.declared = [...entry.declared, ACCOUNTS_KEY];
+}
+
+/**
  * Which configurations show photos from this account, and would therefore be changed by an edit to
  * it or lose it with it.
  *
@@ -696,6 +784,68 @@ export function entriesUsingAccount(
 	});
 }
 
+/**
+ * Adds an account with nothing filled in and no stored key anywhere, as the accounts section's Add
+ * account does, and returns it.
+ *
+ * Given to the default configuration straight away. It is the one entry that must declare
+ * accounts, so it is where an account added from there is nearly always meant to be used - and an
+ * account no configuration uses is written to no part of the settings file. Untick it there to make
+ * it a profile's alone.
+ */
+export function addAccount(config: EditableConfig): EditableAccount {
+	const account = newAccount();
+
+	config.accounts = [...config.accounts, account];
+	config.default.accounts = [...config.default.accounts, newSelection(account.key)];
+
+	return account;
+}
+
+/**
+ * Why this account cannot be removed, or null where it can.
+ *
+ * `AdminConfigService` refuses a save that leaves the default configuration using no account, and
+ * refuses it by name - the default configuration is what every profile inherits - so removing the
+ * last account it uses is refused here instead, where it can be explained before anything is lost.
+ * The last one it *uses*: a selection it holds unticked is written nowhere, so it serves nothing,
+ * and the account behind it can go.
+ */
+export function removeAccountRefusal(
+	config: EditableConfig,
+	account: EditableAccount
+): string | null {
+	const usedByDefault = entriesUsingAccount(config, account).some((entry) => entry.isDefault);
+
+	if (!usedByDefault || usedSelections(config.default).length !== 1) return null;
+
+	const name = accountName(
+		account,
+		config.accounts.findIndex((other) => other.key === account.key)
+	);
+
+	return (
+		`${name} is the only Immich account the default configuration uses, and that is what ` +
+		'every configuration profile inherits. Give the default configuration another account ' +
+		'first: ImmichFrame cannot serve an image without one.'
+	);
+}
+
+/**
+ * Takes an account out of the configuration: its row, and every entry's selection of it.
+ *
+ * Dropped from every entry, declaring or not and ticked or not: a selection left behind would name
+ * an account that no longer has any credentials at all. Asked nothing first - whether it may go is
+ * {@link removeAccountRefusal}'s question, and whether it should is the administrator's.
+ */
+export function removeAccount(config: EditableConfig, account: EditableAccount): void {
+	config.accounts = config.accounts.filter((other) => other.key !== account.key);
+
+	for (const entry of [config.default, ...config.profiles]) {
+		entry.accounts = entry.accounts.filter((selection) => selection.accountKey !== account.key);
+	}
+}
+
 export function usesApiKeyFile(account: EditableAccount): boolean {
 	return !!account.apiKeyFile.trim();
 }
@@ -703,6 +853,51 @@ export function usesApiKeyFile(account: EditableAccount): boolean {
 /** The accounts section's rows, by the key an entry's selection names them with. */
 export function accountsByKey(config: EditableConfig): Map<string, EditableAccount> {
 	return new Map(config.accounts.map((account) => [account.key, account]));
+}
+
+/** Accounts sharing one label within one configuration's own account list. */
+export interface LabelCollision {
+	entry: EditableEntry;
+	/**
+	 * {@link EditableAccount.key} of each account carrying the label, in the order `entry` lists
+	 * them.
+	 */
+	keys: string[];
+}
+
+/**
+ * Every label two or more accounts share within one configuration, one group per label.
+ *
+ * `AdminConfigService.Accounts` refuses a list holding one label twice, because a label is what says
+ * two entries mean one account, and a hand-written file can already be in the state: labels are
+ * normalised on read. Asked here for both of the places that need it - `validationErrors`, which
+ * refuses the save, and the accounts section, which marks the rows before Save is pressed - so that
+ * the two cannot come to disagree about what collides.
+ *
+ * Compared as the server compares them: trimmed and without regard to case, so that "Mum" and "mum "
+ * are the one name they look like on screen. An account with no label is in no group, rather than
+ * grouped under the empty one - absence asserts no identity, and two unlabelled accounts on one
+ * server have a refusal of their own. Scoped to the configurations that declare their own accounts,
+ * and to what each of them uses: two accounts sharing a label are ambiguous only within an entry
+ * that writes both, and an inheriting profile is showing the default configuration's list rather
+ * than one of its own.
+ */
+export function labelCollisions(config: EditableConfig): LabelCollision[] {
+	const accounts = accountsByKey(config);
+
+	return [config.default, ...config.profiles].flatMap((entry) => {
+		if (!entry.declared.includes(ACCOUNTS_KEY)) return [];
+
+		const byLabel = new Map<string, string[]>();
+
+		for (const selection of usedSelections(entry)) {
+			const label = accounts.get(selection.accountKey)?.label.trim().toLowerCase();
+
+			if (label) byLabel.set(label, [...(byLabel.get(label) ?? []), selection.accountKey]);
+		}
+
+		return [...byLabel.values()].filter((keys) => keys.length > 1).map((keys) => ({ entry, keys }));
+	});
 }
 
 /**
@@ -809,11 +1004,11 @@ function toEntryDto(
 
 	// Only the general settings this entry declares, which are the only ones the server reads. The
 	// model holds a value for every setting - the read reports the merged result, and an override
-	// turned off keeps what it held so that turning it on again restores it - and sending all of it
-	// put values in front of the server's binder that nothing here checks any more, since
-	// `validationErrors` asks only about what is declared. A fraction left in Interval before its
-	// override was turned off refused the whole save, in the binder's words and about a setting the
-	// profile no longer showed.
+	// turned off keeps what it held rather than discarding it - and sending all of it put values in
+	// front of the server's binder that nothing here checks any more, since `validationErrors` asks
+	// only about what is declared. A fraction left in Interval before its override was turned off
+	// refused the whole save, in the binder's words and about a setting the profile no longer
+	// showed.
 	//
 	// Asked of every setting the read reported rather than only the ones this build has a field
 	// for: a newer server's setting arrives in the read and in `DeclaredKeys` alike, and the server
@@ -999,7 +1194,7 @@ export function entryLabel(entry: EditableEntry): string {
 }
 
 /**
- * The one disagreement between an account's copies that a save cannot write through.
+ * One of the two disagreements between an account's copies that a save cannot write through.
  *
  * An account kept on its stored key sends the masking placeholder, and the server resolves that to
  * the key stored against the handle the entry carries. Which stored account that is is a question
@@ -1018,8 +1213,10 @@ export function entryLabel(entry: EditableEntry): string {
  *
  * Refused here instead, naming the path and the two ways out. Not resolved: which of the two is this
  * account's credential is a question about the installation, and the row cannot answer it. The
- * opposite direction needs no refusal, because it does write through - a row that names a key file
- * sends the path to every entry, and one whose key is being typed sends that key to every entry.
+ * opposite direction does not write through either - a row that names a key file sends the path to
+ * every entry, and the server keeps it only for an entry whose handle names a copy that already
+ * reads it - and {@link keyFileErrors} refuses that one. Only a key being typed is sent to every
+ * entry and kept by every entry.
  */
 function keptKeyErrors(account: EditableAccount, name: string, writtenBy: string[]): string[] {
 	const stranded = writtenBy.flatMap((entryName) => {
@@ -1053,8 +1250,74 @@ function keptKeyErrors(account: EditableAccount, name: string, writtenBy: string
 	return [
 		`${name} has no API key file set above, but the stored API key it keeps is read from one. ` +
 			`Saving would leave ${where} with neither a key nor a key file. Give this account that key ` +
-			'file path to read the key from the file everywhere, or replace its key to store one in the ' +
-			'settings file instead.'
+			'file path to read the key from the file, or replace its key to store one in the settings ' +
+			'file instead.'
+	];
+}
+
+/**
+ * The disagreement a save cannot write through in the other direction: a key file, sent with every
+ * entry that writes the account, where the server will not keep it.
+ *
+ * `AdminConfigService` keeps an ApiKeyFile only where it is exactly the one already stored on the
+ * account the handle names - compared ordinally, untrimmed - because validating the save reads the
+ * file it names into the account's API key, and a path taken from the editor would let an
+ * administrator read any file ImmichFrame can and send it to a server of their choosing. So a row
+ * naming a key file writes it through only to the entries whose handle names a stored copy that
+ * reads that very file. Every other entry writing the account has the save refused by the server,
+ * in words that name the account by its server URL and give neither path: one whose stored copy
+ * keeps a key in the settings file instead, one whose stored copy reads another file, and every
+ * entry of an account the read issued no handle for at all, whose path can only have been typed
+ * here.
+ *
+ * Asked per written entry and answered from the handle's owner, as {@link keptKeyErrors} is and for
+ * the same reason: an adopting entry sends a borrowed handle, and it is the copy that handle names
+ * which the path is held against. The handle itself is left alone. Sending another entry's instead,
+ * one whose copy does read the path, would answer what this entry had already spelled out from that
+ * other entry - see {@link accountHandle} - and would quietly trade the key this entry's copy stores
+ * for the file, which is the choice this refusal leaves with the administrator.
+ */
+function keyFileErrors(account: EditableAccount, name: string, writtenBy: string[]): string[] {
+	const path = account.apiKeyFile;
+	const refused = writtenBy.flatMap((entryName) => {
+		const owner = handleOwner(account, entryName);
+		// The path the owner's stored copy reads, or null where it reads none - an own key, for the
+		// reason `keptKeyErrors` gives. A record is only ever made for a path that is there, so a
+		// stored copy with a blank one has none, and a blank path is not what is being sent.
+		const stored =
+			owner !== null && Object.hasOwn(account.keyFromFile, owner)
+				? account.keyFromFile[owner]
+				: null;
+
+		// Exactly, as the server compares them. The path goes out as the box holds it, and a stray
+		// space is another file to `File.ReadAllText`; quoted below for the same reason, so that a
+		// difference only in spaces can be seen in the message at all.
+		return stored === path ? [] : [{ entry: entryName, owner, stored }];
+	});
+
+	if (refused.length === 0) return [];
+
+	const where = refused
+		.map(({ entry, owner, stored }) => {
+			const reads = stored === null ? 'keeps the key in the settings file' : `reads '${stored}'`;
+			// Whose copy it is, where that is not the entry being written, for the reason
+			// `keptKeyErrors` names the owner too: the profile to go and look at is that one.
+			const copy =
+				owner === null
+					? 'nothing is stored for this account yet'
+					: entry === owner
+						? `its stored copy ${reads}`
+						: `keeping ${namedEntry(owner)}'s copy, which ${reads}`;
+
+			return `${namedEntry(entry)} (${copy})`;
+		})
+		.join(', ');
+
+	return [
+		`${name} names '${path}' as its API key file, which the settings on the server do not give it ` +
+			`for ${where}. ImmichFrame keeps a key file only where they already do, since it reads ` +
+			"whatever file is named. Clear the API key file above and enter the account's API key " +
+			`instead, or untick ${name} there.`
 	];
 }
 
@@ -1116,6 +1379,7 @@ function wholeNumberNeed(
 export function validationErrors(config: EditableConfig): string[] {
 	const errors: string[] = [];
 	const accounts = accountsByKey(config);
+	const collisions = labelCollisions(config);
 	/** Which entries write each account out, by {@link EditableAccount.key}. */
 	const used = new Map<string, string[]>();
 
@@ -1168,11 +1432,25 @@ export function validationErrors(config: EditableConfig): string[] {
 			// silently unset a secret the administrator only meant to replace. Having no secret is
 			// a choice of its own here - and on a profile it is an override rather than an absence
 			// - so an empty box is refused rather than quietly taken for either.
+			//
+			// So are two values that do not look empty at all, because the server does not take
+			// them for values either. Nothing but spaces is "no secret here" to it, however it is
+			// spelled. And the mask is "keep what is stored" - which keeps the old secret through a
+			// Replace, and where nothing is stored keeps nothing: the authentication secret is then
+			// dropped from the default configuration, or written as the null that overrides an
+			// inherited one with none, and every frame URL it guarded opens with nothing said.
+			// Blank is whatever `trim` empties, the nearest JavaScript has to
+			// `string.IsNullOrWhiteSpace`; the mask is compared exactly, as `AdminSecret.KeepsStored`
+			// compares it.
 			if (spec.kind === 'secret' && entry.secrets[prop as SecretProp].mode === 'set') {
-				if (!entry.secrets[prop as SecretProp].value) {
+				const value = entry.secrets[prop as SecretProp].value;
+
+				if (!value.trim() || value === SECRET_PLACEHOLDER) {
 					errors.push(
 						`${entryLabel(entry)}: enter a value for '${spec.label}', choose to have none, ` +
-							'or turn its override off.'
+							'or turn its override off. A value cannot be blank - the server would take ' +
+							`that for no secret at all - nor ${SECRET_PLACEHOLDER}, which asks it to keep ` +
+							'the stored one.'
 					);
 				}
 			}
@@ -1194,7 +1472,14 @@ export function validationErrors(config: EditableConfig): string[] {
 			);
 		}
 
-		const labelled = new Set<string>();
+		// Each account after the first to carry a label this entry has already met, which is where
+		// reading the list in order first finds the collision - so the refusal names the label the
+		// way the account that repeats it spells it.
+		const repeats = new Set(
+			collisions
+				.filter((collision) => collision.entry === entry)
+				.flatMap((collision) => collision.keys.slice(1))
+		);
 		const unlabelled = new Set<string>();
 
 		for (const selection of selections) {
@@ -1229,17 +1514,16 @@ export function validationErrors(config: EditableConfig): string[] {
 			const label = account.label.trim();
 
 			if (label) {
-				// The server refuses this too, and a hand-written file can already be in the state,
-				// since labels are normalised on read. Two rows sharing a name would be two accounts
-				// nothing on screen can tell apart, so it is refused rather than resolved.
-				if (labelled.has(label.toLowerCase())) {
+				// The server refuses this too - see `labelCollisions`. Two rows sharing a name would
+				// be two accounts nothing on screen can tell apart, so it is refused rather than
+				// resolved.
+				if (repeats.has(account.key)) {
 					errors.push(
 						`${entryLabel(entry)}: two accounts are labelled '${label}'. A label is what tells ` +
 							'one account from another here, so give them names that differ.'
 					);
 				}
 
-				labelled.add(label.toLowerCase());
 				continue;
 			}
 
@@ -1273,10 +1557,14 @@ export function validationErrors(config: EditableConfig): string[] {
 			errors.push(`${name} needs an Immich server URL.`);
 		}
 
-		// A key file is the credential, and an account carrying a handle keeps its stored key
-		// wherever it is used - including in an entry that has just adopted it, which is what the
-		// handle is for. What is left is an account nothing in the file has a key for.
-		if (usesApiKeyFile(account)) return;
+		// A key file is the credential, though only in the entries the server will keep it for. An
+		// account carrying a handle keeps its stored key wherever it is used - including in an entry
+		// that has just adopted it, which is what the handle is for. What is left is an account
+		// nothing in the file has a key for.
+		if (usesApiKeyFile(account)) {
+			errors.push(...keyFileErrors(account, name, writtenBy));
+			return;
+		}
 
 		if (account.hasStoredKey && !account.entering) {
 			errors.push(...keptKeyErrors(account, name, writtenBy));

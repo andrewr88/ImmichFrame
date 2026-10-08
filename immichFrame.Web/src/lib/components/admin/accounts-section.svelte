@@ -1,13 +1,13 @@
 <script lang="ts">
 	import {
-		ACCOUNTS_KEY,
 		accountName,
+		addAccount,
 		entriesUsingAccount,
 		entryLabel,
+		labelCollisions,
 		namedEntry,
-		newAccount,
-		newSelection,
-		usedSelections,
+		removeAccount,
+		removeAccountRefusal,
 		usesApiKeyFile,
 		type EditableAccount,
 		type EditableConfig,
@@ -28,89 +28,48 @@
 	/** Why a removal was refused, which is not a reason to block the rest of the form. */
 	let removeError = $state('');
 
-	let entries: EditableEntry[] = $derived([config.default, ...config.profiles]);
-
 	/** {@link entriesUsingAccount} against this section's configuration. */
 	function usedBy(account: EditableAccount): EditableEntry[] {
 		return entriesUsingAccount(config, account);
 	}
 
 	/**
-	 * Rows whose label is another row's, and the configurations each pair collides in.
+	 * Rows whose label is another row's, grouped by the configuration each group collides in.
 	 *
 	 * A label is what tells one account from another here, so two rows carrying one render the same
 	 * header and there is nothing on either saying which is which. `validationErrors` refuses the save
 	 * and explains it, but only once Save has been pressed - and this state is not something the
 	 * administrator has to build to reach it: labels are normalised on read, so a hand-written file
 	 * holding "Mum" and "mum " arrives already in it. Marked on the rows themselves so it is visible
-	 * before then, and on the control that resolves it.
-	 *
-	 * Scoped per configuration and to the configurations that declare their own accounts, as the
-	 * refusal is: two accounts sharing a label are ambiguous only within an entry that uses both, and
-	 * an inheriting profile is showing the default configuration's list rather than one of its own.
+	 * before then, and on the control that resolves it. What collides, and where, is
+	 * `labelCollisions`'s to say, so that the marks and the refusal cannot disagree.
 	 */
-	let collisions: { key: string; where: string }[] = $derived.by(() => {
-		const byKey = new Map(config.accounts.map((account) => [account.key, account]));
-
-		return entries.flatMap((entry) => {
-			if (!entry.declared.includes(ACCOUNTS_KEY)) return [];
-
-			// Compared as the server compares them, and as `validationErrors` does: trimmed and without
-			// regard to case, so that "Mum" and "mum " are the one name they look like on screen. An
-			// account with no label is dropped rather than grouped under the empty one - absence asserts
-			// no identity, and two unlabelled accounts on one server have a refusal of their own.
-			const labelled = usedSelections(entry)
-				.map((selection) => ({
-					key: selection.accountKey,
-					label: (byKey.get(selection.accountKey)?.label.trim() ?? '').toLowerCase()
-				}))
-				.filter((row) => row.label);
-
-			return labelled
-				.filter((row, index) =>
-					labelled.some((other, another) => another !== index && other.label === row.label)
-				)
-				.map((row) => ({ key: row.key, where: entryLabel(entry) }));
-		});
-	});
+	let collisions = $derived(labelCollisions(config));
 
 	/** The configurations this row's label collides in; empty where it collides in none. */
 	function collidesIn(account: EditableAccount): string[] {
 		return collisions
-			.filter((collision) => collision.key === account.key)
-			.map((collision) => collision.where);
+			.filter((collision) => collision.keys.includes(account.key))
+			.map((collision) => entryLabel(collision.entry));
 	}
 
-	function addAccount() {
+	function add() {
 		removeError = '';
-
-		const account = newAccount();
-
-		config.accounts = [...config.accounts, account];
-		// Given to the default configuration straight away. It is the one entry that must declare
-		// accounts, so it is where an account added from here is nearly always meant to be used - and
-		// an account no configuration uses is written to no part of the settings file. Untick it
-		// there to make it a profile's alone.
-		config.default.accounts = [...config.default.accounts, newSelection(account.key)];
+		addAccount(config);
 	}
 
-	function removeAccount(account: EditableAccount, index: number) {
+	function remove(account: EditableAccount, index: number) {
 		removeError = '';
 
-		const name = accountName(account, index);
-		const used = usedBy(account);
+		const refusal = removeAccountRefusal(config, account);
 
-		// `AdminConfigService` refuses this save by name - the default configuration is what every
-		// profile inherits - so it is caught here, where it can be explained before anything is lost.
-		if (used.some((entry) => entry.isDefault) && usedSelections(config.default).length === 1) {
-			removeError =
-				`${name} is the only Immich account the default configuration uses, and that is what ` +
-				'every configuration profile inherits. Give the default configuration another account ' +
-				'first: ImmichFrame cannot serve an image without one.';
+		if (refusal) {
+			removeError = refusal;
 			return;
 		}
 
-		const profiles = used.filter((entry) => !entry.isDefault);
+		const name = accountName(account, index);
+		const profiles = usedBy(account).filter((entry) => !entry.isDefault);
 
 		// Removing an account is destructive in a way the button does not look: it takes the account
 		// out of every configuration that uses it, including profiles that are not on screen, and the
@@ -128,13 +87,7 @@
 
 		if (!confirmed) return;
 
-		config.accounts = config.accounts.filter((other) => other.key !== account.key);
-
-		// Dropped from every entry, declaring or not: a selection left behind would name an account
-		// that no longer has any credentials at all.
-		for (const entry of entries) {
-			entry.accounts = entry.accounts.filter((selection) => selection.accountKey !== account.key);
-		}
+		removeAccount(config, account);
 	}
 </script>
 
@@ -183,7 +136,7 @@
 				<button
 					type="button"
 					class="btn btn-secondary remove"
-					onclick={() => removeAccount(account, index)}
+					onclick={() => remove(account, index)}
 				>
 					Remove account…
 				</button>
@@ -307,16 +260,21 @@
 			<footer class="foot">
 				{#if account.disagreeing.length > 0}
 					<!-- Said rather than quietly resolved: the file is asserting one account and then
-					     describing it two ways, and a save writes the credentials above over every copy.
-					     Amber rather than refused, because writing them through is the point of this
-					     section. The one disagreement that cannot be written through - a stored key kept
-					     here against an entry that reads its key from a file - is refused by
-					     `validationErrors` instead, since that entry would be left with no credential. -->
+					     describing it two ways, and a save writes the label, the server URL and a typed key
+					     over every copy. Amber rather than refused, because writing them through is the
+					     point of this section. A key file is what cannot be written through, in either
+					     direction: a stored key kept here against an entry that reads its key from a file
+					     would leave that entry with no credential, and the server keeps a key file only for
+					     an entry whose stored copy already reads it. `validationErrors` refuses both, naming
+					     the entry; this says so before Save is pressed. -->
 					<p class="note warn">
 						The settings file describes this account differently in {account.disagreeing
 							.map(namedEntry)
-							.join(', ')} - another server URL, or another API key file. Saving writes the label, server
-						URL and API key file above to every configuration that uses it.
+							.join(', ')} - another server URL, or another API key file. Saving writes the label and
+						server URL above to every configuration that uses it, and so does an API key entered here.
+						An API key file is the exception: ImmichFrame keeps one only where the settings on the server
+						already give it to that configuration, so where they disagree about one, enter the key here
+						or untick the account where it differs.
 					</p>
 				{/if}
 
@@ -339,7 +297,7 @@
 		<p class="error">{removeError}</p>
 	{/if}
 
-	<button type="button" class="btn btn-secondary add" onclick={addAccount}>Add account</button>
+	<button type="button" class="btn btn-secondary add" onclick={add}>Add account</button>
 </section>
 
 <style>

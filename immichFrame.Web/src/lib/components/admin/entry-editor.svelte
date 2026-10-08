@@ -2,13 +2,15 @@
 	import type { AdminGeneralSettingsDto } from '$lib/immichFrameApi';
 	import {
 		ACCOUNTS_KEY,
+		SECRET_PRESENCE,
 		accountName,
 		declaredKeyOf,
 		entryLabel,
 		generalFields,
 		generalSections,
-		newSelection,
 		setAccountUse,
+		toggleAccounts,
+		toggleGeneral,
 		usedSelections,
 		type AccountSelection,
 		type EditableAccount,
@@ -68,52 +70,7 @@
 	}
 
 	function hasSecret(values: AdminGeneralSettingsDto, prop: SecretProp): boolean {
-		if (prop === 'weatherApiKey') return values.hasWeatherApiKey === true;
-		if (prop === 'webhook') return values.hasWebhook === true;
-		return values.hasAuthenticationSecret === true;
-	}
-
-	function toggleGeneral(prop: GeneralProp, declared: boolean) {
-		const key = declaredKeyOf(prop);
-
-		if (!declared) {
-			entry.declared = entry.declared.filter((other) => other !== key);
-			return;
-		}
-
-		if (entry.declared.includes(key)) return;
-
-		// An override starts from what was being inherited, so adding one and saving without further
-		// edits changes nothing but which configuration the value is written in. The default
-		// configuration needs no seeding: what it shows for an undeclared key is already the
-		// setting's built-in default, straight off the merged read.
-		if (inheritFrom) Object.assign(entry.general, { [prop]: inheritFrom.general[prop] });
-
-		entry.declared = [...entry.declared, key];
-	}
-
-	function toggleAccounts(declared: boolean) {
-		if (!declared) {
-			entry.declared = entry.declared.filter((other) => other !== ACCOUNTS_KEY);
-			return;
-		}
-
-		// A declared account list replaces the inherited one outright, so the profile starts from what
-		// it was inheriting: the same accounts, ticked, showing the same photos. Each keeps the handle
-		// the read issued for it under the default configuration, so their stored API keys come across
-		// on save without the administrator retyping a key they were already using.
-		//
-		// Only when this profile has nothing of its own, which is the first time the override is
-		// turned on and no other. Seeding again would overwrite whatever it had been given since -
-		// including selections it is holding unticked - with the default configuration's, and turning
-		// an override off and on again is not a request to discard the override's contents.
-		if (!entry.accountsWereDeclared && entry.accounts.length === 0) {
-			entry.accounts = inherited.map((selection) =>
-				newSelection(selection.accountKey, selection.values)
-			);
-		}
-
-		entry.declared = [...entry.declared, ACCOUNTS_KEY];
+		return values[SECRET_PRESENCE[prop]] === true;
 	}
 
 	/** This entry's selection for an account, ticked or not: an unticked one is kept, not dropped. */
@@ -167,7 +124,7 @@
 					declared={declares(prop)}
 					{inheritLabel}
 					entryName={editing}
-					onToggle={(declared) => toggleGeneral(prop, declared)}
+					onToggle={(declared) => toggleGeneral(entry, prop, declared, inheritFrom)}
 				>
 					{#if spec.kind === 'secret'}
 						<SecretField
@@ -231,7 +188,7 @@
 					class="box"
 					aria-label="{accountsDeclared ? 'Overridden' : inheritLabel}: Photo selection"
 					checked={accountsDeclared}
-					onchange={(event) => toggleAccounts(event.currentTarget.checked)}
+					onchange={(event) => toggleAccounts(entry, event.currentTarget.checked, inheritFrom)}
 				/>
 				<span>{accountsDeclared ? 'Overridden' : inheritLabel}</span>
 			</label>

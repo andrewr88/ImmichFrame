@@ -4,27 +4,37 @@ import {
 	ACCOUNTS_KEY,
 	SECRET_PLACEHOLDER,
 	accountHandle,
+	accountsByKey,
+	addAccount,
 	declaredKeyOf,
 	entriesUsingAccount,
+	entryLabel,
 	generalFields,
+	labelCollisions,
 	newAccount,
-	newSelection,
+	problemDetail,
+	profileNameError,
+	removeAccount,
+	removeAccountRefusal,
 	savedAccountHandle,
 	setAccountUse,
 	toUpdate,
+	toggleAccounts,
+	toggleGeneral,
 	usedSelections,
 	validationErrors,
 	withPendingDeletion,
 	withoutPendingDeletion,
 	type AccountProp,
-	type GeneralProp
+	type EditableConfig,
+	type GeneralProp,
+	type SecretEdit
 } from './admin-config';
-import { DEFAULT_NAME } from './admin-config.test-fixtures';
+import { DEFAULT_NAME, type DocumentFixture } from './admin-config.test-fixtures';
 import {
 	accountLabelled,
 	accountWritten,
 	accountsWritten,
-	addAccount,
 	declareAccounts,
 	entryNamed,
 	open
@@ -222,6 +232,128 @@ describe('toUpdate: round-tripping an untouched configuration', () => {
 		// Assert: two entries holding one array would be one list of albums reachable two ways.
 		expect(usedSelections(config.default)[0].values.albums).toEqual(['album-1']);
 		expect(usedSelections(hall)[0].values.albums).toEqual(['album-1', 'album-2']);
+	});
+});
+
+describe('toUpdate: secrets', () => {
+	/** What one configuration is saved with once its webhook is edited, both having one as read. */
+	function savedWith(entryName: string, secret: SecretEdit) {
+		const declaring = { declares: ['General.Webhook'], accounts: [{ label: 'Att' }] };
+		const { config } = open({ default: declaring, profiles: [{ name: 'hall', ...declaring }] });
+
+		entryNamed(config, entryName).secrets.webhook = secret;
+
+		const update = toUpdate(config);
+
+		return entryName === DEFAULT_NAME ? update.default : update.profiles?.[0];
+	}
+
+	const STALE = 'https://hooks.example/left-in-the-box';
+
+	it.each<{ case: string; entry: string; secret: SecretEdit; sent: string; declared: boolean }>([
+		{
+			case: 'no secret on a profile',
+			entry: 'hall',
+			secret: { mode: 'none', value: '' },
+			sent: '',
+			declared: true
+		},
+		{
+			case: 'no secret on the default configuration',
+			entry: DEFAULT_NAME,
+			secret: { mode: 'none', value: '' },
+			sent: '',
+			declared: false
+		},
+		{
+			case: 'no secret, chosen with a value still in the box',
+			entry: 'hall',
+			secret: { mode: 'none', value: STALE },
+			sent: '',
+			declared: true
+		},
+		{
+			case: 'the stored one kept, with a value still in the box',
+			entry: DEFAULT_NAME,
+			secret: { mode: 'keep', value: STALE },
+			sent: SECRET_PLACEHOLDER,
+			declared: true
+		},
+		{
+			case: 'a value typed, spaces and all',
+			entry: 'hall',
+			secret: { mode: 'set', value: ' https://hooks.example/new ' },
+			sent: ' https://hooks.example/new ',
+			declared: true
+		}
+	])('$case, is sent as $sent', ({ entry, secret, sent, declared }) => {
+		// Act
+		const written = savedWith(entry, secret);
+
+		// Assert: "no secret here" is the empty string on the wire either way, and lands one level
+		// apart. A profile keeps the key, which the server writes as the explicit null that overrides
+		// an inherited secret with none; the default configuration has nothing above it to override,
+		// so the key goes and the next read agrees with the file. What is left in the box is sent
+		// only when it is the value being set - and then exactly as typed.
+		expect(written?.general?.webhook).toBe(sent);
+		expect(written?.declaredKeys?.includes('General.Webhook')).toBe(declared);
+	});
+
+	it('a secret this configuration does not declare, is not sent at all', () => {
+		// Arrange
+		const { config } = open({
+			default: { accounts: [{ label: 'Att' }] },
+			profiles: [{ name: 'hall' }]
+		});
+
+		// Act: a value in the box of a secret whose override is off.
+		entryNamed(config, 'hall').secrets.authenticationSecret = { mode: 'set', value: STALE };
+
+		const written = toUpdate(config).profiles?.[0];
+
+		// Assert: the server never reads an undeclared secret, so it is not sent as anything - least
+		// of all the empty string, which is a value of its own: no secret here.
+		expect(written?.general).toEqual({});
+		expect(written?.declaredKeys).toEqual([]);
+	});
+});
+
+describe('toUpdate: a declared setting with no value', () => {
+	it.each([null, undefined])('a declared setting emptied to %s, declares nothing', (value) => {
+		// Arrange: a profile overriding two settings.
+		const { config } = open({
+			default: { accounts: [{ label: 'Att' }] },
+			profiles: [
+				{
+					name: 'hall',
+					declares: ['General.PrimaryColor', 'General.ShowClock'],
+					general: { primaryColor: '#f5deb3', showClock: false }
+				}
+			]
+		});
+
+		// Act: its colour box emptied.
+		entryNamed(config, 'hall').general.primaryColor = value;
+
+		// Assert: `"PrimaryColor": null` binds to the same built-in default as leaving the key out, so
+		// the key is dropped rather than written as a null. What else it declares is untouched.
+		expect(toUpdate(config).profiles?.[0].declaredKeys).toEqual(['General.ShowClock']);
+	});
+
+	it('an override ticked on a setting with no built-in value, declares nothing', () => {
+		// Arrange
+		const { config } = open({
+			default: { accounts: [{ label: 'Att' }] },
+			profiles: [{ name: 'hall' }]
+		});
+		const hall = entryNamed(config, 'hall');
+
+		// Act: the override ticked, which seeds it with what is inherited - nothing.
+		toggleGeneral(hall, 'primaryColor', true, config.default);
+
+		// Assert: ticked in the editor, and no null in the settings file.
+		expect(hall.declared).toEqual(['General.PrimaryColor']);
+		expect(toUpdate(config).profiles?.[0].declaredKeys).toEqual([]);
 	});
 });
 
@@ -430,11 +562,9 @@ describe('validationErrors', () => {
 		const { config } = open({ default: { accounts: [{ label: 'Att' }] } });
 
 		// Act: what the accounts section's Add button does.
-		const added = newAccount();
+		const added = addAccount(config);
 
 		added.serverUrl = 'https://new.example';
-		config.accounts = [...config.accounts, added];
-		config.default.accounts = [...config.default.accounts, newSelection(added.key)];
 
 		// Assert: nothing in the file has a key for it, and no handle can reach one.
 		expect(validationErrors(config)).toEqual([
@@ -446,11 +576,12 @@ describe('validationErrors', () => {
 		// Arrange
 		const { config } = open({ default: { accounts: [{ label: 'Att' }] } });
 
-		// Act: added and never ticked, so it is written to no part of the settings file.
-		const added = newAccount();
+		// Act: added, and unticked again under the default configuration it was given to, so it is
+		// written to no part of the settings file.
+		const added = addAccount(config);
 
 		added.serverUrl = 'https://new.example';
-		config.accounts = [...config.accounts, added];
+		setAccountUse(config.default, added, false, null);
 
 		// Assert
 		expect(validationErrors(config)).toEqual([]);
@@ -557,6 +688,57 @@ describe('validationErrors', () => {
 	});
 });
 
+describe('regression: a secret typed as something the server does not take for a value', () => {
+	/**
+	 * The default configuration holding an authentication secret of its own, and a profile
+	 * inheriting it. Typing into the default's box is pressing Replace; typing into the profile's is
+	 * turning its override on, which starts a secret it never declared in the box rather than on
+	 * the stored one.
+	 */
+	function typedAsSecret(entryName: string, value: string) {
+		const { config } = open({
+			default: { declares: ['General.AuthenticationSecret'], accounts: [{ label: 'Att' }] },
+			profiles: [{ name: 'hall' }]
+		});
+		const entry = entryNamed(config, entryName);
+
+		// Already declared on the default configuration, so this changes nothing there.
+		toggleGeneral(entry, 'authenticationSecret', true, entry.isDefault ? null : config.default);
+		entry.secrets.authenticationSecret = { mode: 'set', value };
+
+		return config;
+	}
+
+	it.each([
+		{ entry: DEFAULT_NAME, value: '   ', where: 'the default configuration' },
+		{ entry: DEFAULT_NAME, value: SECRET_PLACEHOLDER, where: 'the default configuration' },
+		{ entry: 'hall', value: '   ', where: "profile 'hall'" },
+		{ entry: 'hall', value: SECRET_PLACEHOLDER, where: "profile 'hall'" }
+	])("'$value' typed as $entry's authentication secret, is refused", ({ entry, value, where }) => {
+		// Act
+		const config = typedAsSecret(entry, value);
+
+		// Assert: neither is a secret to the server. Nothing but spaces is read as "no secret here",
+		// and so is the mask the editor sends to keep a stored one wherever there is none to keep -
+		// the key dropped on the default configuration, an explicit null on a profile - and either
+		// way every frame URL the secret guarded opened, with nothing said. Where there is one to
+		// keep, the mask keeps it: Replace saved, and the old secret still in force.
+		expect(validationErrors(config)).toEqual([
+			`${where}: enter a value for 'Authentication secret', choose to have none, or turn its ` +
+				'override off. A value cannot be blank - the server would take that for no secret at ' +
+				`all - nor ${SECRET_PLACEHOLDER}, which asks it to keep the stored one.`
+		]);
+	});
+
+	it.each([DEFAULT_NAME, 'hall'])("a real value typed as %s's secret, is accepted", (entry) => {
+		// Act
+		const config = typedAsSecret(entry, 'correct horse battery staple');
+
+		// Assert
+		expect(validationErrors(config)).toEqual([]);
+	});
+});
+
 describe('declaredKeyOf', () => {
 	it('every general setting the editor renders, names a setting the server knows about', () => {
 		// Arrange
@@ -568,6 +750,102 @@ describe('declaredKeyOf', () => {
 		// Assert: a key the server does not know is refused outright, so the two lists must agree in
 		// both directions - one missing here is a setting nobody can edit.
 		expect([...declared].sort()).toEqual([...known].sort());
+	});
+});
+
+describe('problemDetail', () => {
+	const FALLBACK = 'The configuration was not saved (HTTP 400).';
+
+	it.each<{ case: string; data: unknown; message: string }>([
+		{ case: 'no body at all', data: undefined, message: FALLBACK },
+		{ case: 'a null body', data: null, message: FALLBACK },
+		{ case: "a reverse proxy's page", data: '<html>Bad Gateway</html>', message: FALLBACK },
+		{ case: 'a bare number', data: 400, message: FALLBACK },
+		{ case: 'an empty problem', data: {}, message: FALLBACK },
+		{
+			case: 'a detail',
+			data: {
+				title: 'Bad Request',
+				detail: 'Two accounts are labelled Mum.',
+				errors: { a: ['b'] }
+			},
+			message: 'Two accounts are labelled Mum.'
+		},
+		{
+			case: 'a blank detail beside a title',
+			data: { title: 'Bad Request', detail: '   ' },
+			message: 'Bad Request'
+		},
+		{
+			case: 'a detail that is not a string',
+			data: { title: 'Bad Request', detail: 42 },
+			message: 'Bad Request'
+		},
+		{
+			case: 'a ValidationProblemDetails',
+			data: {
+				title: 'One or more validation errors occurred.',
+				errors: {
+					'$.profiles[0].accounts[0].albums[0]': ['The JSON value could not be converted.'],
+					$: ['The input does not contain any JSON tokens.'],
+					'': ['A non-empty request body is required.']
+				}
+			},
+			message:
+				'$.profiles[0].accounts[0].albums[0]: The JSON value could not be converted. The input ' +
+				'does not contain any JSON tokens. A non-empty request body is required.'
+		},
+		{
+			case: 'an error that is not in a list',
+			data: { errors: { Name: 'The Name field is required.' } },
+			message: 'Name: The Name field is required.'
+		},
+		{
+			case: 'errors that are not strings',
+			data: { errors: { Name: [1, null, 'Required.'], Other: { nested: 'Dropped.' } } },
+			message: 'Name: Required.'
+		},
+		{
+			case: 'errors with nothing to say, beside a title',
+			data: { title: 'Bad Request', errors: { Name: [1] } },
+			message: 'Bad Request'
+		},
+		{ case: 'a blank title', data: { title: '   ' }, message: FALLBACK }
+	])('$case, reads as what it carries', ({ data, message }) => {
+		// Assert: a detail first; a model-binding failure's messages, which never reach the
+		// controller and so carry no detail, each beside the field it names - unless that is the body
+		// as a whole; then the title; and then what the caller knows, the status.
+		expect(problemDetail(data, FALLBACK)).toBe(message);
+	});
+});
+
+describe('profileNameError', () => {
+	const PATTERN = 'A profile name may only contain letters, digits, underscores and hyphens.';
+
+	it.each<{ case: string; name: string; existing?: string[]; error: string | null }>([
+		{ case: 'sixty-four characters', name: 'a'.repeat(64), error: null },
+		{ case: 'letters, digits, an underscore and a hyphen', name: 'Hall_2-b', error: null },
+		{ case: 'sixty-five characters', name: 'a'.repeat(65), error: PATTERN },
+		{ case: 'nothing', name: '', error: PATTERN },
+		{ case: 'a space', name: 'living room', error: PATTERN },
+		{ case: 'a dot', name: 'hall.tv', error: PATTERN },
+		{ case: 'a letter outside ASCII', name: 'küche', error: PATTERN },
+		...['api', 'STATIC', 'Swagger', 'ADMIN', 'Default'].map((name) => ({
+			case: `the reserved '${name}'`,
+			name,
+			error: `'${name}' is a reserved name.`
+		})),
+		{
+			case: 'a name taken in another case',
+			name: 'kitchen',
+			existing: ['Kitchen'],
+			error: "There is already a profile named 'kitchen'. Profile names are case-insensitive."
+		},
+		{ case: 'a name like a taken one', name: 'kitchen-2', existing: ['Kitchen'], error: null }
+	])('$case, is answered as the server would', ({ name, existing = [], error }) => {
+		// Assert: `ConfigCatalog`'s own rules - `^[A-Za-z0-9_-]{1,64}$`, its reserved names, and no
+		// two profiles named alike in any case - so a name the editor accepts is one the API accepts.
+		expect(profileNameError(name, existing)).toBe(error);
 	});
 });
 
@@ -746,6 +1024,188 @@ describe('regression: a kept key whose stored copy is read from a file', () => {
 	});
 });
 
+describe('regression: a key file written for an entry whose stored copy does not name it', () => {
+	it('a default configurations key file, written to a profile storing a key, is refused', () => {
+		// Arrange: one account, labelled alike at one URL, so one row - built from the default
+		// configuration's copy, which reads its key from a file, and saying that the profile's copy
+		// keeps a key of its own in the settings file instead.
+		const { read, config } = open({
+			default: { accounts: [{ label: 'Mum', url: IMMICH, credential: 'file', apiKeyFile: '/k' }] },
+			profiles: [{ name: 'hall', accounts: [{ label: 'Mum', url: IMMICH, credential: 'key' }] }]
+		});
+		const mum = accountLabelled(config, 'Mum');
+
+		expect(mum.apiKeyFile).toBe('/k');
+		expect(mum.disagreeing).toEqual(['hall']);
+
+		// Act
+		const update = toUpdate(config);
+
+		// Assert: the profile sends its own handle, which is what keeps the settings it spelled out,
+		// with the row's path - and the server keeps a key file only where it is exactly the one
+		// stored on the account that handle names. So the save is refused, for a file nobody edited.
+		expect(accountWritten(update, 'hall', 'Mum')).toMatchObject({
+			id: read.handle('hall', 0),
+			apiKeyFile: '/k'
+		});
+		expect(simulateSave(update, read.storedById)).toMatchObject({
+			accepted: false,
+			refusal: 'unstored-key-file',
+			entry: 'hall'
+		});
+
+		// Assert: and the editor refuses it first, naming the profile, both credentials, and the
+		// ways out.
+		expect(validationErrors(config)).toEqual([
+			"Mum names '/k' as its API key file, which the settings on the server do not give it for " +
+				"profile 'hall' (its stored copy keeps the key in the settings file). ImmichFrame keeps " +
+				'a key file only where they already do, since it reads whatever file is named. Clear the ' +
+				"API key file above and enter the account's API key instead, or untick Mum there."
+		]);
+	});
+
+	it.each<{
+		case: string;
+		fixture: DocumentFixture;
+		act?: (config: EditableConfig) => void;
+		refused: string;
+		where: string;
+	}>([
+		{
+			case: 'a profile whose own copy reads another file',
+			fixture: {
+				default: {
+					accounts: [{ label: 'Mum', url: IMMICH, credential: 'file', apiKeyFile: '/k' }]
+				},
+				profiles: [
+					{
+						name: 'hall',
+						accounts: [{ label: 'Mum', url: IMMICH, credential: 'file', apiKeyFile: '/other' }]
+					}
+				]
+			},
+			refused: 'hall',
+			where: "profile 'hall' (its stored copy reads '/other')"
+		},
+		{
+			case: 'a new account given a path typed here',
+			fixture: { default: { accounts: [{ label: 'Att', url: IMMICH }] } },
+			act: (config) => {
+				const added = addAccount(config);
+
+				added.label = 'Mum';
+				added.serverUrl = 'https://new.example';
+				added.apiKeyFile = '/k';
+			},
+			refused: DEFAULT_NAME,
+			where: 'the default configuration (nothing is stored for this account yet)'
+		},
+		{
+			case: "a profile adopting an account on another profile's handle, whose copy stores a key",
+			fixture: {
+				default: { accounts: [{ label: 'Backup', url: 'https://backup.example' }] },
+				profiles: [
+					{
+						name: 'kiosk',
+						accounts: [
+							{ label: 'Backup', url: 'https://backup.example' },
+							{ label: 'Mum', url: IMMICH, credential: 'key' }
+						]
+					},
+					{ name: 'hall' }
+				]
+			},
+			act: (config) => {
+				const mum = accountLabelled(config, 'Mum');
+
+				mum.apiKeyFile = '/k';
+				setAccountUse(entryNamed(config, 'kiosk'), mum, false, config.default);
+				declareAccounts(config, entryNamed(config, 'hall'));
+				setAccountUse(entryNamed(config, 'hall'), mum, true, config.default);
+			},
+			refused: 'hall',
+			where:
+				"profile 'hall' (keeping profile 'kiosk''s copy, which keeps the key in the settings file)"
+		}
+	])('$case, is refused', ({ fixture, act, refused, where }) => {
+		// Arrange
+		const { read, config } = open(fixture);
+
+		// Act
+		act?.(config);
+
+		// Assert: the server would refuse it for the entry named, and the editor says why first.
+		expect(simulateSave(toUpdate(config), read.storedById)).toMatchObject({
+			accepted: false,
+			refusal: 'unstored-key-file',
+			entry: refused
+		});
+		expect(validationErrors(config)).toEqual([expect.stringContaining(`for ${where}.`)]);
+	});
+
+	it.each<{ way: string; out: (config: EditableConfig) => void }>([
+		{
+			way: 'clearing the key file and entering the key',
+			out: (config) => {
+				const mum = accountLabelled(config, 'Mum');
+
+				mum.apiKeyFile = '';
+				mum.entering = true;
+				mum.apiKey = 'typed-key';
+			}
+		},
+		{
+			way: 'unticking the account in the profile that disagrees',
+			out: (config) =>
+				setAccountUse(
+					entryNamed(config, 'hall'),
+					accountLabelled(config, 'Mum'),
+					false,
+					config.default
+				)
+		}
+	])('the same document after $way, is accepted', ({ out }) => {
+		// Arrange
+		const { read, config } = open({
+			default: { accounts: [{ label: 'Mum', url: IMMICH, credential: 'file', apiKeyFile: '/k' }] },
+			profiles: [
+				{
+					name: 'hall',
+					accounts: [
+						{ label: 'Mum', url: IMMICH, credential: 'key' },
+						{ label: 'Backup', url: 'https://backup.example' }
+					]
+				}
+			]
+		});
+
+		// Act
+		out(config);
+
+		// Assert: both ways out the refusal names are ones the server takes.
+		expect(validationErrors(config)).toEqual([]);
+		expect(simulateSave(toUpdate(config), read.storedById)).toEqual({ accepted: true });
+	});
+
+	it('a key file every entry writing the account already reads, is accepted', () => {
+		// Arrange
+		const { read, config } = open({
+			default: { accounts: [{ label: 'Mum', url: IMMICH, credential: 'file', apiKeyFile: '/k' }] },
+			profiles: [
+				{
+					name: 'hall',
+					accounts: [{ label: 'Mum', url: IMMICH, credential: 'file', apiKeyFile: '/k' }]
+				}
+			]
+		});
+
+		// Assert: nothing disagrees, so there is nothing to refuse.
+		expect(accountLabelled(config, 'Mum').disagreeing).toEqual([]);
+		expect(validationErrors(config)).toEqual([]);
+		expect(simulateSave(toUpdate(config), read.storedById)).toEqual({ accepted: true });
+	});
+});
+
 describe('regression: which configurations use an account', () => {
 	it('a profile that inherits the default configurations accounts, counts as using them', () => {
 		// Arrange
@@ -778,6 +1238,227 @@ describe('regression: which configurations use an account', () => {
 		expect(
 			entriesUsingAccount(config, accountLabelled(config, 'Backup')).map((entry) => entry.name)
 		).toEqual([DEFAULT_NAME, 'hall']);
+	});
+});
+
+describe('removeAccountRefusal and removeAccount', () => {
+	const BACKUP = { label: 'Backup', url: 'https://backup.example' };
+
+	it.each<{ case: string; fixture: DocumentFixture; untick?: string; removing: string }>([
+		{
+			case: "the default configuration's only account",
+			fixture: { default: { accounts: [{ label: 'Att' }] } },
+			removing: 'Att'
+		},
+		{
+			case: "the default configuration's only ticked account, beside one it holds unticked",
+			fixture: { default: { accounts: [{ label: 'Att' }, BACKUP] } },
+			untick: 'Backup',
+			removing: 'Att'
+		}
+	])('$case, is refused', ({ fixture, untick, removing }) => {
+		// Arrange
+		const { config } = open(fixture);
+
+		if (untick) setAccountUse(config.default, accountLabelled(config, untick), false, null);
+
+		// Act
+		const refusal = removeAccountRefusal(config, accountLabelled(config, removing));
+
+		// Assert: the server refuses a default configuration using no account, by name. An unticked
+		// selection serves nothing, so it does not count as another account to fall back on.
+		expect(refusal).toBe(
+			`${removing} is the only Immich account the default configuration uses, and that is what ` +
+				'every configuration profile inherits. Give the default configuration another account ' +
+				'first: ImmichFrame cannot serve an image without one.'
+		);
+	});
+
+	it.each<{ case: string; fixture: DocumentFixture; untick?: string; removing: string }>([
+		{
+			case: 'one of two accounts the default configuration uses',
+			fixture: { default: { accounts: [{ label: 'Att' }, BACKUP] } },
+			removing: 'Att'
+		},
+		{
+			case: 'an account the default configuration holds unticked',
+			fixture: { default: { accounts: [{ label: 'Att' }, BACKUP] } },
+			untick: 'Backup',
+			removing: 'Backup'
+		},
+		{
+			case: 'an account only a profile uses',
+			fixture: {
+				default: { accounts: [{ label: 'Att' }] },
+				profiles: [{ name: 'hall', accounts: [BACKUP] }]
+			},
+			removing: 'Backup'
+		}
+	])('$case, may be removed', ({ fixture, untick, removing }) => {
+		// Arrange
+		const { config } = open(fixture);
+
+		if (untick) setAccountUse(config.default, accountLabelled(config, untick), false, null);
+
+		// Assert: the guard is about the account the default configuration would be left without,
+		// and only that one.
+		expect(removeAccountRefusal(config, accountLabelled(config, removing))).toBeNull();
+	});
+
+	it('a removed account, is held by no entry and written nowhere', () => {
+		// Arrange: one account used every way an entry can hold it - ticked by the default
+		// configuration and a profile, held unticked by another, kept by one whose override has been
+		// turned off, and inherited by one that never declared a list.
+		const both = [{ label: 'Att' }, BACKUP];
+		const { read, config } = open({
+			default: { accounts: both },
+			profiles: [
+				{ name: 'hall', accounts: both },
+				{ name: 'kiosk', accounts: both },
+				{ name: 'lounge', accounts: both },
+				{ name: 'porch' }
+			]
+		});
+		const att = accountLabelled(config, 'Att');
+
+		setAccountUse(entryNamed(config, 'kiosk'), att, false, config.default);
+		toggleAccounts(entryNamed(config, 'lounge'), false, config.default);
+
+		// Act
+		removeAccount(config, att);
+
+		// Assert: no selection left anywhere that names it, ticked or not, declared or not.
+		expect(config.accounts.map((account) => account.label)).toEqual(['Backup']);
+		expect(
+			[config.default, ...config.profiles].flatMap((entry) =>
+				entry.accounts.filter((selection) => selection.accountKey === att.key)
+			)
+		).toEqual([]);
+
+		// Act: and the kept list's override turned back on, which would restore a selection still in
+		// it.
+		toggleAccounts(entryNamed(config, 'lounge'), true, config.default);
+
+		// Assert: written by no entry, under its label or under any handle the read issued for it.
+		const update = toUpdate(config);
+		const handles = new Set(Object.values(att.ids));
+		const written = [DEFAULT_NAME, 'hall', 'kiosk', 'lounge', 'porch'].flatMap((name) =>
+			accountsWritten(update, name)
+		);
+
+		expect(written.map((account) => account.label)).not.toContain('Att');
+		expect(written.filter((account) => handles.has(account.id ?? ''))).toEqual([]);
+		expect(validationErrors(config)).toEqual([]);
+		expect(simulateSave(update, read.storedById)).toEqual({ accepted: true });
+	});
+});
+
+describe('toggleGeneral', () => {
+	it('an override turned on, moves the value into the profile and changes nothing else', () => {
+		// Arrange: the default configuration overrides Interval, and has just been given a value that
+		// is not saved yet; both profiles inherit it.
+		const { config } = open({
+			default: {
+				declares: ['General.Interval'],
+				general: { interval: 30 },
+				accounts: [{ label: 'Att' }]
+			},
+			profiles: [{ name: 'hall' }, { name: 'kiosk' }]
+		});
+		const hall = entryNamed(config, 'hall');
+
+		config.default.general.interval = 20;
+
+		const before = toUpdate(config);
+
+		// Act
+		toggleGeneral(hall, 'interval', true, config.default);
+
+		const after = toUpdate(config);
+
+		// Assert: the profile starts from what it was being shown - the default configuration's
+		// value as it stands, unsaved edit and all, rather than the merged value the read reported
+		// for the profile - so the only change a save makes is which configuration holds it.
+		expect(hall.general.interval).toBe(20);
+		expect(after.profiles?.[0]).toEqual({
+			...before.profiles?.[0],
+			declaredKeys: ['General.Interval'],
+			general: { interval: 20 }
+		});
+		expect({ ...after, profiles: after.profiles?.slice(1) }).toEqual({
+			...before,
+			profiles: before.profiles?.slice(1)
+		});
+	});
+
+	it('the default configurations override turned off and on again, keeps what it held', () => {
+		// Arrange
+		const { config } = open({ default: { accounts: [{ label: 'Att' }] } });
+
+		// Act: overridden and edited, then turned off.
+		toggleGeneral(config.default, 'interval', true, null);
+		config.default.general.interval = 10;
+		toggleGeneral(config.default, 'interval', false, null);
+
+		// Assert: kept in the model, and not sent.
+		expect(config.default.general.interval).toBe(10);
+		expect(toUpdate(config).default?.general).toEqual({});
+
+		// Act
+		toggleGeneral(config.default, 'interval', true, null);
+
+		// Assert: there is nothing above it to seed from, so the edit is what comes back.
+		expect(toUpdate(config).default?.general).toEqual({ interval: 10 });
+	});
+
+	it('a profiles secret override turned off and on again, keeps what was typed', () => {
+		// Arrange
+		const { config } = open({
+			default: { accounts: [{ label: 'Att' }] },
+			profiles: [{ name: 'hall' }]
+		});
+		const hall = entryNamed(config, 'hall');
+
+		// Act
+		toggleGeneral(hall, 'webhook', true, config.default);
+		hall.secrets.webhook.value = 'https://hooks.example/frame';
+		toggleGeneral(hall, 'webhook', false, config.default);
+
+		// Assert
+		expect(toUpdate(config).profiles?.[0].general).toEqual({});
+
+		// Act
+		toggleGeneral(hall, 'webhook', true, config.default);
+
+		// Assert: what a secret is set to is held apart from the general values a toggle seeds.
+		expect(toUpdate(config).profiles?.[0].general).toEqual({
+			webhook: 'https://hooks.example/frame'
+		});
+	});
+
+	it('a profiles override turned off and on again, starts again from what it inherits', () => {
+		// Arrange
+		const { config } = open({
+			default: { accounts: [{ label: 'Att' }] },
+			profiles: [{ name: 'hall' }]
+		});
+		const hall = entryNamed(config, 'hall');
+
+		// Act
+		toggleGeneral(hall, 'interval', true, config.default);
+		hall.general.interval = 10;
+		toggleGeneral(hall, 'interval', false, config.default);
+
+		// Assert: kept in the model while the override is off...
+		expect(hall.general.interval).toBe(10);
+
+		// Act
+		toggleGeneral(hall, 'interval', true, config.default);
+
+		// Assert: ...but an override starts from what was being inherited each time it is turned
+		// on, which is what the row was showing while it was off: the built-in 45 the default
+		// configuration has, rather than the 10 it held.
+		expect(toUpdate(config).profiles?.[0].general).toEqual({ interval: 45 });
 	});
 });
 
@@ -823,6 +1504,104 @@ describe('regression: one problem found more than once', () => {
 			),
 			'Enter the API key for https://new.example.'
 		]);
+	});
+});
+
+describe('labelCollisions', () => {
+	const OTHER = 'https://other.example';
+
+	it.each<{
+		case: string;
+		fixture: DocumentFixture;
+		act?: (config: EditableConfig) => void;
+		groups: { entry: string; labels: string[] }[];
+	}>([
+		{
+			case: 'two accounts in one entry whose labels collide',
+			fixture: {
+				default: {
+					accounts: [
+						{ label: 'Mum', url: IMMICH },
+						{ label: 'mum ', url: OTHER }
+					]
+				}
+			},
+			groups: [{ entry: DEFAULT_NAME, labels: ['Mum', 'mum'] }]
+		},
+		{
+			case: 'three new accounts labelled alike',
+			fixture: { default: { accounts: [{ label: 'Att', url: IMMICH }] } },
+			act: (config) => {
+				for (let added = 0; added < 3; added++) addAccount(config).label = 'X';
+			},
+			groups: [{ entry: DEFAULT_NAME, labels: ['X', 'X', 'X'] }]
+		},
+		{
+			case: "two whose labels collide in a profile's own list, beside one that inherits",
+			fixture: {
+				default: { accounts: [{ label: 'Att', url: IMMICH }] },
+				profiles: [
+					{
+						name: 'hall',
+						accounts: [
+							{ label: 'Att', url: IMMICH },
+							{ label: 'att ', url: OTHER }
+						]
+					},
+					{ name: 'porch' }
+				]
+			},
+			groups: [{ entry: 'hall', labels: ['Att', 'att'] }]
+		},
+		{
+			case: 'one label in two entries',
+			fixture: {
+				default: { accounts: [{ label: 'Mum' }] },
+				profiles: [{ name: 'hall', accounts: [{ label: ' mum' }] }]
+			},
+			groups: []
+		},
+		{
+			case: 'two whose labels collide, one of them unticked',
+			fixture: {
+				default: {
+					accounts: [
+						{ label: 'Mum', url: IMMICH },
+						{ label: 'mum', url: OTHER }
+					]
+				}
+			},
+			act: (config) => setAccountUse(config.default, accountLabelled(config, 'mum'), false, null),
+			groups: []
+		}
+	])('$case, is exactly what validationErrors refuses', ({ fixture, act, groups }) => {
+		// Arrange
+		const { config } = open(fixture);
+
+		act?.(config);
+
+		const rows = accountsByKey(config);
+
+		// Act
+		const collisions = labelCollisions(config);
+
+		// Assert: one group per label per entry, each account as it spells its label. A label shared
+		// across entries is how a profile says it means the default configuration's account.
+		expect(
+			collisions.map((collision) => ({
+				entry: collision.entry.name,
+				labels: collision.keys.map((key) => rows.get(key)?.label)
+			}))
+		).toEqual(groups);
+
+		// Assert: and the save is refused for its labels in exactly the entries holding a group.
+		const refusedIn = validationErrors(config)
+			.filter((error) => error.includes(': two accounts are labelled '))
+			.map((error) => error.slice(0, error.indexOf(': two accounts are labelled ')));
+
+		expect([...new Set(refusedIn)]).toEqual(
+			collisions.map((collision) => entryLabel(collision.entry))
+		);
 	});
 });
 
@@ -965,16 +1744,14 @@ describe('regression: a save sends only what a configuration declares', () => {
 			profiles: [{ name: 'hall', declares: ['General.ShowClock'], general: { showClock: false } }]
 		});
 		const hall = entryNamed(config, 'hall');
-		const interval = declaredKeyOf('interval');
 		// What the save bar compares the model with to say whether anything is unsaved.
 		const untouched = JSON.stringify(toUpdate(config));
 
-		// Act: Interval overridden and given a fraction, and then its override turned off the way
-		// `entry-editor.svelte`'s `toggleGeneral` turns it off - which keeps the value, so that
-		// turning the override on again restores it.
-		hall.declared = [...hall.declared, interval];
+		// Act: Interval overridden and given a fraction, and then its override turned off again -
+		// which keeps the value in the model rather than discarding it.
+		toggleGeneral(hall, 'interval', true, config.default);
 		hall.general.interval = 2.5;
-		hall.declared = hall.declared.filter((key) => key !== interval);
+		toggleGeneral(hall, 'interval', false, config.default);
 
 		const update = toUpdate(config);
 
@@ -1000,11 +1777,10 @@ describe('regression: a save sends only what a configuration declares', () => {
 		const untouched = JSON.stringify(toUpdate(config));
 
 		// Act: its account override turned on, a fraction given as the rating, and the override
-		// turned off again the way `entry-editor.svelte`'s `toggleAccounts` turns it off - which
-		// keeps the selections.
+		// turned off again - which keeps the selections.
 		declareAccounts(config, hall);
 		usedSelections(hall)[0].values.rating = 2.5;
-		hall.declared = hall.declared.filter((key) => key !== ACCOUNTS_KEY);
+		toggleAccounts(hall, false, config.default);
 
 		const update = toUpdate(config);
 
