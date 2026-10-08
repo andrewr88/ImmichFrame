@@ -803,14 +803,34 @@ function toEntryDto(
 	entry: EditableEntry,
 	accounts: Map<string, EditableAccount>
 ): AdminConfigEntryDto {
-	const general: AdminGeneralSettingsDto = { ...entry.general };
+	const declares = new Set(entry.declared.map((key) => key.toLowerCase()));
+	const general: AdminGeneralSettingsDto = {};
 	const cleared: string[] = [];
+
+	// Only the general settings this entry declares, which are the only ones the server reads. The
+	// model holds a value for every setting - the read reports the merged result, and an override
+	// turned off keeps what it held so that turning it on again restores it - and sending all of it
+	// put values in front of the server's binder that nothing here checks any more, since
+	// `validationErrors` asks only about what is declared. A fraction left in Interval before its
+	// override was turned off refused the whole save, in the binder's words and about a setting the
+	// profile no longer showed.
+	//
+	// Asked of every setting the read reported rather than only the ones this build has a field
+	// for: a newer server's setting arrives in the read and in `DeclaredKeys` alike, and the server
+	// takes a declared setting's value from the request whether or not this build knows it, so
+	// leaving one out would write null over what the file held. Matched without regard to case, as
+	// the server matches a declared key, because .NET's camel-casing is not `declaredKeyOf` run
+	// backwards: `HDRMode` arrives as `hdrMode`.
+	for (const [prop, value] of Object.entries(entry.general)) {
+		if (declares.has(`general.${prop.toLowerCase()}`)) Object.assign(general, { [prop]: value });
+	}
 
 	for (const prop of SECRET_PROPS) {
 		const key = declaredKeyOf(prop);
 
-		// An undeclared secret is never read by the server, and leaving it as the null the read
-		// handed us is more honest than sending it the empty string.
+		// An undeclared secret is never read by the server, so it stays out with every other
+		// undeclared setting rather than being sent as anything at all - least of all the empty
+		// string, which is not an absence but a value: "no secret here".
 		if (!entry.declared.includes(key)) continue;
 
 		const secret = entry.secrets[prop];
@@ -830,6 +850,16 @@ function toEntryDto(
 		});
 	}
 
+	// Only the accounts this entry shows: the ticked ones, of a list it declares.
+	//
+	// An unticked selection is kept so that ticking the account again restores it, and writing it
+	// out would make the tick decorative. A list the entry does not declare - one whose override
+	// has been turned off - is kept the same way, for the override being turned on again, and the
+	// server does not read it at all. So, like an undeclared general setting, it is not sent: a
+	// rating of 2.5 left in it was refused by the binder, for a list the entry no longer had. Empty
+	// rather than absent, because the request requires the member.
+	const shown = entry.declared.includes(ACCOUNTS_KEY) ? usedSelections(entry) : [];
+
 	return {
 		name: entry.name,
 		// Exactly the keys the administrator means to declare, never the merged result: writing a
@@ -847,9 +877,7 @@ function toEntryDto(
 			return prop === null || (general[prop] !== null && general[prop] !== undefined);
 		}),
 		general,
-		// Only the ticked ones: an unticked selection is kept so that ticking the account again
-		// restores it, and writing it out would make the tick decorative.
-		accounts: usedSelections(entry).flatMap((selection) => {
+		accounts: shown.flatMap((selection) => {
 			const account = accounts.get(selection.accountKey);
 
 			// Removing an account removes it from every entry, so a selection with no account behind
@@ -1025,6 +1053,32 @@ function dateFormatError(pattern: string): string | null {
 }
 
 /**
+ * `int.MinValue` and `int.MaxValue`. Every setting the editor calls an 'integer' is an `int?` on the
+ * server, general and account alike, and System.Text.Json refuses a number past either end of the
+ * range just as it refuses a fraction.
+ */
+const INT32_MIN = -2147483648;
+const INT32_MAX = 2147483647;
+
+/**
+ * What a box holding a whole-number setting needs to hold instead, or null where the server can take
+ * what it holds.
+ *
+ * One answer per box, and the range comes first: a number past it is told the range whether or not
+ * it is also a fraction, because that one sentence is everything it needs - told only that it needs
+ * a whole number, 2147483647.5 could be rounded to 2147483648 and refused a second time. A fraction
+ * inside the range is told only that, because the range has nothing to do with what is wrong with
+ * it, and two billion is no help to someone who typed a rating of 2.5.
+ */
+function wholeNumberNeed(value: NonNullable<FieldValue>): string | null {
+	if (typeof value === 'number' && (value < INT32_MIN || value > INT32_MAX)) {
+		return `a whole number between ${INT32_MIN} and ${INT32_MAX}`;
+	}
+
+	return Number.isInteger(value) ? null : 'a whole number';
+}
+
+/**
  * What the editor can tell is wrong before the file is touched. Deliberately not a re-implementation
  * of the server's validation - it is the last word - but the cases where letting the save run would
  * either be refused for something the browser already knows, or accepted into a configuration that
@@ -1045,16 +1099,20 @@ export function validationErrors(config: EditableConfig): string[] {
 				const value = entry.general[prop];
 				if (typeof value !== 'number' || !Number.isFinite(value)) {
 					errors.push(`${entryLabel(entry)}: '${spec.label}' needs a number.`);
-				} else if (spec.kind === 'integer' && !Number.isInteger(value)) {
+				} else if (spec.kind === 'integer') {
 					// The server holds an 'integer' setting as an int, and System.Text.Json refuses a
-					// fraction for one before the save is so much as looked at. What came back was the
-					// model binder's message rather than anything about this setting: a JSON path and
-					// a CLR type name, and on a profile a path naming the profile by its position in
-					// the request rather than by its name. The number box's step of 1 marks 2.5 invalid
-					// without stopping it being committed, and rounding it there would save a number
-					// nobody typed - so it is refused here, by name. Asked only of a number, since a
-					// box with none in it has just been told so.
-					errors.push(`${entryLabel(entry)}: '${spec.label}' needs a whole number.`);
+					// fraction for one before the save is so much as looked at - and a whole number
+					// past an int's range, which the box has no maximum to stop and `Number` reads
+					// like any other. What came back was the model binder's message rather than
+					// anything about this setting: a JSON path and a CLR type name, and on a profile
+					// a path naming the profile by its position in the request rather than by its
+					// name. The number box's step of 1 marks 2.5 invalid without stopping it being
+					// committed, and rounding it there would save a number nobody typed - so it is
+					// refused here, by name. Asked only of a number, since a box with none in it has
+					// just been told so.
+					const need = wholeNumberNeed(value);
+
+					if (need) errors.push(`${entryLabel(entry)}: '${spec.label}' needs ${need}.`);
 				}
 
 				continue;
@@ -1120,18 +1178,19 @@ export function validationErrors(config: EditableConfig): string[] {
 			// The same refusal as a general setting's, for what this entry shows from the account -
 			// where the binder's path was worse still, naming the account by its place in a list,
 			// and on a profile the profile by its place in the request. Blank is a value of its own
-			// here, no limit or any rating, so only a value that is there and is not a whole number
-			// is refused.
+			// here, no limit or any rating, so only a value that is there, and is not a whole number
+			// an int can hold, is refused.
 			const name = accountName(account, config.accounts.indexOf(account));
 
 			for (const prop of wholeNumberAccountProps) {
 				const value = selection.values[prop];
+				const need = value === null || value === undefined ? null : wholeNumberNeed(value);
 
-				if (value === null || value === undefined || Number.isInteger(value)) continue;
+				if (!need) continue;
 
 				errors.push(
-					`${entryLabel(entry)}: '${accountFields[prop].label}' for ${name} needs a whole ` +
-						'number, or to be left blank.'
+					`${entryLabel(entry)}: '${accountFields[prop].label}' for ${name} needs ${need}, ` +
+						'or to be left blank.'
 				);
 			}
 

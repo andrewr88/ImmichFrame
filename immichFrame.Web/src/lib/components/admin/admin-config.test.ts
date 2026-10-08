@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { AdminGeneralSettingsDto } from '$lib/immichFrameApi';
 import {
 	ACCOUNTS_KEY,
 	SECRET_PLACEHOLDER,
@@ -753,35 +754,35 @@ describe('regression: one problem found more than once', () => {
 	});
 });
 
+/** One number box in one configuration, and what it is given. */
+interface NumberEdit {
+	entry: string;
+	/** One of the entry's general settings, or of what it shows from the account labelled Att. */
+	on: 'general' | 'account';
+	prop: GeneralProp | AccountProp;
+	value: number | null;
+}
+
+function errorsAfter({ entry, on, prop, value }: NumberEdit): string[] {
+	// Arrange: both settings overridden and the account declared, in both configurations, so
+	// that every box edited below is one a save writes out.
+	const declaring = {
+		declares: ['General.Interval', 'General.TransitionDuration'],
+		accounts: [{ label: 'Att' }]
+	};
+	const { config } = open({ default: declaring, profiles: [{ name: 'hall', ...declaring }] });
+	const edited = entryNamed(config, entry);
+
+	// Act: what the number box commits, where `entry-editor.svelte` and `account-editor.svelte`
+	// write it.
+	Object.assign(on === 'general' ? edited.general : usedSelections(edited)[0].values, {
+		[prop]: value
+	});
+
+	return validationErrors(config);
+}
+
 describe('regression: a fraction in a setting the server holds as a whole number', () => {
-	/** One number box in one configuration, and what it is given. */
-	interface NumberEdit {
-		entry: string;
-		/** One of the entry's general settings, or of what it shows from the account labelled Att. */
-		on: 'general' | 'account';
-		prop: GeneralProp | AccountProp;
-		value: number | null;
-	}
-
-	function errorsAfter({ entry, on, prop, value }: NumberEdit): string[] {
-		// Arrange: both settings overridden and the account declared, in both configurations, so
-		// that every box edited below is one a save writes out.
-		const declaring = {
-			declares: ['General.Interval', 'General.TransitionDuration'],
-			accounts: [{ label: 'Att' }]
-		};
-		const { config } = open({ default: declaring, profiles: [{ name: 'hall', ...declaring }] });
-		const edited = entryNamed(config, entry);
-
-		// Act: what the number box commits, where `entry-editor.svelte` and `account-editor.svelte`
-		// write it.
-		Object.assign(on === 'general' ? edited.general : usedSelections(edited)[0].values, {
-			[prop]: value
-		});
-
-		return validationErrors(config);
-	}
-
 	it.each<NumberEdit & { refusal: string }>([
 		{
 			entry: DEFAULT_NAME,
@@ -828,5 +829,127 @@ describe('regression: a fraction in a setting the server holds as a whole number
 		// Assert: a whole number where the server holds an int, a fraction where it holds a double,
 		// and an account setting left blank - which is no limit, rather than a number missing.
 		expect(errorsAfter(edit)).toEqual([]);
+	});
+});
+
+describe('regression: a whole number past the range the server holds it in', () => {
+	describe.each<Pick<NumberEdit, 'on' | 'prop'> & { refusal: string }>([
+		{
+			on: 'general',
+			prop: 'interval',
+			refusal:
+				"the default configuration: 'Interval' needs a whole number between -2147483648 and " +
+				'2147483647.'
+		},
+		{
+			on: 'account',
+			prop: 'rating',
+			refusal:
+				"the default configuration: 'Rating' for Att needs a whole number between -2147483648 " +
+				'and 2147483647, or to be left blank.'
+		}
+	])('$on $prop', ({ on, prop, refusal }) => {
+		it.each([2147483648, -2147483649, 1e21, 2147483647.5])('at %s, is refused by name', (value) => {
+			// Assert: the server holds this as an int, and refused a number past an int's range in the
+			// model binder's words, just as it refused a fraction - and the number box has no maximum,
+			// so 3000000000 or 1e21 is committed like any other number. A fraction past the range is
+			// told the range and nothing else, because that is all it needs: told only that it needs a
+			// whole number, it could be rounded to 2147483648 and refused a second time.
+			expect(errorsAfter({ entry: DEFAULT_NAME, on, prop, value })).toEqual([refusal]);
+		});
+
+		it.each([2147483647, -2147483648])('at %s, is accepted', (value) => {
+			// Assert: both ends of the range are an int's own.
+			expect(errorsAfter({ entry: DEFAULT_NAME, on, prop, value })).toEqual([]);
+		});
+	});
+});
+
+describe('regression: a save sends only what a configuration declares', () => {
+	it('a general setting overridden, edited and turned off again, is not sent', () => {
+		// Arrange: a profile overriding one setting.
+		const { config } = open({
+			default: { accounts: [{ label: 'Att' }] },
+			profiles: [{ name: 'hall', declares: ['General.ShowClock'], general: { showClock: false } }]
+		});
+		const hall = entryNamed(config, 'hall');
+		const interval = declaredKeyOf('interval');
+		// What the save bar compares the model with to say whether anything is unsaved.
+		const untouched = JSON.stringify(toUpdate(config));
+
+		// Act: Interval overridden and given a fraction, and then its override turned off the way
+		// `entry-editor.svelte`'s `toggleGeneral` turns it off - which keeps the value, so that
+		// turning the override on again restores it.
+		hall.declared = [...hall.declared, interval];
+		hall.general.interval = 2.5;
+		hall.declared = hall.declared.filter((key) => key !== interval);
+
+		const update = toUpdate(config);
+
+		// Assert: nothing for the editor to refuse, since the profile no longer declares the box...
+		expect(validationErrors(config)).toEqual([]);
+		expect(hall.general.interval).toBe(2.5);
+
+		// Assert: ...and so nothing sent from it. Sent anyway, the fraction reached the server's int
+		// binding, which refused the whole save naming `$.profiles[0].general.interval` - a setting
+		// the profile no longer showed. The setting still declared is sent and nothing else the read
+		// reported is, so the edit undone leaves nothing unsaved.
+		expect(update.profiles?.[0].general).toEqual({ showClock: false });
+		expect(JSON.stringify(update)).toBe(untouched);
+	});
+
+	it('an account list overridden, edited and turned off again, is not sent', () => {
+		// Arrange: a profile showing the default configuration's accounts.
+		const { config } = open({
+			default: { accounts: [{ label: 'Att' }] },
+			profiles: [{ name: 'hall' }]
+		});
+		const hall = entryNamed(config, 'hall');
+		const untouched = JSON.stringify(toUpdate(config));
+
+		// Act: its account override turned on, a fraction given as the rating, and the override
+		// turned off again the way `entry-editor.svelte`'s `toggleAccounts` turns it off - which
+		// keeps the selections.
+		declareAccounts(config, hall);
+		usedSelections(hall)[0].values.rating = 2.5;
+		hall.declared = hall.declared.filter((key) => key !== ACCOUNTS_KEY);
+
+		const update = toUpdate(config);
+
+		// Assert: the profile shows the default configuration's accounts again, so there is nothing
+		// of its own to refuse and nothing of its own is sent - an empty list rather than none, since
+		// the request requires one. Sent anyway, the rating reached the int binding and the whole
+		// save was refused for a list the profile no longer had.
+		expect(validationErrors(config)).toEqual([]);
+		expect(update.profiles?.[0].accounts).toEqual([]);
+		expect(JSON.stringify(update)).toBe(untouched);
+
+		// Act: and the override turned on again, which restores what it held.
+		declareAccounts(config, hall);
+
+		// Assert: so it is sent again, and refused again, by name.
+		expect(accountWritten(toUpdate(config), 'hall', 'Att').rating).toBe(2.5);
+		expect(validationErrors(config)).toEqual([
+			"profile 'hall': 'Rating' for Att needs a whole number, or to be left blank."
+		]);
+	});
+
+	it('a declared setting this build has no field for, is sent as it was read', () => {
+		// Arrange: a read from a newer server, whose profile declares a setting this build does not
+		// know about. Named the way .NET camel-cases a name that opens with an acronym - `HDRMode`
+		// arrives as `hdrMode` - which is not `declaredKeyOf` run backwards.
+		const general: AdminGeneralSettingsDto & Record<string, unknown> = { hdrMode: 'auto' };
+		const { config } = open({
+			default: { accounts: [{ label: 'Att' }] },
+			profiles: [{ name: 'hall', declares: ['General.HDRMode'], general }]
+		});
+
+		// Act
+		const update = toUpdate(config);
+
+		// Assert: still declared, and still carrying its value. The server reads a declared setting
+		// back by name, so left out here it would be written as null over what the file held.
+		expect(update.profiles?.[0].declaredKeys).toEqual(['General.HDRMode']);
+		expect(update.profiles?.[0].general).toEqual({ hdrMode: 'auto' });
 	});
 });
