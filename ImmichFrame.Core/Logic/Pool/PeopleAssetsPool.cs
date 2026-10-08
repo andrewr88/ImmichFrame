@@ -9,7 +9,7 @@ public class PersonAssetsPool(IApiCache apiCache, ImmichApi immichApi, IAccountS
     {
         var personAssets = new List<AssetResponseDto>();
 
-        var people = accountSettings.People;
+        var people = AccountSettings.People;
         if (people == null)
         {
             return personAssets;
@@ -18,7 +18,7 @@ public class PersonAssetsPool(IApiCache apiCache, ImmichApi immichApi, IAccountS
         foreach (var personId in people)
         {
             int page = 1;
-            int batchSize = 1000;
+            const int batchSize = 1000;
             long total;
             do
             {
@@ -31,12 +31,12 @@ public class PersonAssetsPool(IApiCache apiCache, ImmichApi immichApi, IAccountS
                     WithPeople = true
                 };
 
-                if (!accountSettings.ShowVideos)
+                if (!AccountSettings.ShowVideos)
                 {
                     metadataBody.Type = AssetTypeEnum.IMAGE;
                 }
 
-                var personInfo = await immichApi.SearchAssetsAsync(null, null, metadataBody, ct);
+                var personInfo = await Api.SearchAssetsAsync(null, null, metadataBody, ct);
 
                 total = personInfo.Assets.Total;
 

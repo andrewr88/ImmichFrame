@@ -19,6 +19,13 @@ public class TotalAccountImagesSelectionStrategy(
         }
 
         var chosen = await _accounts.ChooseOne(logic => logic.GetTotalAssets());
+        if (chosen == null)
+        {
+            // The pick is weighted by asset count, so when every account reports zero there is
+            // nothing to choose.
+            _logger.LogDebug("No account has any assets, returning no asset");
+            return null;
+        }
 
         var asset = await chosen.GetNextAsset();
         if (asset != null)
@@ -74,7 +81,7 @@ public class TotalAccountImagesSelectionStrategy(
             {
                 var (task, account, proportion) = tuple;
                 var assets = (await task).ToList();
-                _logger.LogDebug("Retrieved {total} asset(s) for account [{account}], will take {proportion}%", assets.Count(), account, proportion * 100);
+                _logger.LogDebug("Retrieved {total} asset(s) for account [{account}], will take {proportion}%", assets.Count, account, proportion * 100);
                 return (account, assets.Shuffle().TakeProportional(proportion));
             });
 

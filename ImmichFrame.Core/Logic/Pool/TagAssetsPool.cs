@@ -9,18 +9,18 @@ public class TagAssetsPool(IApiCache apiCache, ImmichApi immichApi, IAccountSett
     {
         var tagAssets = new List<AssetResponseDto>();
 
-        if (accountSettings.Tags == null)
+        if (AccountSettings.Tags == null)
         {
             return tagAssets;
         }
 
-        var allTags = await apiCache.GetOrAddAsync($"allTags_{accountSettings.ImmichServerUrl}",
-            () => immichApi.GetAllTagsAsync(ct));
+        var allTags = await Cache.GetOrAddAsync($"allTags_{AccountSettings.ImmichServerUrl}",
+            () => Api.GetAllTagsAsync(ct));
         var tagValueToTag = allTags.ToDictionary(t => t.Value);
 
         // Find the tags for the configured tag values
         var tags = new List<TagResponseDto>();
-        foreach (var tagValue in accountSettings.Tags)
+        foreach (var tagValue in AccountSettings.Tags)
         {
             if (tagValueToTag.TryGetValue(tagValue, out var tag))
             {
@@ -32,7 +32,7 @@ public class TagAssetsPool(IApiCache apiCache, ImmichApi immichApi, IAccountSett
         foreach (var tag in tags)
         {
             int page = 1;
-            int batchSize = 1000;
+            const int batchSize = 1000;
             int itemsInPage;
             do
             {
@@ -45,12 +45,12 @@ public class TagAssetsPool(IApiCache apiCache, ImmichApi immichApi, IAccountSett
                     WithPeople = true
                 };
 
-                if (!accountSettings.ShowVideos)
+                if (!AccountSettings.ShowVideos)
                 {
                     metadataBody.Type = AssetTypeEnum.IMAGE;
                 }
 
-                var tagInfo = await immichApi.SearchAssetsAsync(null, null, metadataBody, ct);
+                var tagInfo = await Api.SearchAssetsAsync(null, null, metadataBody, ct);
 
                 itemsInPage = tagInfo.Assets.Items.Count;
 

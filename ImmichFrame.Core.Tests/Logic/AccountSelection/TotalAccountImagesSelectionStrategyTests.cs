@@ -111,5 +111,21 @@ namespace ImmichFrame.Core.Tests.Logic.AccountSelection
             Assert.That(result!.Value.Item2.Id, Is.EqualTo(asset.Id));
             _mockTracker.Verify(t => t.RecordAssetLocation(account.Object, asset.Id), Times.Once);
         }
+
+        [TestCase(1)]
+        [TestCase(2)]
+        public async Task GetNextAsset_AllAccountsEmpty_ReturnsNull(int accountCount)
+        {
+            // An empty library or a filter matching nothing reports zero assets, which leaves
+            // the count-weighted pick with no account to choose.
+            var accounts = Enumerable.Range(0, accountCount)
+                .Select(_ => CreateAccount(0, Enumerable.Empty<AssetResponseDto>()).Object)
+                .ToArray();
+            var strategy = CreateStrategy(accounts);
+
+            var result = await strategy.GetNextAsset();
+
+            Assert.That(result, Is.Null);
+        }
     }
 }

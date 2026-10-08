@@ -10,7 +10,7 @@ public class FavoriteAssetsPool(IApiCache apiCache, ImmichApi immichApi, IAccoun
         var favoriteAssets = new List<AssetResponseDto>();
 
         int page = 1;
-        int batchSize = 1000;
+        const int batchSize = 1000;
         long total;
         do
         {
@@ -23,12 +23,12 @@ public class FavoriteAssetsPool(IApiCache apiCache, ImmichApi immichApi, IAccoun
                 WithPeople = true
             };
 
-            if (!accountSettings.ShowVideos)
+            if (!AccountSettings.ShowVideos)
             {
                 metadataBody.Type = AssetTypeEnum.IMAGE;
             }
 
-            var favoriteInfo = await immichApi.SearchAssetsAsync(null, null, metadataBody, ct);
+            var favoriteInfo = await Api.SearchAssetsAsync(null, null, metadataBody, ct);
 
             total = favoriteInfo.Assets.Total;
 

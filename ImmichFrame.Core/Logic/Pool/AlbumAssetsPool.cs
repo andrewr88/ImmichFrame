@@ -9,13 +9,13 @@ public class AlbumAssetsPool(IApiCache apiCache, ImmichApi immichApi, IAccountSe
     {
         var albumAssets = new List<AssetResponseDto>();
 
-        var albums = accountSettings.Albums;
+        var albums = AccountSettings.Albums;
         if (albums != null)
         {
             foreach (var albumId in albums)
             {
                 int page = 1;
-                int batchSize = 1000;
+                const int batchSize = 1000;
                 int itemsInPage;
                 do
                 {
@@ -27,7 +27,7 @@ public class AlbumAssetsPool(IApiCache apiCache, ImmichApi immichApi, IAccountSe
                         WithExif = true,
                         WithPeople = true,
                     };
-                    var searchResponse = await immichApi.SearchAssetsAsync(null, null, metadataBody, ct);
+                    var searchResponse = await Api.SearchAssetsAsync(null, null, metadataBody, ct);
 
                     itemsInPage = searchResponse.Assets.Items.Count;
 
