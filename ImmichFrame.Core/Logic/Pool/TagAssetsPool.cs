@@ -28,7 +28,9 @@ public class TagAssetsPool(IApiCache apiCache, ImmichApi immichApi, IAccountSett
             }
         }
 
-        var seenIds = new HashSet<Guid>();
+        // Finding an asset already met under another tag is a lookup rather than a scan of every
+        // asset so far; tagAssets keeps them in the order they were first found.
+        var assetsById = new Dictionary<Guid, AssetResponseDto>();
         foreach (var tag in tags)
         {
             int page = 1;
@@ -57,9 +59,9 @@ public class TagAssetsPool(IApiCache apiCache, ImmichApi immichApi, IAccountSett
                 // Attach the tag that matched this search
                 foreach (var asset in tagInfo.Assets.Items)
                 {
-                    if (seenIds.Contains(asset.Id))
+                    if (assetsById.TryGetValue(asset.Id, out var seen))
                     {
-                        tagAssets.First(a => a.Id == asset.Id).Tags.Add(tag);
+                        seen.Tags.Add(tag);
                         continue;
                     }
 
@@ -67,7 +69,7 @@ public class TagAssetsPool(IApiCache apiCache, ImmichApi immichApi, IAccountSett
                     // parameter, so simply set the one that was configured
                     asset.Tags = new List<TagResponseDto> { tag };
 
-                    seenIds.Add(asset.Id);
+                    assetsById.Add(asset.Id, asset);
                     tagAssets.Add(asset);
                 }
 

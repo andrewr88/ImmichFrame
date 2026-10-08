@@ -1,3 +1,4 @@
+using System.Net.Http.Headers;
 using ImmichFrame.Core.Api;
 using ImmichFrame.Core.Exceptions;
 using ImmichFrame.Core.Helpers;
@@ -13,7 +14,13 @@ public class PooledImmichFrameLogic : IAccountImmichFrameLogic, IDisposable
     private readonly IApiCache _apiCache;
     private readonly IAssetPool _pool;
     private readonly ImmichApi _immichApi;
-    private readonly string _downloadLocation = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ImageCache");
+
+    // The only names an image is ever cached under: GetImageAsset saves a WebP preview as .webp
+    // and anything else as .jpeg.
+    private static readonly string[] CachedImageExtensions = ["jpeg", "webp"];
+
+    // Settable only so that tests can give each run an image cache of its own.
+    internal string DownloadLocation { get; init; } = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ImageCache");
 
     public PooledImmichFrameLogic(IAccountSettings accountSettings, IGeneralSettings generalSettings, IHttpClientFactory httpClientFactory)
     {
@@ -36,9 +43,9 @@ public class PooledImmichFrameLogic : IAccountImmichFrameLogic, IDisposable
 
     private IAssetPool BuildPool(IAccountSettings accountSettings)
     {
-        var hasAlbums = accountSettings.Albums?.Any() ?? false;
-        var hasPeople = accountSettings.People?.Any() ?? false;
-        var hasTags = accountSettings.Tags?.Any() ?? false;
+        var hasAlbums = accountSettings.Albums?.Count > 0;
+        var hasPeople = accountSettings.People?.Count > 0;
+        var hasTags = accountSettings.Tags?.Count > 0;
 
         if (!accountSettings.ShowFavorites && !accountSettings.ShowMemories && !hasAlbums && !hasPeople && !hasTags)
         {
@@ -117,29 +124,9 @@ public class PooledImmichFrameLogic : IAccountImmichFrameLogic, IDisposable
     }
     private async Task<(string fileName, string ContentType, Stream fileStream)> GetImageAsset(Guid id)
     {
-        if (_generalSettings.DownloadImages)
+        if (_generalSettings.DownloadImages && OpenCachedImage(id) is { } cached)
         {
-            if (!Directory.Exists(_downloadLocation))
-            {
-                Directory.CreateDirectory(_downloadLocation);
-            }
-
-            var file = Directory.GetFiles(_downloadLocation)
-                .FirstOrDefault(x => Path.GetFileNameWithoutExtension(x) == id.ToString());
-
-            if (!string.IsNullOrWhiteSpace(file))
-            {
-                if (_generalSettings.RenewImagesDuration > (DateTime.UtcNow - File.GetCreationTimeUtc(file)).Days)
-                {
-                    var fs = File.OpenRead(file);
-
-                    var ex = Path.GetExtension(file).TrimStart('.');
-
-                    return (Path.GetFileName(file), $"image/{ex}", fs);
-                }
-
-                File.Delete(file);
-            }
+            return cached;
         }
 
         var data = await _immichApi.ViewAssetAsync(null, id, string.Empty, AssetMediaSize.Preview, null);
@@ -153,24 +140,102 @@ public class PooledImmichFrameLogic : IAccountImmichFrameLogic, IDisposable
             contentType = data.Headers["Content-Type"].FirstOrDefault() ?? "";
         }
 
-        var ext = contentType.ToLower() == "image/webp" ? "webp" : "jpeg";
+        // Compared as a media type - ignoring case and parameters - and without ToLower, which in a
+        // Turkish culture turns "IMAGE" into "ımage".
+        var isWebp = MediaTypeHeaderValue.TryParse(contentType, out var mediaType)
+            && string.Equals(mediaType.MediaType, "image/webp", StringComparison.OrdinalIgnoreCase);
+        var ext = isWebp ? "webp" : "jpeg";
         var fileName = $"{id}.{ext}";
 
         if (_generalSettings.DownloadImages)
         {
-            var stream = data.Stream;
-
-            var filePath = Path.Combine(_downloadLocation, fileName);
-
-            // save to folder
-            var fs = File.Create(filePath);
-            await stream.CopyToAsync(fs);
-            fs.Position = 0;
-            return (Path.GetFileName(filePath), contentType, fs);
+            // The image is served from the cache, so the response is done with once the copy has
+            // finished or failed, and nothing else is in a position to dispose it.
+            using (data)
+            {
+                return (fileName, contentType, await DownloadToCache(data.Stream, fileName));
+            }
         }
 
         return (fileName, contentType, data.Stream);
     }
+
+    /// <summary>
+    /// The cached copy of an image, unless there is none or it has expired. Only the names
+    /// <see cref="GetImageAsset"/> caches an image under are tried, rather than listing a directory
+    /// every account shares.
+    /// </summary>
+    private (string fileName, string ContentType, Stream fileStream)? OpenCachedImage(Guid id)
+    {
+        foreach (var ext in CachedImageExtensions)
+        {
+            var fileName = $"{id}.{ext}";
+            var filePath = Path.Combine(DownloadLocation, fileName);
+
+            FileStream fs;
+            try
+            {
+                fs = OpenCachedFile(filePath);
+            }
+            catch (IOException e) when (e is FileNotFoundException or DirectoryNotFoundException)
+            {
+                // Never cached, or expired and deleted by a concurrent request a moment ago.
+                continue;
+            }
+
+            // Judged by the file that was opened, not by its name: a concurrent download can move a
+            // fresh copy in under that name at any time.
+            if (_generalSettings.RenewImagesDuration > (DateTime.UtcNow - File.GetCreationTimeUtc(fs.SafeFileHandle)).Days)
+                return (fileName, $"image/{ext}", fs);
+
+            // Deleting by name can also take a fresh copy a concurrent download has just moved in.
+            // That costs the next request a download - not the one serving that copy, which keeps
+            // its handle.
+            fs.Dispose();
+            File.Delete(filePath);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Writes a downloaded image into the cache and returns the cached copy, open for reading. The
+    /// download goes to a file of its own and is moved in under <paramref name="fileName"/> only
+    /// once it is complete, so the cache never holds part of an image - not after a failed download,
+    /// and not after a crash - and requests downloading the same image at once do not collide.
+    /// </summary>
+    private async Task<Stream> DownloadToCache(Stream image, string fileName)
+    {
+        Directory.CreateDirectory(DownloadLocation);
+        var tempPath = Path.Combine(DownloadLocation, $"{fileName}.{Guid.NewGuid():N}.tmp");
+
+        FileStream? cached = null;
+        try
+        {
+            await using (var download = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write))
+            {
+                await image.CopyToAsync(download);
+            }
+
+            // Opened before the move rather than after it: once under the image's name, the file can
+            // be replaced or expired by a concurrent request at any time, but this handle stays on
+            // the image just downloaded.
+            cached = OpenCachedFile(tempPath);
+            File.Move(tempPath, Path.Combine(DownloadLocation, fileName), overwrite: true);
+            return cached;
+        }
+        catch
+        {
+            cached?.Dispose();
+            File.Delete(tempPath);
+            throw;
+        }
+    }
+
+    // Sharing delete lets a concurrent request replace or expire a cached image while it is being
+    // served; the reader keeps the image it opened.
+    private static FileStream OpenCachedFile(string path) =>
+        new(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
 
     private async Task<AssetResponse> GetVideoAsset(Guid id, string? rangeHeader = null)
     {

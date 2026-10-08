@@ -10,7 +10,7 @@ public class QueuingAssetPool(ILogger<QueuingAssetPool> _logger, IAssetPool @del
     private const int RELOAD_THRESHOLD = 10;
 
     private readonly SemaphoreSlim _isReloadingAssets = new(1, 1);
-    private Channel<AssetResponseDto> _assetQueue = Channel.CreateUnbounded<AssetResponseDto>();
+    private readonly Channel<AssetResponseDto> _assetQueue = Channel.CreateUnbounded<AssetResponseDto>();
 
     public override Task<long> GetAssetCount(CancellationToken ct = default) => @delegate.GetAssetCount(ct);
 
@@ -35,7 +35,7 @@ public class QueuingAssetPool(ILogger<QueuingAssetPool> _logger, IAssetPool @del
         }
         catch (Exception ex)
         {
-            _logger.LogError($"An unexpected error occurred while reading assets: {ex.Message}");
+            _logger.LogError(ex, "An unexpected error occurred while reading assets");
             throw;
         }
     }
