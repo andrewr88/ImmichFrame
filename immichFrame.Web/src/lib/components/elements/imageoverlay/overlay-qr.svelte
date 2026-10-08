@@ -14,9 +14,12 @@
 >
 	<QrCode data={imageUrl} isResponsive />
 </div>
+<!-- `external` keeps SvelteKit's router out of a link that leaves the frame, and `noreferrer`
+     keeps the frame's address from my.immich.app, whatever Referrer-Policy a proxy sets. -->
 <a
 	href={imageUrl}
 	target="_blank"
+	rel="external noopener noreferrer"
 	class="info-overlay-openimmich text-xl w-fit self-center rounded-md p-2 m-2 text-center text-frame-secondary bg-frame-primary"
 	>Open in immich</a
 >

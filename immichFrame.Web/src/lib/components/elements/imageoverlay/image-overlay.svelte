@@ -18,6 +18,7 @@
 	import OverlayQr from './overlay-qr.svelte';
 	import Icon from '../icon.svelte';
 	import { getContext } from 'svelte';
+	import { fileDetails } from './image-overlay';
 
 	interface Props {
 		asset: AssetResponseDto;
@@ -46,14 +47,7 @@
 		<div class="flex h-full flex-col gap-5">
 			<div class="w-fit flex grow flex-col gap-3">
 				{#if asset.originalFileName}
-					<OverlayItem
-						icon={mdiFile}
-						header={asset.originalFileName}
-						items={[
-							`Size: ${((exif.fileSizeInByte ?? 0) / (1024 * 1024)).toFixed(1)} MB`,
-							`Dimensions: ${exif.exifImageWidth} x ${exif.exifImageHeight}`
-						]}
-					/>
+					<OverlayItem icon={mdiFile} header={asset.originalFileName} items={fileDetails(exif)} />
 				{/if}
 				{#if exif.make || exif.model || exif.fNumber || exif.exposureTime || exif.focalLength || exif.iso}
 					<OverlayItem

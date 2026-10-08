@@ -29,8 +29,12 @@
 		showInfo
 	}: Props = $props();
 
-	function shortcuts(node: any, shortcutList: any[]) {
-		function handleKeyDown(event: { key: any; preventDefault: () => void }) {
+	function shortcuts(_node: Window, shortcutList: { key: string; action: () => void }[]) {
+		function handleKeyDown(event: KeyboardEvent) {
+			// With Alt, Ctrl or Meta held the key is a browser shortcut, not the slideshow's -
+			// Alt+ArrowLeft is Back - so it is left to the browser.
+			if (event.altKey || event.ctrlKey || event.metaKey) return;
+
 			const shortcut = shortcutList.find((s) => s.key === event.key);
 			if (shortcut && shortcut.action) {
 				event.preventDefault();
