@@ -1,11 +1,11 @@
 <script lang="ts">
 	import * as api from '$lib/index';
 	import { onMount } from 'svelte';
-	import { format } from 'date-fns';
 	import * as locale from 'date-fns/locale';
 	import { configStore } from '$lib/stores/config.store';
 	import { clientIdentifierStore } from '$lib/stores/persist.store';
 	import { profileStore } from '$lib/stores/profile.store';
+	import { safeFormat } from '$lib/safe-format';
 
 	api.init();
 
@@ -18,12 +18,12 @@
 	let now = $state(new Date());
 
 	const formattedDate = $derived(() =>
-		format(now, $configStore.clockDateFormat ?? 'eee, MMM d', {
+		safeFormat(now, $configStore.clockDateFormat, 'eee, MMM d', {
 			locale: localeToUse()
 		})
 	);
 
-	const timePortion = $derived(() => format(now, $configStore.clockFormat ?? 'HH:mm:ss'));
+	const timePortion = $derived(() => safeFormat(now, $configStore.clockFormat, 'HH:mm:ss'));
 
 	const primaryIconId = $derived(() => {
         if (!weather?.iconId) return null;

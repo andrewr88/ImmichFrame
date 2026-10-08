@@ -6,6 +6,7 @@ import type {
 	AdminConfigUpdateDto,
 	AdminGeneralSettingsDto
 } from '$lib/immichFrameApi';
+import { format } from 'date-fns';
 import { normalizedServerUrl } from './immich-picker';
 
 /**
@@ -123,6 +124,13 @@ export const generalFields: Record<GeneralProp, FieldSpec> = {
 		help: 'Every frame must send this as a bearer token.'
 	}
 };
+
+/** The general settings a frame hands to date-fns as format patterns, which are free text. */
+const DATE_FORMAT_PROPS: readonly GeneralProp[] = [
+	'clockFormat',
+	'clockDateFormat',
+	'photoDateFormat'
+];
 
 /** Every key of {@link generalFields} appears in exactly one of these. */
 export const generalSections: { title: string; blurb: string; props: GeneralProp[] }[] = [
@@ -983,11 +991,21 @@ function keptKeyErrors(account: EditableAccount, name: string, writtenBy: string
 	];
 }
 
+/** Why date-fns refuses a date format, or null where it takes it. */
+function dateFormatError(pattern: string): string | null {
+	try {
+		format(new Date(), pattern);
+		return null;
+	} catch (error) {
+		return error instanceof Error ? error.message : String(error);
+	}
+}
+
 /**
  * What the editor can tell is wrong before the file is touched. Deliberately not a re-implementation
  * of the server's validation - it is the last word - but the cases where letting the save run would
  * either be refused for something the browser already knows, or accepted into a configuration that
- * cannot serve an image.
+ * cannot serve an image - or, for a date format, that every frame would quietly ignore.
  */
 export function validationErrors(config: EditableConfig): string[] {
 	const errors: string[] = [];
@@ -1004,6 +1022,23 @@ export function validationErrors(config: EditableConfig): string[] {
 				const value = entry.general[prop];
 				if (typeof value !== 'number' || !Number.isFinite(value)) {
 					errors.push(`${entryLabel(entry)}: '${spec.label}' needs a number.`);
+				}
+
+				continue;
+			}
+
+			// A frame shows its own default in place of a format date-fns refuses, and says so only in
+			// a console nobody in front of a wall display is reading - so the save is refused here,
+			// with date-fns's reason, where it can be acted on. An empty box is left alone: a frame
+			// takes it for no format at all, and uses the default for that too.
+			if (DATE_FORMAT_PROPS.includes(prop)) {
+				const value = entry.general[prop];
+				const error = typeof value === 'string' && value !== '' ? dateFormatError(value) : null;
+
+				if (error) {
+					errors.push(
+						`${entryLabel(entry)}: '${spec.label}' is not a date format the frame can use: ${error}`
+					);
 				}
 
 				continue;

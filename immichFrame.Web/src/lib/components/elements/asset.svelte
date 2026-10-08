@@ -56,7 +56,6 @@
 		onAssetError = () => {}
 	}: Props = $props();
 
-	let debug = false;
 	const isVideo = $derived(isVideoAsset(asset[1]));
 
 	// Re-evaluate only when the asset changes; keep the interval stable for the
@@ -69,7 +68,7 @@
 	let videoElement = $state<HTMLVideoElement | null>(null);
 
 	$effect(() => {
-		asset[0];
+		void asset[0];
 		return () => {
 			if (videoElement) {
 				videoElement.pause();
@@ -219,23 +218,6 @@
 			--pan-start-y: {panDirection === 'up' ? '5%' : panDirection === 'down' ? '-5%' : '0'};
 			--pan-end-y: {panDirection === 'up' ? '-5%' : panDirection === 'down' ? '5%' : '0'};"
 	>
-		{#if debug}
-			{#each asset[2]?.map((x) => x.person?.name) ?? [] as _, i}
-				<div
-					class="face z-900 bg-red-600 absolute"
-					style="top: {getFaceMetric(i, 'y1')}%;
-						   left: {getFaceMetric(i, 'x1')}%;
-						   width: {getFaceMetric(i, 'width')}%;
-						   height: {getFaceMetric(i, 'height')}%;"
-				></div>
-				<div
-					class="centerface z-999 w-1 h-1 bg-blue-600 absolute"
-					style="top: {getFaceMetric(i, 'centerY')}%;
-						   left: {getFaceMetric(i, 'centerX')}%;"
-				></div>
-			{/each}
-		{/if}
-
 		{#if isVideo}
 			<!-- Autoplay might be blocked by the browser when playAudio is enabled -->
 			<video

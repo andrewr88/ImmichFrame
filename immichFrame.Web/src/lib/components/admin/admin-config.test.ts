@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
 	ACCOUNTS_KEY,
 	SECRET_PLACEHOLDER,
@@ -472,6 +472,46 @@ describe('validationErrors', () => {
 		expect(validationErrors(config)).toEqual([
 			expect.stringContaining("the default configuration: 'Interval' needs a number")
 		]);
+	});
+
+	it('a declared date format date-fns refuses, is refused with its reason', () => {
+		// Arrange: date-fns warns about `DD` itself before it throws on it.
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const { config } = open({
+			default: {
+				declares: ['General.ClockFormat', 'General.PhotoDateFormat'],
+				general: { clockFormat: 'h:mm A', photoDateFormat: 'DD.MM.YYYY' },
+				accounts: [{}]
+			}
+		});
+
+		// Act
+		const errors = validationErrors(config);
+		warn.mockRestore();
+
+		// Assert: a frame would quietly show its default in place of either.
+		expect(errors).toEqual([
+			expect.stringMatching(
+				/^the default configuration: 'Clock format' .*unescaped latin alphabet character `A`/
+			),
+			expect.stringMatching(
+				/^the default configuration: 'Photo date format' .*Use `dd` instead of `DD`/
+			)
+		]);
+	});
+
+	it('a declared date format that quotes its literal text, or is empty, is accepted', () => {
+		// Arrange: an emptied box is no format at all, and a frame uses its default for it.
+		const { config } = open({
+			default: {
+				declares: ['General.ClockFormat', 'General.ClockDateFormat'],
+				general: { clockFormat: "HH:mm 'Uhr'", clockDateFormat: '' },
+				accounts: [{}]
+			}
+		});
+
+		// Assert
+		expect(validationErrors(config)).toEqual([]);
 	});
 
 	it('a declared secret with an empty box in set mode, is refused', () => {

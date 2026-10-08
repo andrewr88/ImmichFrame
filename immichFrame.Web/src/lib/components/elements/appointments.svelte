@@ -1,28 +1,12 @@
 <script lang="ts">
 	import * as api from '$lib/index';
 	import { onMount } from 'svelte';
-	import { format } from 'date-fns';
 	import { configStore } from '$lib/stores/config.store';
 	import { clientIdentifierStore } from '$lib/stores/persist.store';
 	import { profileStore } from '$lib/stores/profile.store';
+	import { formatDates, loadAppointments } from './appointments';
 
 	api.init();
-
-	function formatDates(startTime: string, endTime: string) {
-		let startDate = new Date(startTime);
-		let endDate = new Date(endTime);
-		let sameDay = startDate.getDate() == endDate.getDate();
-
-		let clockFormat = $configStore.clockFormat ?? 'HH:mm';
-		let clockDateFormat = $configStore.clockDateFormat ?? 'eee, MMM d';
-		let fullFormat = clockDateFormat + ' ' + clockFormat;
-
-		if (sameDay) {
-			return format(startDate, clockFormat) + ' - ' + format(endDate, clockFormat);
-		}
-
-		return format(startDate, fullFormat) + ' - ' + format(endDate, fullFormat);
-	}
 
 	let appointments: api.IAppointment[] = $state() as api.IAppointment[];
 
@@ -36,16 +20,9 @@
 	});
 
 	async function GetAppointments() {
-		let appointmentRequest = await api.getAppointments({
-			clientIdentifier: $clientIdentifierStore,
-			profile: $profileStore
-		});
-		if (appointmentRequest.status == 200) {
-			appointments = appointmentRequest.data;
-
-			appointments = appointmentRequest.data.sort((a, b) => {
-				return new Date(a.startTime ?? '').getTime() - new Date(b.startTime ?? '').getTime();
-			});
+		const loaded = await loadAppointments($clientIdentifierStore, $profileStore);
+		if (loaded) {
+			appointments = loaded;
 		}
 	}
 </script>
@@ -60,7 +37,7 @@
 			{#each appointments as appointment}
 				<div class="bg-gray-600/90 mb-2 text-left rounded-md p-3">
 					<p class="text-xs">
-						{formatDates(appointment.startTime ?? '', appointment.endTime ?? '')}
+						{formatDates(appointment.startTime ?? '', appointment.endTime ?? '', $configStore)}
 					</p>
 					{appointment.summary}
 					{#if appointment.description}

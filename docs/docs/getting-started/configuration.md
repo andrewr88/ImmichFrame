@@ -77,9 +77,9 @@ General:
   TransitionDuration: 2  # float
   # Displays the current time.
   ShowClock: true  # boolean
-  # Time format
+  # Time format. See https://date-fns.org/v4.1.0/docs/format for more information.
   ClockFormat: 'hh:mm'  # string
-  # Date format for the clock
+  # Date format for the clock. See https://date-fns.org/v4.1.0/docs/format for more information.
   ClockDateFormat: 'eee, MMM d' # string
   # Displays the progress bar.
   ShowProgressBar: true  # boolean
