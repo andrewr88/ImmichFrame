@@ -312,6 +312,47 @@ public class ConfigCatalogTest
     }
 
     /// <summary>
+    /// A v1 file's lists spelled as null. The v1 reader calls each setter with that null, over the
+    /// empty list the class starts out with, and the adapter hands the list straight on - as a
+    /// configuration here, and to the conversion on import - behind interfaces that say these lists
+    /// are never null.
+    /// </summary>
+    [TestCase("Settings.json", """
+                               {
+                                 "ImmichServerUrl": "https://v1.example.com",
+                                 "ApiKey": "v1-key",
+                                 "Webcalendars": null,
+                                 "Albums": null,
+                                 "ExcludedAlbums": null,
+                                 "People": null,
+                                 "Tags": null
+                               }
+                               """, TestName = "LegacySettingsFileWithNullListsLoadsThemAsEmpty")]
+    [TestCase("Settings.yml", """
+                              ImmichServerUrl: https://v1.example.com
+                              ApiKey: v1-key
+                              Webcalendars:
+                              Albums:
+                              ExcludedAlbums:
+                              People:
+                              Tags:
+                              """, TestName = "LegacyYamlFileWithBareListKeysLoadsThemAsEmpty")]
+    public void LegacySettingsFileWithListsSpelledAsNullLoadsThemAsEmpty(string fileName, string settings)
+    {
+        InConfigDirectory(fileName, settings, directory =>
+        {
+            var catalog = _configLoader.LoadCatalog(directory);
+            var account = catalog.Default.Accounts.Single();
+
+            catalog.Default.GeneralSettings.Webcalendars.Should().NotBeNull().And.BeEmpty();
+            account.Albums.Should().NotBeNull().And.BeEmpty();
+            account.ExcludedAlbums.Should().NotBeNull().And.BeEmpty();
+            account.People.Should().NotBeNull().And.BeEmpty();
+            account.Tags.Should().NotBeNull().And.BeEmpty();
+        });
+    }
+
+    /// <summary>
     /// A YAML <c>Profiles</c> key spelled as null declares no profiles, however the null is spelled -
     /// the spellings the binder itself reads as null, so the two cannot disagree about one file.
     /// </summary>

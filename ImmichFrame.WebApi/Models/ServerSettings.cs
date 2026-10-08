@@ -92,7 +92,22 @@ public class GeneralSettings : IGeneralSettings, IConfigSettable
     public bool PlayAudio { get; set; } = false;
     public string Layout { get; set; } = "splitview";
     public int RenewImagesDuration { get; set; } = 30;
-    public List<string> Webcalendars { get; set; } = new();
+
+    /// <summary>
+    /// Never null, and normalised in the setter for the reason <see cref="ServerSettings.AccountsImpl"/>
+    /// is: <c>"Webcalendars": null</c>, or YAML's bare <c>Webcalendars:</c>, has the binder call the
+    /// setter with null over the initialiser. The calendar service enumerates this list on every poll,
+    /// so a null here answered every <c>GET /api/Calendar</c> with a 500 - for a frame whose settings
+    /// only say it has no calendars.
+    /// </summary>
+    public List<string> Webcalendars
+    {
+        get => _webcalendars;
+        set => _webcalendars = value ?? [];
+    }
+
+    private List<string> _webcalendars = [];
+
     public int RefreshAlbumPeopleInterval { get; set; } = 12;
     public string? WeatherApiKey { get; set; } = string.Empty;
     public string? UnitSystem { get; set; } = "imperial";
@@ -129,10 +144,49 @@ public class ServerAccountSettings : IAccountSettings, IConfigSettable
     public int? ImagesFromDays { get; set; }
     public DateTime? ImagesFromDate { get; set; }
     public DateTime? ImagesUntilDate { get; set; }
-    public List<Guid> Albums { get; set; } = new();
-    public List<Guid> ExcludedAlbums { get; set; } = new();
-    public List<Guid> People { get; set; } = new();
-    public List<string> Tags { get; set; } = new();
+
+    /// <summary>
+    /// Never null, and normalised in the setter for the reason <see cref="ServerSettings.AccountsImpl"/>
+    /// is: an explicit null - <c>"Albums": null</c>, YAML's bare <c>Albums:</c> - has the binder call the
+    /// setter with it over the initialiser. ImmichFrame.Core reads the account's four lists through
+    /// <see cref="IAccountSettings"/>, which says they are never null; it guards them anyway, since it
+    /// takes any implementation, but these settings keep that promise rather than lean on the guards.
+    /// </summary>
+    public List<Guid> Albums
+    {
+        get => _albums;
+        set => _albums = value ?? [];
+    }
+
+    private List<Guid> _albums = [];
+
+    /// <inheritdoc cref="Albums"/>
+    public List<Guid> ExcludedAlbums
+    {
+        get => _excludedAlbums;
+        set => _excludedAlbums = value ?? [];
+    }
+
+    private List<Guid> _excludedAlbums = [];
+
+    /// <inheritdoc cref="Albums"/>
+    public List<Guid> People
+    {
+        get => _people;
+        set => _people = value ?? [];
+    }
+
+    private List<Guid> _people = [];
+
+    /// <inheritdoc cref="Albums"/>
+    public List<string> Tags
+    {
+        get => _tags;
+        set => _tags = value ?? [];
+    }
+
+    private List<string> _tags = [];
+
     public int? Rating { get; set; }
 
     public void ValidateAndInitialize()

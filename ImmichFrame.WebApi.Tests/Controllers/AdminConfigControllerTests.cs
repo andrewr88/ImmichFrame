@@ -2073,6 +2073,165 @@ public class AdminConfigControllerTests
     }
 
     /// <summary>
+    /// A calendar list spelled as null: <c>"Webcalendars": null</c>, YAML's bare <c>Webcalendars:</c>,
+    /// or the same null in a v1 file, which the import carried into the current schema as it stood.
+    /// The binder calls the setter with that null, over the empty list the settings class starts out
+    /// with, and the calendar service enumerated it on every poll - so every <c>GET /api/Calendar</c>
+    /// answered 500, for a frame whose settings only say it has no calendars.
+    /// </summary>
+    [TestCase("Settings.json", """
+        {
+          "General": { "Webcalendars": null },
+          "Accounts": [{ "ImmichServerUrl": "http://mock-immich-server.com", "ApiKey": "base-api-key" }]
+        }
+        """, TestName = "Config_ImportedNullWebcalendars_KeepTheCalendarAnswering")]
+    [TestCase("Settings.yml", """
+        General:
+          Webcalendars:
+        Accounts:
+        - ImmichServerUrl: http://mock-immich-server.com
+          ApiKey: base-api-key
+        """, TestName = "Config_ImportedBareYamlWebcalendars_KeepTheCalendarAnswering")]
+    [TestCase("Settings.json", """
+        {
+          "ImmichServerUrl": "http://mock-immich-server.com",
+          "ApiKey": "base-api-key",
+          "Webcalendars": null
+        }
+        """, TestName = "Config_ImportedLegacySchemaNullWebcalendars_KeepTheCalendarAnswering")]
+    public async Task Config_ImportedWebcalendarsSpelledAsNull_KeepTheCalendarAnswering(string fileName, string settings)
+    {
+        // Arrange
+        WriteSettings(fileName, settings);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        Assume.That(factory.Services.GetRequiredService<SettingsService>().IsUnconfigured, Is.False,
+            "the file has to have been imported, or this is the unconfigured case instead");
+
+        // Act
+        var calendar = await client.GetAsync("/api/Calendar");
+        var webcalendars = factory.Services.GetRequiredService<IConfigCatalog>().Default.GeneralSettings.Webcalendars;
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(calendar.StatusCode, Is.EqualTo(HttpStatusCode.OK),
+                "a frame with no calendars is not a failed one");
+            Assert.That(webcalendars, Is.Not.Null.And.Empty, "bound as no calendars rather than as a null");
+        });
+
+        var appointments = JsonNode.Parse(await calendar.Content.ReadAsStringAsync())?.AsArray();
+
+        Assert.That(appointments, Is.Empty);
+    }
+
+    /// <summary>
+    /// The account's four lists spelled as null, in JSON and as YAML's bare keys. The binder calls each
+    /// setter with that null, over the empty list the settings class starts out with, so an account
+    /// that narrows nothing reached ImmichFrame.Core with lists its interface says are never null. Core
+    /// guards each of these reads anyway; the settings still have to keep the interface's promise
+    /// rather than lean on that.
+    /// </summary>
+    [TestCase("Settings.json", """
+        {
+          "General": { "Interval": 45 },
+          "Accounts": [
+            {
+              "ImmichServerUrl": "http://mock-immich-server.com",
+              "ApiKey": "base-api-key",
+              "Albums": null,
+              "ExcludedAlbums": null,
+              "People": null,
+              "Tags": null
+            }
+          ]
+        }
+        """, TestName = "Config_ImportedNullAccountLists_BindEmptyAndKeepTheFrameAnswering")]
+    [TestCase("Settings.yml", """
+        General:
+          Interval: 45
+        Accounts:
+        - ImmichServerUrl: http://mock-immich-server.com
+          ApiKey: base-api-key
+          Albums:
+          ExcludedAlbums:
+          People:
+          Tags:
+        """, TestName = "Config_ImportedBareYamlAccountLists_BindEmptyAndKeepTheFrameAnswering")]
+    public async Task Config_ImportedAccountListsSpelledAsNull_BindEmptyAndKeepTheFrameAnswering(
+        string fileName, string settings)
+    {
+        // Arrange - the account is asked for its slideshow, so its server has to answer: with no photos.
+        WriteSettings(fileName, settings);
+        using var factory = CreateFactory(
+            immich: new Mock<HttpMessageHandler>().WithServerVersion().WithAssetStatistics(0).WithNoRandomAssets());
+        var client = factory.CreateClient();
+
+        Assume.That(StoredText(factory), Is.EqualTo(settings),
+            "the file has to have been imported as it stands, or this is the unconfigured case instead");
+
+        // Act
+        var frame = await client.GetAsync("/api/Asset");
+        var account = factory.Services.GetRequiredService<IConfigCatalog>().Default.Accounts.Single();
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(frame.StatusCode, Is.EqualTo(HttpStatusCode.OK),
+                "the frame runs on the account as it would with the lists left out");
+            Assert.That(account.Albums, Is.Not.Null.And.Empty);
+            Assert.That(account.ExcludedAlbums, Is.Not.Null.And.Empty);
+            Assert.That(account.People, Is.Not.Null.And.Empty);
+            Assert.That(account.Tags, Is.Not.Null.And.Empty);
+        });
+    }
+
+    /// <summary>
+    /// The save's half. The editor always sends a list, but the endpoint can be sent a null for
+    /// <c>General.Webcalendars</c>, and every declared setting but the three secrets is written as it
+    /// arrives. That save bound, validated and swapped in like any other, and the calendar then
+    /// answered 500 on every poll.
+    /// </summary>
+    [Test]
+    public async Task SaveConfig_WebcalendarsDeclaredAsNull_KeepsTheCalendarAnswering()
+    {
+        // Arrange
+        WriteSettings("Settings.json", SettingsJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var config = await GetConfig(client);
+        config.Default.General.Webcalendars = null;
+        config = config with
+        {
+            Default = config.Default with
+            {
+                DeclaredKeys = [.. config.Default.DeclaredKeys, "General.Webcalendars"]
+            }
+        };
+
+        // Act
+        var response = await Put(client, config);
+        var problem = await response.Content.ReadAsStringAsync();
+
+        using var calendarRequest = new HttpRequestMessage(HttpMethod.Get, "/api/Calendar");
+        calendarRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", FrameSecret);
+        var calendar = await client.SendAsync(calendarRequest);
+
+        var webcalendars = factory.Services.GetRequiredService<IConfigCatalog>().Default.GeneralSettings.Webcalendars;
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK), problem);
+            Assert.That(calendar.StatusCode, Is.EqualTo(HttpStatusCode.OK),
+                "the saved configuration says no calendars, which is not a failed calendar");
+            Assert.That(webcalendars, Is.Not.Null.And.Empty);
+        });
+    }
+
+    /// <summary>
     /// YamlStream resolves an alias to the very node the anchor named, so an aliased mapping is
     /// indistinguishable from one written out longhand: every inherited value would be reported as a
     /// key the profile declares, and the save would write them all literally. Refusing is the

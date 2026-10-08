@@ -18,12 +18,60 @@ public class ServerSettingsV1 : IConfigSettable
     public int? ImagesFromDays { get; set; }
     public DateTime? ImagesFromDate { get; set; }
     public DateTime? ImagesUntilDate { get; set; }
-    public List<Guid> Albums { get; set; } = new List<Guid>();
-    public List<Guid> ExcludedAlbums { get; set; } = new List<Guid>();
-    public List<Guid> People { get; set; } = new List<Guid>();
-    public List<string> Tags { get; set; } = new List<string>();
+
+    /// <summary>
+    /// Never null, and normalised in the setter as the current schema's lists are
+    /// (<see cref="Models.ServerAccountSettings.Albums"/>): the v1 reader binds an explicit null, or
+    /// YAML's bare key, over the initialiser. The adapters below hand these lists straight on - into the
+    /// conversion on import, and to anything that runs a v1 file as its configuration - behind
+    /// interfaces that say they are never null.
+    /// </summary>
+    public List<Guid> Albums
+    {
+        get => _albums;
+        set => _albums = value ?? [];
+    }
+
+    private List<Guid> _albums = [];
+
+    /// <inheritdoc cref="Albums"/>
+    public List<Guid> ExcludedAlbums
+    {
+        get => _excludedAlbums;
+        set => _excludedAlbums = value ?? [];
+    }
+
+    private List<Guid> _excludedAlbums = [];
+
+    /// <inheritdoc cref="Albums"/>
+    public List<Guid> People
+    {
+        get => _people;
+        set => _people = value ?? [];
+    }
+
+    private List<Guid> _people = [];
+
+    /// <inheritdoc cref="Albums"/>
+    public List<string> Tags
+    {
+        get => _tags;
+        set => _tags = value ?? [];
+    }
+
+    private List<string> _tags = [];
+
     public int? Rating { get; set; }
-    public List<string> Webcalendars { get; set; } = new List<string>();
+
+    /// <inheritdoc cref="Albums"/>
+    public List<string> Webcalendars
+    {
+        get => _webcalendars;
+        set => _webcalendars = value ?? [];
+    }
+
+    private List<string> _webcalendars = [];
+
     public int RefreshAlbumPeopleInterval { get; set; } = 12;
     public string? WeatherApiKey { get; set; } = string.Empty;
     public string? UnitSystem { get; set; } = "imperial";
