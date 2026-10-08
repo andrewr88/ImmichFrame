@@ -5,8 +5,8 @@ import { configStore } from '$lib/stores/config.store';
 import { load as loadDefault } from './+page';
 import { load as loadProfile } from './[config]/+page';
 
-// persist.store reads localStorage the moment it is imported, and node has none. The loaders take
-// nothing else from it.
+// Pins the client identifier the loaders send, which persist.store would otherwise generate at
+// random - node has no localStorage for it to keep one in. The loaders take nothing else from it.
 vi.mock('$lib/stores/persist.store', async () => {
 	const { writable } = await import('svelte/store');
 	return { clientIdentifierStore: writable('frame') };
