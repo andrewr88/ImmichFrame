@@ -1,5 +1,6 @@
 using ImmichFrame.Core.Api;
 using ImmichFrame.Core.Helpers;
+using ImmichFrame.WebApi.Helpers;
 using ImmichFrame.WebApi.Helpers.Admin;
 using ImmichFrame.WebApi.Models;
 using Microsoft.AspNetCore.Authorization;
@@ -292,12 +293,7 @@ public class AdminImmichController(
     {
         var declared = headers.TryGetValue("Content-Type", out var values) ? values.FirstOrDefault() : null;
 
-        // Compared on the media type alone: "image/jpeg; charset=utf-8" is still a JPEG, and it is
-        // the part before the parameters that decides how a browser treats the body.
-        var mediaType = declared?.Split(';')[0].Trim();
-
-        return AllowedImageTypes.FirstOrDefault(
-            allowed => string.Equals(allowed, mediaType, StringComparison.OrdinalIgnoreCase)) ?? "image/jpeg";
+        return UpstreamContentType.Allowlisted(declared, AllowedImageTypes, "image/jpeg");
     }
 
     private static readonly string[] AllowedImageTypes = ["image/jpeg", "image/png", "image/webp"];

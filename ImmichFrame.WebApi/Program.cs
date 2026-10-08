@@ -343,7 +343,10 @@ AdminEndpointGuard.Validate(((IEndpointRouteBuilder)app).DataSources.SelectMany(
 // Migrates the settings database and imports an existing Settings.json/yml on first run, so the
 // catalog below is seeded from the database rather than from the file. Skipped when a test has
 // registered its own IConfigCatalog: there is then nothing to import and no SQLite file to create.
-if (app.Services.GetService<SwappableConfigCatalog>() is not null)
+// Asked of the interface, because that is the registration a test replaces. SwappableConfigCatalog
+// itself stays registered underneath either way, so asking for it always found one - and every such
+// test created and migrated a database in the one configuration directory they all share.
+if (app.Services.GetService<IConfigCatalog>() is SwappableConfigCatalog)
 {
     await app.Services.GetRequiredService<SettingsService>().InitializeAsync();
 }

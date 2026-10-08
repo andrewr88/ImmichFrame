@@ -85,6 +85,44 @@ public class ProfileReloadTests
         Assert.That(seeded, Is.EqualTo(1), "the seeded catalog should be built once and then reused");
     }
 
+    /// <summary>
+    /// The other half of the same promise, which held only on paper: <c>Program.cs</c> migrates the
+    /// settings database at startup unless a host has a catalog of its own, and it asked whether a
+    /// <see cref="SwappableConfigCatalog"/> was registered - which one always is, under whatever the
+    /// host replaced <see cref="IConfigCatalog"/> with. So every fixture that did that created and
+    /// migrated a database in the configuration directory it never moved, the one beside the test
+    /// binaries that every such fixture shares. This host is given a fresh directory of its own, so
+    /// that a database created in it shows.
+    /// </summary>
+    [Test]
+    public void HostWithACatalogOfItsOwnCreatesNoSettingsDatabase()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"immichframe-own-catalog-{Guid.NewGuid():N}");
+
+        try
+        {
+            using var factory = new WebApplicationFactory<Program>()
+                .WithWebHostBuilder(builder =>
+                {
+                    builder.ConfigureTestServices(services =>
+                    {
+                        services.UseMockHandler(new Mock<HttpMessageHandler>().WithServerVersion());
+                        services.AddSingleton(new ConfigLocation(directory));
+                        services.AddSingleton<IConfigCatalog>(Catalog(BeforeInterval, withKitchen: false));
+                    });
+                });
+
+            // Starting the host is what runs the startup initialisation, if anything does.
+            _ = factory.Services;
+
+            Assert.That(Path.Combine(directory, "immichframe.db"), Does.Not.Exist);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Test]
     public void SwappedCatalogIsWhatConsumersOfTheInterfaceSee()
     {

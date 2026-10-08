@@ -5,6 +5,7 @@ using ImmichFrame.Core.Exceptions;
 using ImmichFrame.Core.Helpers;
 using ImmichFrame.Core.Interfaces;
 using ImmichFrame.Core.Models;
+using ImmichFrame.WebApi.Helpers;
 using ImmichFrame.WebApi.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -22,6 +23,9 @@ namespace ImmichFrame.WebApi.Controllers
     [ApiController]
     [Route("api/[controller]")]
     [Authorize]
+    // On the class rather than on the actions that look an asset up by id, so the same exception
+    // answers the same way from every action here.
+    [AssetNotFoundFilter]
     public partial class AssetController : ControllerBase
     {
         private readonly ILogger<AssetController> _logger;
@@ -33,6 +37,17 @@ namespace ImmichFrame.WebApi.Controllers
         // placeholders.
         [GeneratedRegex("City|State|Country")]
         private static partial Regex LocationPlaceholder();
+
+        /// <summary>
+        /// What an asset may be served as: image and video types, each of which a browser shows as
+        /// media rather than opening as a document that can run script. Anything else Immich declares
+        /// - text/html and image/svg+xml among them - is served as application/octet-stream.
+        /// </summary>
+        private static readonly string[] AssetContentTypes =
+        [
+            "image/jpeg", "image/png", "image/webp", "image/gif", "image/avif", "image/heic", "image/heif",
+            "video/mp4", "video/quicktime", "video/webm"
+        ];
 
         public AssetController(ILogger<AssetController> logger, IImmichFrameLogic logic, IGeneralSettings settings)
         {
@@ -118,13 +133,25 @@ namespace ImmichFrame.WebApi.Controllers
                 _ = _logic.SendWebhookNotification(notification);
             }
 
+            // Never the upstream's own Content-Type unchecked, and never without nosniff. This response
+            // is served from the origin the frame and the admin editor are served from, so a
+            // compromised or hostile Immich server answering with an HTML page - or an SVG, which is an
+            // image to an <img> and a document to a browser that opens it - would be running script on
+            // that origin for whoever opened the asset's URL. The bytes are still Immich's, but the
+            // label is ours, the browser is told not to second-guess it, and the sandbox denies a
+            // response opened as a page all the same both script and the origin. Both paths below
+            // serve it.
+            var contentType = UpstreamContentType.Allowlisted(asset.ContentType, AssetContentTypes, "application/octet-stream");
+            Response.Headers.XContentTypeOptions = "nosniff";
+            Response.Headers.ContentSecurityPolicy = "sandbox";
+
             Response.Headers.AcceptRanges = "bytes";
 
             if (asset.IsPartial && !string.IsNullOrEmpty(asset.ContentRange))
             {
                 Response.Headers.ContentRange = asset.ContentRange;
                 Response.StatusCode = 206;
-                Response.ContentType = asset.ContentType;
+                Response.ContentType = contentType;
 
                 if (asset.FileStream is { CanSeek: true } && asset.FileStream.Length > 0)
                     Response.ContentLength = asset.FileStream.Length;
@@ -141,7 +168,7 @@ namespace ImmichFrame.WebApi.Controllers
             if (asset.Owner != null)
                 HttpContext.Response.RegisterForDispose(asset.Owner);
 
-            return File(asset.FileStream, asset.ContentType, asset.FileName, enableRangeProcessing: true);
+            return File(asset.FileStream, contentType, asset.FileName, enableRangeProcessing: true);
         }
 
         [HttpGet("RandomImageAndInfo", Name = "GetRandomImageAndInfo")]

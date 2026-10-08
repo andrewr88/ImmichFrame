@@ -205,10 +205,15 @@ public class AdminImmichControllerTests
         });
     }
 
-    [Test]
-    public async Task Albums_WhenImmichRejectsTheApiKey_SayThatAndNothingElse()
+    /// <summary>
+    /// A key Immich does not know (401), or one without the permission the call needs (403). Either
+    /// way it is the administrator's to put right, and either way it is said as exactly that.
+    /// </summary>
+    [TestCase(HttpStatusCode.Unauthorized)]
+    [TestCase(HttpStatusCode.Forbidden)]
+    public async Task Albums_WhenImmichRejectsTheApiKey_SayThatAndNothingElse(HttpStatusCode rejection)
     {
-        var handler = Immich(albums: _ => new HttpResponseMessage(HttpStatusCode.Unauthorized)
+        var handler = Immich(albums: _ => new HttpResponseMessage(rejection)
         {
             Content = new StringContent("""{"message":"Invalid API key","secretDetail":"leak-me"}""")
         });
@@ -251,6 +256,41 @@ public class AdminImmichControllerTests
             // The two outcomes an administrator hits most must not read the same. A rejected key is a
             // 400 saying so; this one is not allowed to borrow that wording.
             Assert.That(problem, Does.Not.Contain("rejected that API key"));
+        });
+    }
+
+    /// <summary>
+    /// Any other status from the server: reached, and answering, but not the way Immich answers this
+    /// call - most often because the URL points at something else. The status is the one part of the
+    /// answer worth repeating; the body is the far end's, and is not.
+    /// </summary>
+    [TestCase(HttpStatusCode.NotFound)]
+    [TestCase(HttpStatusCode.InternalServerError)]
+    public async Task Albums_WhenTheServerAnswersWithAnotherError_SayWhichStatusAndNothingElse(HttpStatusCode status)
+    {
+        var handler = Immich(albums: _ => new HttpResponseMessage(status)
+        {
+            Content = new StringContent("""<html><body>Not Immich<!-- secretDetail --></body></html>""")
+        });
+
+        using var factory = CreateFactory(handler);
+        var client = factory.CreateClient();
+
+        var response = await Post(client, AlbumsUrl, new { serverUrl = TypedServer, apiKey = "typed-api-key" });
+        var problem = await response.Content.ReadAsStringAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadGateway));
+            Assert.That(problem, Does.Contain($"answered with status {(int)status}"));
+
+            // Neither of the other two outcomes' wording: the key was not rejected, and the server
+            // was reached.
+            Assert.That(problem, Does.Not.Contain("rejected that API key"));
+            Assert.That(problem, Does.Not.Contain("Could not reach"));
+
+            Assert.That(problem, Does.Not.Contain("Not Immich"));
+            Assert.That(problem, Does.Not.Contain("secretDetail"));
         });
     }
 
@@ -322,6 +362,100 @@ public class AdminImmichControllerTests
         handler.Protected().Verify("SendAsync", Times.Never(),
             ItExpr.Is<HttpRequestMessage>(request => request.RequestUri!.Scheme == "file"),
             ItExpr.IsAny<CancellationToken>());
+    }
+
+    /// <summary>
+    /// A saved account and a typed one in the same request, whole or in part. Refused rather than
+    /// resolved by precedence, and before anything is sent anywhere: an editor that sends both is
+    /// confused about which account it means, and honouring either half confidently answers about the
+    /// wrong server - or, mixed the wrong way, hands the saved account's key to the URL being typed.
+    /// </summary>
+    [TestCase(TypedServer, "typed-api-key")]
+    [TestCase(TypedServer, null)]
+    [TestCase(null, "typed-api-key")]
+    public async Task Albums_NamingASavedAccountAndATypedOne_AreRefusedWithoutAnyOutboundRequest(
+        string? serverUrl, string? apiKey)
+    {
+        var handler = Immich();
+        using var factory = CreateFactory(handler);
+        var client = factory.CreateClient();
+
+        var saved = await SavedAccount(client);
+        var response = await Post(client, AlbumsUrl,
+            new { profile = saved.Profile, version = saved.Version, accountId = saved.AccountId, serverUrl, apiKey });
+        var problem = await response.Content.ReadAsStringAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+            Assert.That(problem, Does.Contain("not both"));
+        });
+
+        VerifyNothingSentButTheVersionCheck(handler);
+    }
+
+    [Test]
+    public async Task Albums_NamingNoAccountAtAll_AreRefusedWithoutAnyOutboundRequest()
+    {
+        var handler = Immich();
+        using var factory = CreateFactory(handler);
+        var client = factory.CreateClient();
+
+        var response = await Post(client, AlbumsUrl, new { });
+        var problem = await response.Content.ReadAsStringAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+            Assert.That(problem, Does.Contain("No Immich account was named"));
+        });
+
+        VerifyNothingSentButTheVersionCheck(handler);
+    }
+
+    /// <summary>
+    /// A handle issued under a profile the stored settings do not declare. Refused by name, rather
+    /// than resolved against the default configuration in its place - which holds an account at the
+    /// same position, and would answer with that account's albums.
+    /// </summary>
+    [Test]
+    public async Task Albums_FromAnUnknownProfile_AreRefusedWithoutAnyOutboundRequest()
+    {
+        var handler = Immich();
+        using var factory = CreateFactory(handler);
+        var client = factory.CreateClient();
+
+        var saved = await SavedAccount(client);
+        var response = await Post(client, AlbumsUrl,
+            new { profile = "no-such-profile", version = saved.Version, accountId = saved.AccountId });
+        var problem = await response.Content.ReadAsStringAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+            Assert.That(problem, Does.Contain("no configuration profile named 'no-such-profile'"));
+        });
+
+        VerifyNothingSentButTheVersionCheck(handler);
+    }
+
+    [Test]
+    public async Task Albums_FromATypedServerUrlWithoutAKey_AreRefusedWithoutAnyOutboundRequest()
+    {
+        var handler = Immich();
+        using var factory = CreateFactory(handler);
+        var client = factory.CreateClient();
+
+        var response = await Post(client, AlbumsUrl, new { serverUrl = TypedServer });
+        var problem = await response.Content.ReadAsStringAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+            Assert.That(problem, Does.Contain("An API key is required"));
+        });
+
+        VerifyNothingSentButTheVersionCheck(handler);
     }
 
     [Test]
@@ -410,6 +544,60 @@ public class AdminImmichControllerTests
             $"?profile={saved.Profile}&version={Uri.EscapeDataString(saved.Version)}&accountId={saved.AccountId}");
 
         Assert.That(response.Content.Headers.ContentType?.MediaType, Is.EqualTo("image/webp"));
+    }
+
+    [Test]
+    public async Task PersonThumbnail_ForAPersonImmichNoLongerHas_IsNotFound()
+    {
+        // Deleted, or merged into another person, between the picker reading the list and drawing
+        // the face. Its own 404, not the 502 an unexpected status otherwise gets: the server is fine.
+        var handler = Immich(thumbnailStatus: HttpStatusCode.NotFound);
+        using var factory = CreateFactory(handler);
+        var client = factory.CreateClient();
+
+        var saved = await SavedAccount(client);
+        var response = await Send(client, HttpMethod.Get,
+            $"/api/admin/immich/people/{PersonId}/thumbnail" +
+            $"?profile={saved.Profile}&version={Uri.EscapeDataString(saved.Version)}&accountId={saved.AccountId}");
+        var problem = await response.Content.ReadAsStringAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+            Assert.That(problem, Does.Contain("not on the Immich server any more"));
+        });
+    }
+
+    /// <summary>
+    /// The thumbnail is a GET because an &lt;img src&gt; cannot POST, and so it takes a saved-account
+    /// handle and nothing else: a key on a query string is a key in every log the URL passes through.
+    /// The action builds its account reference from the handle's own parameters, so a URL naming a
+    /// server and a key names no account at all - and nothing is fetched from that server, whose
+    /// answer would otherwise be served from the admin editor's own origin.
+    /// </summary>
+    [Test]
+    public async Task PersonThumbnail_ForAServerAndKeyOnTheQueryString_IsRefusedWithoutAskingThatServer()
+    {
+        const string evilHost = "evil.example.com";
+
+        var handler = Immich();
+        using var factory = CreateFactory(handler);
+        var client = factory.CreateClient();
+
+        var response = await Send(client, HttpMethod.Get,
+            $"/api/admin/immich/people/{PersonId}/thumbnail" +
+            $"?serverUrl={Uri.EscapeDataString($"http://{evilHost}")}&apiKey=k");
+        var problem = await response.Content.ReadAsStringAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+            Assert.That(problem, Does.Contain("No Immich account was named"));
+        });
+
+        handler.Protected().Verify("SendAsync", Times.Never(),
+            ItExpr.Is<HttpRequestMessage>(request => request.RequestUri!.Host == evilHost),
+            ItExpr.IsAny<CancellationToken>());
     }
 
     [Test]
@@ -772,6 +960,16 @@ public class AdminImmichControllerTests
     }
 
     /// <summary>
+    /// That a refused request reached no Immich server at all - neither the saved one nor any it
+    /// named. The one request allowed through is the version check every host makes of its saved
+    /// accounts as it starts, which no request under test can be the cause of.
+    /// </summary>
+    private static void VerifyNothingSentButTheVersionCheck(Mock<HttpMessageHandler> handler) =>
+        handler.Protected().Verify("SendAsync", Times.Never(),
+            ItExpr.Is<HttpRequestMessage>(request => !request.RequestUri!.AbsolutePath.EndsWith("/server/version")),
+            ItExpr.IsAny<CancellationToken>());
+
+    /// <summary>
     /// A stand-in Immich server, answering the four endpoints the picker uses plus the startup
     /// version check. The album handler is injectable because the two failure paths - a rejected key
     /// and a host that cannot be reached - are the whole point of two of these tests.
@@ -788,7 +986,8 @@ public class AdminImmichControllerTests
         int peoplePages = 1,
         int peoplePerPage = PageSize,
         string thumbnailContentType = "image/jpeg",
-        byte[]? thumbnailBody = null)
+        byte[]? thumbnailBody = null,
+        HttpStatusCode thumbnailStatus = HttpStatusCode.OK)
     {
         var handler = new Mock<HttpMessageHandler>().WithServerVersion();
 
@@ -818,7 +1017,7 @@ public class AdminImmichControllerTests
                 ItExpr.IsAny<CancellationToken>())
             .ReturnsAsync(() =>
             {
-                var response = new HttpResponseMessage(HttpStatusCode.OK)
+                var response = new HttpResponseMessage(thumbnailStatus)
                 {
                     Content = new ByteArrayContent(thumbnailBody ?? ThumbnailBytes)
                 };

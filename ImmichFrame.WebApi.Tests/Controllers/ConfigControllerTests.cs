@@ -1,5 +1,4 @@
 using System.Net.Http;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using ImmichFrame.Core.Interfaces;
 using ImmichFrame.WebApi.Helpers.Config;
@@ -17,11 +16,14 @@ namespace ImmichFrame.WebApi.Tests.Controllers
     public class ConfigControllerTests
     {
         private WebApplicationFactory<Program> _factory;
-        private GeneralSettings _generalSettings;
 
         [SetUp]
         public void Setup()
         {
+            // Every value but the flags differs from every other and from its own default, so that a
+            // setting sent as another's value, or as a constant, reads wrong. The flags have two values
+            // to go round, so they alternate down the order ClientSettingsDto declares them in instead:
+            // a flag read from the line next to it is the slip that shows.
             var generalSettings = new GeneralSettings
             {
                 Interval = 33,
@@ -31,14 +33,14 @@ namespace ImmichFrame.WebApi.Tests.Controllers
                 ShowClock = false,
                 ClockFormat = "HH:mm:ss",
                 ClockDateFormat = "yyyy-MM-dd",
-                ShowPhotoDate = false,
+                ShowPhotoDate = true,
                 ShowProgressBar = false,
                 PhotoDateFormat = "dd.MM.yyyy",
-                ShowImageDesc = false,
+                ShowImageDesc = true,
                 ShowPeopleDesc = false,
-                ShowTagsDesc = false,
+                ShowTagsDesc = true,
                 ShowAlbumName = false,
-                ShowImageLocation = false,
+                ShowImageLocation = true,
                 ImageLocationFormat = "City",
                 PrimaryColor = "#112233",
                 SecondaryColor = "#445566",
@@ -46,10 +48,10 @@ namespace ImmichFrame.WebApi.Tests.Controllers
                 BaseFontSize = "18px",
                 ShowWeatherDescription = false,
                 WeatherIconUrl = "https://example.com/{IconId}.png",
-                ImageZoom = false,
-                ImagePan = true,
+                ImageZoom = true,
+                ImagePan = false,
                 ImageFill = true,
-                PlayAudio = true,
+                PlayAudio = false,
                 Layout = "single",
                 Language = "de",
                 // Server-only values that must never surface in the client config:
@@ -61,7 +63,6 @@ namespace ImmichFrame.WebApi.Tests.Controllers
                 Webcalendars = new List<string> { "https://calendar.example.com/secret.ics" },
                 RefreshAlbumPeopleInterval = 8,
             };
-            _generalSettings = generalSettings;
 
             var serverSettings = new ServerSettings
             {
@@ -99,6 +100,11 @@ namespace ImmichFrame.WebApi.Tests.Controllers
             _factory.Dispose();
         }
 
+        /// <summary>
+        /// What a frame is sent, written out value by value. Not built from <c>ClientSettingsDto</c>:
+        /// an expectation produced by the mapping under test agrees with whatever that mapping does, so
+        /// a setting sent as another's value - or as a constant - passed.
+        /// </summary>
         [Test]
         public async Task GetConfig_ReturnsSerializedClientSettings()
         {
@@ -109,9 +115,38 @@ namespace ImmichFrame.WebApi.Tests.Controllers
             response.EnsureSuccessStatusCode();
             var actual = JsonNode.Parse(await response.Content.ReadAsStringAsync());
 
-            var expected = JsonSerializer.SerializeToNode(
-                new ClientSettingsDto(_generalSettings),
-                new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            var expected = JsonNode.Parse("""
+                {
+                  "interval": 33,
+                  "transitionDuration": 2.5,
+                  "downloadImages": true,
+                  "renewImagesDuration": 77,
+                  "showClock": false,
+                  "clockFormat": "HH:mm:ss",
+                  "clockDateFormat": "yyyy-MM-dd",
+                  "showPhotoDate": true,
+                  "showProgressBar": false,
+                  "photoDateFormat": "dd.MM.yyyy",
+                  "showImageDesc": true,
+                  "showPeopleDesc": false,
+                  "showTagsDesc": true,
+                  "showAlbumName": false,
+                  "showImageLocation": true,
+                  "imageLocationFormat": "City",
+                  "primaryColor": "#112233",
+                  "secondaryColor": "#445566",
+                  "style": "blur",
+                  "baseFontSize": "18px",
+                  "showWeatherDescription": false,
+                  "weatherIconUrl": "https://example.com/{IconId}.png",
+                  "imageZoom": true,
+                  "imagePan": false,
+                  "imageFill": true,
+                  "playAudio": false,
+                  "layout": "single",
+                  "language": "de"
+                }
+                """);
 
             Assert.That(JsonNode.DeepEquals(actual, expected), Is.True,
                 () => $"Expected: {expected?.ToJsonString()}\nActual: {actual?.ToJsonString()}");

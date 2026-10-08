@@ -272,7 +272,11 @@ public class PooledImmichFrameLogic : IAccountImmichFrameLogic, IDisposable
             ContentType = contentType,
             FileStream = videoResponse.Stream,
             ContentRange = contentRange,
-            IsPartial = videoResponse.StatusCode == 206,
+            // Partial only when a range was asked for. AssetController passes a partial response on as
+            // it stands - its status, its Content-Range, none of the attachment disposition a whole one
+            // gets - so taking the server's word for it let a server answering a whole request with a
+            // 206 decide how that response was served. A part nobody asked for is served as the whole.
+            IsPartial = videoResponse.StatusCode == 206 && !string.IsNullOrEmpty(rangeHeader),
             Owner = videoResponse,
             ContentLength = contentLength
         };
