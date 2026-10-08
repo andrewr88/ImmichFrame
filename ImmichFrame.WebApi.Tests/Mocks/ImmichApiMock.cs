@@ -44,25 +44,24 @@ namespace ImmichFrame.WebApi.Tests.Mocks
         }
 
         /// <summary>
-        /// Sets up the handler to answer the statistics call an unnarrowed account makes for
-        /// <c>GetTotalAssets</c>, so a profile's graph can be asked for a real number. That call is
-        /// made behind the account's API cache, which is the piece a torn-down graph has disposed.
+        /// Sets up the handler to answer the statistics search an unnarrowed account counts its
+        /// assets with for <c>GetTotalAssets</c>, so a profile's graph can be asked for a real number.
+        /// That call is made behind the account's API cache, which is the piece a torn-down graph has
+        /// disposed.
         /// </summary>
         public static Mock<HttpMessageHandler> WithAssetStatistics(this Mock<HttpMessageHandler> handler, long images)
         {
             handler.Protected()
                 .Setup<Task<HttpResponseMessage>>(
                     "SendAsync",
-                    ItExpr.Is<HttpRequestMessage>(req => req.RequestUri!.ToString().Contains("assets/statistics")),
+                    ItExpr.Is<HttpRequestMessage>(req => req.RequestUri!.ToString().Contains("search/statistics")),
                     ItExpr.IsAny<CancellationToken>()
                 )
                 .ReturnsAsync(() => new HttpResponseMessage
                 {
                     StatusCode = HttpStatusCode.OK,
-                    Content = new StringContent(JsonSerializer.Serialize(new AssetStatsResponseDto
+                    Content = new StringContent(JsonSerializer.Serialize(new SearchStatisticsResponseDto
                     {
-                        Images = images,
-                        Videos = 0,
                         Total = images
                     }))
                 });

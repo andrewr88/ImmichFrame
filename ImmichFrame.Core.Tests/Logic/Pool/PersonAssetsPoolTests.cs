@@ -86,6 +86,92 @@ public class PersonAssetsPoolTests // Renamed from PeopleAssetsPoolTests to matc
     }
 
     [Test]
+    public async Task LoadAssets_CallsSearchAssetsAsync_WithPersonId_AndPaginates()
+    {
+        // Arrange
+        var personId = Guid.NewGuid();
+        _mockAccountSettings.SetupGet(s => s.People).Returns(new List<Guid> { personId });
+
+        var batchSize = 1000; // From PersonAssetsPool.cs
+        var assetsPage1 = Enumerable.Range(0, batchSize).Select(i => CreateAsset($"person_p1_{i}")).ToList();
+        var assetsPage2 = Enumerable.Range(0, 50).Select(i => CreateAsset($"person_p2_{i}")).ToList();
+
+        _mockImmichApi.SetupSequence(api => api.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<MetadataSearchDto>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(CreateSearchResult(assetsPage1))  // Page 1, a full page indicates more might be available
+            .ReturnsAsync(CreateSearchResult(assetsPage2)); // Page 2, a partial page indicates this is the last page
+
+        // Act
+        var result = (await _personAssetsPool.TestLoadAssets()).ToList();
+
+        // Assert - with Exif, as the account's date and rating filters drop every asset without it
+        Assert.That(result.Count, Is.EqualTo(batchSize + 50));
+        Assert.That(result.Any(a => a.Id == FixtureHelpers.GuidFor("person_p1_0")));
+        Assert.That(result.Any(a => a.Id == FixtureHelpers.GuidFor("person_p2_49")));
+
+        _mockImmichApi.Verify(api => api.SearchAssetsAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.Is<MetadataSearchDto>(dto =>
+                dto.PersonIds.Contains(personId) &&
+                dto.Type == AssetTypeEnum.IMAGE &&
+                dto.WithExif == true &&
+                dto.WithPeople == true &&
+                dto.Page == 1 && dto.Size == batchSize),
+            It.IsAny<CancellationToken>()), Times.Once);
+
+        _mockImmichApi.Verify(api => api.SearchAssetsAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.Is<MetadataSearchDto>(dto =>
+                dto.PersonIds.Contains(personId) &&
+                dto.Type == AssetTypeEnum.IMAGE &&
+                dto.WithExif == true &&
+                dto.WithPeople == true &&
+                dto.Page == 2 && dto.Size == batchSize),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Test]
+    public async Task LoadAssets_ShowVideos_SearchesEveryType()
+    {
+        // Arrange
+        var personId = Guid.NewGuid();
+        _mockAccountSettings.SetupGet(s => s.People).Returns(new List<Guid> { personId });
+        _mockAccountSettings.SetupGet(s => s.ShowVideos).Returns(true);
+
+        _mockImmichApi.Setup(api => api.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<MetadataSearchDto>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(CreateSearchResult(new List<AssetResponseDto> { CreateAsset("video", AssetTypeEnum.VIDEO) }));
+
+        // Act
+        await _personAssetsPool.TestLoadAssets();
+
+        // Assert
+        _mockImmichApi.Verify(api => api.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.Is<MetadataSearchDto>(dto => dto.PersonIds.Contains(personId) && dto.Type == null), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Test]
+    public async Task LoadAssets_AssetWithTwoPeople_IsCountedAndReturnedOnce()
+    {
+        // Arrange - through the pool's cache rather than LoadAssets alone, as GetAssetCount and GetAssets read it
+        _mockApiCache.Setup(c => c.GetOrAddAsync(It.IsAny<string>(), It.IsAny<Func<Task<IEnumerable<AssetResponseDto>>>>()))
+            .Returns<string, Func<Task<IEnumerable<AssetResponseDto>>>>((_, factory) => factory());
+
+        var person1Id = Guid.NewGuid();
+        var person2Id = Guid.NewGuid();
+        _mockAccountSettings.SetupGet(s => s.People).Returns(new List<Guid> { person1Id, person2Id });
+
+        // Each search answers with a copy of its own, as each response from Immich is read afresh
+        _mockImmichApi.Setup(api => api.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.Is<MetadataSearchDto>(d => d.PersonIds.Contains(person1Id)), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(CreateSearchResult(new List<AssetResponseDto> { CreateAsset("p1_only"), CreateAsset("together") }));
+        _mockImmichApi.Setup(api => api.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.Is<MetadataSearchDto>(d => d.PersonIds.Contains(person2Id)), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(CreateSearchResult(new List<AssetResponseDto> { CreateAsset("together"), CreateAsset("p2_only") }));
+
+        // Act
+        var count = await _personAssetsPool.GetAssetCount();
+        var result = (await _personAssetsPool.GetAssets(25)).ToList();
+
+        // Assert - a photo of both people is one photo
+        Assert.That(count, Is.EqualTo(3));
+        Assert.That(result.Select(a => a.Id), Is.EquivalentTo(new[] { FixtureHelpers.GuidFor("p1_only"), FixtureHelpers.GuidFor("together"), FixtureHelpers.GuidFor("p2_only") }));
+    }
+
+    [Test]
     public async Task LoadAssets_NoPeopleConfigured_ReturnsEmpty()
     {
         _mockAccountSettings.SetupGet(s => s.People).Returns(new List<Guid>());

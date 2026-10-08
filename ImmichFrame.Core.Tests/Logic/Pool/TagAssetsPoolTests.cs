@@ -146,6 +146,27 @@ public class TagAssetsPoolTests
     }
 
     [Test]
+    public async Task LoadAssets_ShowVideos_SearchesEveryType()
+    {
+        var tagId = Guid.NewGuid();
+        _settings.SetupGet(s => s.Tags).Returns(new List<string> { "Tag" });
+        _settings.SetupGet(s => s.ShowVideos).Returns(true);
+
+        _api.Setup(a => a.GetAllTagsAsync(default))
+            .ReturnsAsync([new TagResponseDto { Id = tagId, Value = "Tag" }]);
+        _api.Setup(a => a.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<MetadataSearchDto>(), default))
+            .ReturnsAsync(SearchResult([Asset("1")]));
+
+        await _pool.LoadAssetsPublic();
+
+        _api.Verify(a => a.SearchAssetsAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.Is<MetadataSearchDto>(d =>
+                d.TagIds.Contains(tagId) &&
+                d.Type == null
+            ), default), Times.Once);
+    }
+
+    [Test]
     public async Task LoadAssets_AttachesTagsDirectlyWithoutExtraApiCalls()
     {
         var tagId = Guid.NewGuid();

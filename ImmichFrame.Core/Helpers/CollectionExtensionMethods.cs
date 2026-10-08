@@ -2,8 +2,6 @@ namespace ImmichFrame.Core.Helpers;
 
 public static class CollectionExtensionMethods
 {
-    private static readonly Random _random = new();
-    
     public static IEnumerable<T> TakeProportional<T>(this IEnumerable<T> enumerable, double proportion)
     {
         if (proportion <= 0) return [];
@@ -46,7 +44,9 @@ public static class CollectionExtensionMethods
 
         var totalCount = sourcesAndCounts.Sum(source => source.Count);
 
-        var randomIndex = _random.NextInt64(totalCount);
+        // Random.Shared rather than a Random of this class's own: concurrent requests choose at
+        // once, and a Random is not safe to share between threads.
+        var randomIndex = Random.Shared.NextInt64(totalCount);
 
         foreach (var sourceAndCount in sourcesAndCounts)
         {
@@ -60,6 +60,24 @@ public static class CollectionExtensionMethods
 
         return default;
     }
-    
-    public static IEnumerable<T> Shuffle<T>(this IEnumerable<T> source) => source.OrderBy(_ => _random.Next());
+
+    /// <summary>
+    /// The items of <paramref name="source"/> in a random order, by a Fisher-Yates shuffle that
+    /// makes one swap per item read: taking k of n items costs k swaps, where ordering by random
+    /// keys sorted all n. Deferred, as that sort was - <paramref name="source"/> is read, and
+    /// shuffled afresh, each time the result is enumerated - and a copy is shuffled rather than
+    /// <paramref name="source"/> itself, which can be a list every request reads.
+    /// </summary>
+    public static IEnumerable<T> Shuffle<T>(this IEnumerable<T> source)
+    {
+        var items = source.ToArray();
+
+        for (var i = 0; i < items.Length; i++)
+        {
+            var pick = Random.Shared.Next(i, items.Length);
+            (items[i], items[pick]) = (items[pick], items[i]);
+
+            yield return items[i];
+        }
+    }
 }

@@ -14,6 +14,10 @@ public class AllAssetsPoolTests
     private Mock<IAccountSettings> _mockAccountSettings;
     private AllAssetsPool _allAssetsPool;
 
+    // The searches GetAssetCount and GetAssets last sent, once SetUpCountAndDraw has been called
+    private StatisticsSearchDto? _counted;
+    private RandomSearchDto? _drawn;
+
     [SetUp]
     public void Setup()
     {
@@ -34,9 +38,9 @@ public class AllAssetsPoolTests
         // Default ApiCache setup
         _mockApiCache.Setup(c => c.GetOrAddAsync(
                 It.IsAny<string>(),
-                It.IsAny<Func<Task<AssetStatsResponseDto>>>() // For GetAssetCount
+                It.IsAny<Func<Task<SearchStatisticsResponseDto>>>() // For GetAssetCount
             ))
-            .Returns<string, Func<Task<AssetStatsResponseDto>>>(async (key, factory) => await factory());
+            .Returns<string, Func<Task<SearchStatisticsResponseDto>>>(async (key, factory) => await factory());
 
         _mockApiCache.Setup(c => c.GetOrAddAsync(
             It.IsAny<string>(),
@@ -66,24 +70,24 @@ public class AllAssetsPoolTests
     public async Task GetAssetCount_CallsApiAndCache_OnlyImages()
     {
         // Arrange
-        var stats = new AssetStatsResponseDto { Images = 100, Videos = 40 };
-        _mockImmichApi.Setup(api => api.GetAssetStatisticsAsync(null, false, null, It.IsAny<CancellationToken>())).ReturnsAsync(stats);
+        _mockImmichApi.Setup(api => api.SearchAssetStatisticsAsync(It.IsAny<StatisticsSearchDto>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SearchStatisticsResponseDto { Total = 12 });
 
         // Act
         var count = await _allAssetsPool.GetAssetCount();
 
         // Assert
-        Assert.That(count, Is.EqualTo(100));
-        _mockImmichApi.Verify(api => api.GetAssetStatisticsAsync(null, false, null, It.IsAny<CancellationToken>()), Times.Once);
-        _mockApiCache.Verify(cache => cache.GetOrAddAsync(nameof(AllAssetsPool), It.IsAny<Func<Task<AssetStatsResponseDto>>>()), Times.Once);
+        Assert.That(count, Is.EqualTo(12));
+        _mockImmichApi.Verify(api => api.SearchAssetStatisticsAsync(It.Is<StatisticsSearchDto>(dto => dto.Type == AssetTypeEnum.IMAGE), It.IsAny<CancellationToken>()), Times.Once);
+        _mockApiCache.Verify(cache => cache.GetOrAddAsync(nameof(AllAssetsPool), It.IsAny<Func<Task<SearchStatisticsResponseDto>>>()), Times.Once);
     }
 
     [Test]
     public async Task GetAssetCount_CallsApiAndCache_WithVideos()
     {
         // Arrange
-        var stats = new AssetStatsResponseDto { Images = 100, Videos = 40 };
-        _mockImmichApi.Setup(api => api.GetAssetStatisticsAsync(null, false, null, It.IsAny<CancellationToken>())).ReturnsAsync(stats);
+        _mockImmichApi.Setup(api => api.SearchAssetStatisticsAsync(It.IsAny<StatisticsSearchDto>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SearchStatisticsResponseDto { Total = 17 });
 
         _mockAccountSettings.SetupGet(s => s.ShowVideos).Returns(true);
 
@@ -91,10 +95,85 @@ public class AllAssetsPoolTests
         var count = await _allAssetsPool.GetAssetCount();
 
         // Assert
-        Assert.That(count, Is.EqualTo(140));
-        _mockImmichApi.Verify(api => api.GetAssetStatisticsAsync(null, false, null, It.IsAny<CancellationToken>()), Times.Once);
-        _mockApiCache.Verify(cache => cache.GetOrAddAsync(nameof(AllAssetsPool), It.IsAny<Func<Task<AssetStatsResponseDto>>>()), Times.Once);
+        Assert.That(count, Is.EqualTo(17));
+        _mockImmichApi.Verify(api => api.SearchAssetStatisticsAsync(It.Is<StatisticsSearchDto>(dto => dto.Type == null), It.IsAny<CancellationToken>()), Times.Once);
+        _mockApiCache.Verify(cache => cache.GetOrAddAsync(nameof(AllAssetsPool), It.IsAny<Func<Task<SearchStatisticsResponseDto>>>()), Times.Once);
     }
+
+    [Test]
+    public async Task GetAssetCount_CountsWithTheFiltersOfTheRandomSearch()
+    {
+        // Arrange - an account narrowed by date and rating, which the library's own statistics ignore
+        var fromDate = new DateTime(2020, 1, 1);
+        var untilDate = new DateTime(2021, 1, 1);
+        _mockAccountSettings.SetupGet(s => s.ImagesFromDate).Returns(fromDate);
+        _mockAccountSettings.SetupGet(s => s.ImagesUntilDate).Returns(untilDate);
+        _mockAccountSettings.SetupGet(s => s.Rating).Returns(4);
+
+        SetUpCountAndDraw();
+
+        // Act
+        await _allAssetsPool.GetAssetCount();
+        await _allAssetsPool.GetAssets(5);
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(_counted, Is.Not.Null);
+            Assert.That(_counted?.Type, Is.EqualTo(AssetTypeEnum.IMAGE));
+            Assert.That(_counted?.Visibility, Is.EqualTo(AssetVisibility.Timeline));
+            Assert.That(_counted?.TakenAfter, Is.EqualTo(new DateTimeOffset(fromDate)));
+            Assert.That(_counted?.TakenBefore, Is.EqualTo(new DateTimeOffset(untilDate)));
+            Assert.That(_counted?.Rating, Is.EqualTo(4));
+            Assert.That(Filters(_counted), Is.EqualTo(Filters(_drawn)), "counted with other filters than the random search draws with");
+        });
+    }
+
+    [Test]
+    public async Task GetAssetCount_ShowArchivedAndVideosFromDays_CountsWithTheFiltersOfTheRandomSearch()
+    {
+        // Arrange
+        _mockAccountSettings.SetupGet(s => s.ShowArchived).Returns(true);
+        _mockAccountSettings.SetupGet(s => s.ShowVideos).Returns(true);
+        _mockAccountSettings.SetupGet(s => s.ImagesFromDays).Returns(10);
+
+        SetUpCountAndDraw();
+
+        // Act
+        await _allAssetsPool.GetAssetCount();
+        await _allAssetsPool.GetAssets(5);
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(_counted, Is.Not.Null);
+            Assert.That(_counted?.Type, Is.Null);
+            Assert.That(_counted?.Visibility, Is.EqualTo(AssetVisibility.Archive));
+            Assert.That(_counted?.TakenAfter?.Date, Is.EqualTo(DateTime.Today.AddDays(-10)));
+            Assert.That(_counted?.TakenBefore, Is.Null);
+            Assert.That(_counted?.Rating, Is.Null);
+            Assert.That(Filters(_counted), Is.EqualTo(Filters(_drawn)), "counted with other filters than the random search draws with");
+        });
+    }
+
+    // Captures the search each of GetAssetCount and GetAssets sends.
+    private void SetUpCountAndDraw()
+    {
+        _counted = null;
+        _drawn = null;
+
+        _mockImmichApi.Setup(api => api.SearchAssetStatisticsAsync(It.IsAny<StatisticsSearchDto>(), It.IsAny<CancellationToken>()))
+            .Callback<StatisticsSearchDto, CancellationToken>((dto, _) => _counted = dto)
+            .ReturnsAsync(new SearchStatisticsResponseDto { Total = 7 });
+        _mockImmichApi.Setup(api => api.SearchRandomAsync(It.IsAny<RandomSearchDto>(), It.IsAny<CancellationToken>()))
+            .Callback<RandomSearchDto, CancellationToken>((dto, _) => _drawn = dto)
+            .ReturnsAsync(new List<AssetResponseDto>());
+    }
+
+    // The fields an account's settings filter a search by, which the two searches have in common.
+    private static object?[] Filters(StatisticsSearchDto? dto) => [dto?.Type, dto?.Visibility, dto?.TakenAfter, dto?.TakenBefore, dto?.Rating];
+
+    private static object?[] Filters(RandomSearchDto? dto) => [dto?.Type, dto?.Visibility, dto?.TakenAfter, dto?.TakenBefore, dto?.Rating];
 
     [Test]
     public async Task GetAssets_CallsSearchRandomAsync_WithCorrectParameters_OnlyImages()

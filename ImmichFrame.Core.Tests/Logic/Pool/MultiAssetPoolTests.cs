@@ -6,6 +6,8 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using ImmichFrame.Core.Api;
+using ImmichFrame.Core.Helpers;
+using ImmichFrame.Core.Interfaces;
 using ImmichFrame.Core.Logic.Pool;
 using NUnit.Framework.Constraints;
 
@@ -28,6 +30,16 @@ namespace ImmichFrame.Core.Tests.Logic.Pool
         }
 
         private AssetResponseDto CreateAsset(string id) => new AssetResponseDto { Id = FixtureHelpers.GuidFor(id), OriginalPath = $"/path/{id}.jpg", Type = AssetTypeEnum.IMAGE, ExifInfo = new ExifResponseDto() };
+
+        // Sets a pool up the way CachingApiAssetsPool behaves: its count is what it holds rather than
+        // what it has left, so it does not drop as assets are handed out, and every call hands out
+        // up to the number asked for from all it holds, never one asset twice.
+        private static void SetUpPool(Mock<IAssetPool> pool, long count, params AssetResponseDto[] assets)
+        {
+            pool.Setup(p => p.GetAssetCount(It.IsAny<CancellationToken>())).ReturnsAsync(count);
+            pool.Setup(p => p.GetAssets(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync((int requested, CancellationToken _) => assets.Take(requested).ToList());
+        }
 
         [Test]
         public async Task GetAssetCount_NoPools_ReturnsZero()
@@ -66,45 +78,34 @@ namespace ImmichFrame.Core.Tests.Logic.Pool
         {
             var asset1 = CreateAsset("a1");
             var asset2 = CreateAsset("a2");
-            var pool1AvailableAssets = new Queue<AssetResponseDto>(new List<AssetResponseDto> { asset1, asset2 });
-            var allAssetsFromPool1 = new List<AssetResponseDto> { asset1, asset2 };
-
-            _mockPool1.Setup(p => p.GetAssetCount(It.IsAny<CancellationToken>()))
-                .ReturnsAsync(() => (long)pool1AvailableAssets.Count);
-
-            _mockPool1.Setup(p => p.GetAssets(1, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(() => pool1AvailableAssets.Any()
-                    ? new List<AssetResponseDto> { pool1AvailableAssets.Dequeue() }
-                    : new List<AssetResponseDto>()); // Moq wraps this in Task.FromResult
+            SetUpPool(_mockPool1, 2, asset1, asset2);
 
             _multiPool = new MultiAssetPool(new List<IAssetPool> { _mockPool1.Object });
 
             var result = (await _multiPool.GetAssets(5, CancellationToken.None)).ToList();
-            Assert.That(result.Count, Is.EqualTo(2));
-            Assert.That(result.All(x => allAssetsFromPool1.Contains(x)), Is.True);
-            Assert.That(allAssetsFromPool1.All(x => result.Contains(x)), Is.True);
+            Assert.That(result, Is.EquivalentTo(new[] { asset1, asset2 }));
+
+            // Asked once, and for no more than it holds
+            _mockPool1.Verify(p => p.GetAssets(It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once());
+            _mockPool1.Verify(p => p.GetAssets(2, It.IsAny<CancellationToken>()), Times.Once());
         }
 
         [Test]
         public async Task GetAssets_TotalMoreThanRequested_AggregatesAssets()
         {
-            var p1a1 = CreateAsset("p1a1");
-            var pool1Queue = new Queue<AssetResponseDto>(new[] { p1a1 });
-            _mockPool1.Setup(p => p.GetAssetCount(It.IsAny<CancellationToken>())).ReturnsAsync(() => (long)pool1Queue.Count);
-            _mockPool1.Setup(p => p.GetAssets(1, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(() => pool1Queue.Any() ? new List<AssetResponseDto> { pool1Queue.Dequeue() } : new List<AssetResponseDto>());
-
-            var p2a1 = CreateAsset("p2a1");
-            var pool2Queue = new Queue<AssetResponseDto>(new[] { p2a1 });
-            _mockPool2.Setup(p => p.GetAssetCount(It.IsAny<CancellationToken>())).ReturnsAsync(() => (long)pool2Queue.Count);
-            _mockPool2.Setup(p => p.GetAssets(1, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(() => pool2Queue.Any() ? new List<AssetResponseDto> { pool2Queue.Dequeue() } : new List<AssetResponseDto>());
+            var pool1Assets = new[] { CreateAsset("p1a1"), CreateAsset("p1a2") };
+            var pool2Assets = new[] { CreateAsset("p2a1"), CreateAsset("p2a2") };
+            SetUpPool(_mockPool1, 2, pool1Assets);
+            SetUpPool(_mockPool2, 2, pool2Assets);
 
             _multiPool = new MultiAssetPool(new List<IAssetPool> { _mockPool1.Object, _mockPool2.Object });
 
-            var result = (await _multiPool.GetAssets(2, CancellationToken.None)).ToList();
-            Assert.That(result.Count, Is.EqualTo(2));
-            Assert.That(result.Contains(p1a1) && result.Contains(p2a1), Is.True);
+            // Neither pool holds 3, so both have to give some
+            var result = (await _multiPool.GetAssets(3, CancellationToken.None)).ToList();
+            Assert.That(result.Count, Is.EqualTo(3));
+            Assert.That(result, Is.Unique);
+            Assert.That(result.Intersect(pool1Assets), Is.Not.Empty);
+            Assert.That(result.Intersect(pool2Assets), Is.Not.Empty);
         }
 
         [Test]
@@ -112,192 +113,161 @@ namespace ImmichFrame.Core.Tests.Logic.Pool
         {
             var p1a1 = CreateAsset("p1a1");
             var p1a2 = CreateAsset("p1a2");
-            var pool1AvailableAssets = new Queue<AssetResponseDto>(new List<AssetResponseDto> { p1a1, p1a2 });
-            var originalPool1Assets = new List<AssetResponseDto> { p1a1, p1a2 };
-
-            var pool1ReportedCount = 5L;
-            _mockPool1.Setup(p => p.GetAssetCount(It.IsAny<CancellationToken>()))
-                .ReturnsAsync(() => pool1ReportedCount);
-            _mockPool1.Setup(p => p.GetAssets(1, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(() =>
-                {
-                    if (pool1AvailableAssets.Any())
-                    {
-                        if (pool1AvailableAssets.Count == 1) pool1ReportedCount = 0L; // Update reported count after last actual asset
-                        return new List<AssetResponseDto> { pool1AvailableAssets.Dequeue() };
-                    }
-
-                    pool1ReportedCount = 0L; // Ensure reported count is 0 if called after exhaustion
-                    return new List<AssetResponseDto>();
-                });
-
             var p2a1 = CreateAsset("p2a1");
-            var pool2AvailableAssets = new Queue<AssetResponseDto>(new List<AssetResponseDto> { p2a1 });
-            var originalPool2Assets = new List<AssetResponseDto> { p2a1 };
-            _mockPool2.Setup(p => p.GetAssetCount(It.IsAny<CancellationToken>()))
-                .ReturnsAsync(() => (long)pool2AvailableAssets.Count);
-            _mockPool2.Setup(p => p.GetAssets(1, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(() => pool2AvailableAssets.Any() ? new List<AssetResponseDto> { pool2AvailableAssets.Dequeue() } : new List<AssetResponseDto>());
+
+            // Pool1 reports 5 assets, but only has 2 to hand out
+            SetUpPool(_mockPool1, 5, p1a1, p1a2);
+            SetUpPool(_mockPool2, 1, p2a1);
 
             _multiPool = new MultiAssetPool(new List<IAssetPool> { _mockPool1.Object, _mockPool2.Object });
-            var result = (await _multiPool.GetAssets(5, CancellationToken.None)).ToList();
 
-            Assert.That(result.Count, Is.EqualTo(3));
-            var expectedTotalAssets = originalPool1Assets.Concat(originalPool2Assets).ToList();
-            Assert.That(result.All(x => expectedTotalAssets.Contains(x)), Is.True);
-            Assert.That(expectedTotalAssets.All(x => result.Contains(x)), Is.True);
+            // All 6 the counts suggest, so each pool is asked for everything it reports
+            var result = (await _multiPool.GetAssets(6, CancellationToken.None)).ToList();
+
+            Assert.That(result, Is.EquivalentTo(new[] { p1a1, p1a2, p2a1 }));
         }
 
         [Test]
-        public async Task GetAssets_DifferentAssetCounts_RetrievesAssetsFromPools()
+        public async Task GetAssets_DifferentAssetCounts_AsksEachPoolOnceForItsShare()
         {
-            var p1a1 = CreateAsset("p1a1");
-            var p1a2 = CreateAsset("p1a2");
-            var p1a3 = CreateAsset("p1a3");
-            var pool1Queue = new Queue<AssetResponseDto>(new List<AssetResponseDto> { p1a1, p1a2, p1a3 });
-            var originalPool1Assets = new List<AssetResponseDto> { p1a1, p1a2, p1a3 };
-
+            var pool1Assets = new[] { CreateAsset("p1a1"), CreateAsset("p1a2"), CreateAsset("p1a3") };
             var p2a1 = CreateAsset("p2a1");
-            var pool2Queue = new Queue<AssetResponseDto>(new List<AssetResponseDto> { p2a1 });
-            var originalPool2Assets = new List<AssetResponseDto> { p2a1 };
-
-            _mockPool1.Setup(p => p.GetAssetCount(It.IsAny<CancellationToken>()))
-                .ReturnsAsync(() => (long)pool1Queue.Count);
-            _mockPool1.Setup(p => p.GetAssets(1, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(() => pool1Queue.Any() ? new List<AssetResponseDto> { pool1Queue.Dequeue() } : new List<AssetResponseDto>());
-
-            _mockPool2.Setup(p => p.GetAssetCount(It.IsAny<CancellationToken>()))
-                .ReturnsAsync(() => (long)pool2Queue.Count);
-            _mockPool2.Setup(p => p.GetAssets(1, It.IsAny<CancellationToken>()))
-                .ReturnsAsync(() => pool2Queue.Any() ? new List<AssetResponseDto> { pool2Queue.Dequeue() } : new List<AssetResponseDto>());
+            SetUpPool(_mockPool1, 3, pool1Assets);
+            SetUpPool(_mockPool2, 1, p2a1);
 
             _multiPool = new MultiAssetPool(new List<IAssetPool> { _mockPool1.Object, _mockPool2.Object });
 
-            var retrievedAssets = new List<AssetResponseDto>();
-            for (int i = 0; i < 5; i++)
-            {
-                var assetResultList = await _multiPool.GetAssets(1, CancellationToken.None);
-                var assetResult = assetResultList.FirstOrDefault();
-                if (assetResult != null)
-                {
-                    retrievedAssets.Add(assetResult);
-                }
-                else if (retrievedAssets.Count >= 4)
-                {
-                    break;
-                }
-            }
+            var result = (await _multiPool.GetAssets(4, CancellationToken.None)).ToList();
 
-            Assert.That(retrievedAssets.Count, Is.EqualTo(4));
-            Assert.That(retrievedAssets.Count(a => originalPool1Assets.Contains(a)), Is.EqualTo(3));
-            Assert.That(retrievedAssets.Count(a => originalPool2Assets.Contains(a)), Is.EqualTo(1));
+            Assert.That(result, Is.EquivalentTo(pool1Assets.Append(p2a1)));
+            _mockPool1.Verify(p => p.GetAssets(It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once());
+            _mockPool1.Verify(p => p.GetAssets(3, It.IsAny<CancellationToken>()), Times.Once());
+            _mockPool2.Verify(p => p.GetAssets(It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once());
+            _mockPool2.Verify(p => p.GetAssets(1, It.IsAny<CancellationToken>()), Times.Once());
         }
 
         [Test]
         public async Task GetAssets_PoolWithZeroCount_IsNotCalledForAssets()
         {
-            var assets1 = new List<AssetResponseDto> { CreateAsset("p1a1") };
-            _mockPool1.Setup(p => p.GetAssetCount(It.IsAny<CancellationToken>())).ReturnsAsync(1L);
-            _mockPool1.Setup(p => p.GetAssets(1, It.IsAny<CancellationToken>())).ReturnsAsync(assets1);
-
-            _mockPool2.Setup(p => p.GetAssetCount(It.IsAny<CancellationToken>())).ReturnsAsync(0L);
-            _mockPool2.Setup(p => p.GetAssets(It.IsAny<int>(), It.IsAny<CancellationToken>())).ReturnsAsync(new List<AssetResponseDto>());
-
-            _multiPool = new MultiAssetPool(new List<IAssetPool> { _mockPool1.Object, _mockPool2.Object });
-            var result = (await _multiPool.GetAssets(1, CancellationToken.None)).ToList();
-
-            Assert.That(result.Count, Is.EqualTo(1));
-            Assert.That(result.First(), Is.SameAs(assets1.First()));
-        }
-
-        [Test]
-        public async Task GetNextAssetBehavior_NoAssetsInAnyPool_ReturnsNull()
-        {
-            _mockPool1.Setup(p => p.GetAssetCount(It.IsAny<CancellationToken>())).ReturnsAsync(0L);
-            _mockPool2.Setup(p => p.GetAssetCount(It.IsAny<CancellationToken>())).ReturnsAsync(0L);
-            _multiPool = new MultiAssetPool(new List<IAssetPool> { _mockPool1.Object, _mockPool2.Object });
-
-            var result = (await _multiPool.GetAssets(1, CancellationToken.None)).FirstOrDefault();
-            Assert.That(result, Is.Null);
-        }
-
-        [Test]
-        public async Task GetNextAssetBehavior_RetrievesAllAssets()
-        {
-            var assetP1A1 = CreateAsset("P1A1");
-            var assetP2A1 = CreateAsset("P2A1");
-            var q1 = new Queue<AssetResponseDto>(new[] { assetP1A1 });
-            var q2 = new Queue<AssetResponseDto>(new[] { assetP2A1 });
-
-            _mockPool1.Setup(p => p.GetAssetCount(It.IsAny<CancellationToken>())).ReturnsAsync(() => (long)q1.Count);
-            _mockPool1.Setup(p => p.GetAssets(1, It.IsAny<CancellationToken>())).ReturnsAsync(() => q1.Any() ? new List<AssetResponseDto> { q1.Dequeue() } : new List<AssetResponseDto>());
-
-            _mockPool2.Setup(p => p.GetAssetCount(It.IsAny<CancellationToken>())).ReturnsAsync(() => (long)q2.Count);
-            _mockPool2.Setup(p => p.GetAssets(1, It.IsAny<CancellationToken>())).ReturnsAsync(() => q2.Any() ? new List<AssetResponseDto> { q2.Dequeue() } : new List<AssetResponseDto>());
-
-            _multiPool = new MultiAssetPool(new List<IAssetPool> { _mockPool1.Object, _mockPool2.Object });
-
-            var results = new HashSet<AssetResponseDto>();
-            var asset1 = (await _multiPool.GetAssets(1, CancellationToken.None)).FirstOrDefault();
-            if (asset1 != null) results.Add(asset1);
-
-            var asset2 = (await _multiPool.GetAssets(1, CancellationToken.None)).FirstOrDefault();
-            if (asset2 != null) results.Add(asset2);
-
-            Assert.That(results.Count, Is.EqualTo(2));
-            Assert.That(results, Does.Contain(assetP1A1));
-            Assert.That(results, Does.Contain(assetP2A1));
-
-            var asset3 = (await _multiPool.GetAssets(1, CancellationToken.None)).FirstOrDefault();
-            Assert.That(asset3, Is.Null);
-        }
-
-        [Test]
-        public async Task GetNextAssetBehavior_PoolWithZeroCount_IsNotCalled()
-        {
             var asset1 = CreateAsset("p1a1");
-            var q1 = new Queue<AssetResponseDto>(new[] { asset1 });
-            _mockPool1.Setup(p => p.GetAssetCount(It.IsAny<CancellationToken>())).ReturnsAsync(() => (long)q1.Count);
-            _mockPool1.Setup(p => p.GetAssets(1, It.IsAny<CancellationToken>())).ReturnsAsync(() => q1.Any() ? new List<AssetResponseDto> { q1.Dequeue() } : new List<AssetResponseDto>());
-
-            _mockPool2.Setup(p => p.GetAssetCount(It.IsAny<CancellationToken>())).ReturnsAsync(0L);
-            _mockPool2.Setup(p => p.GetAssets(It.IsAny<int>(), It.IsAny<CancellationToken>())).ReturnsAsync(new List<AssetResponseDto>());
-
-            _multiPool = new MultiAssetPool(new List<IAssetPool> { _mockPool1.Object, _mockPool2.Object });
-
-            var result = (await _multiPool.GetAssets(1, CancellationToken.None)).FirstOrDefault();
-            Assert.That(result, Is.SameAs(asset1));
-
-            _mockPool1.Verify(p => p.GetAssets(1, It.IsAny<CancellationToken>()), Times.Once());
-            _mockPool2.Verify(p => p.GetAssets(1, It.IsAny<CancellationToken>()), Times.Never());
-
-            var nextResult = (await _multiPool.GetAssets(1, CancellationToken.None)).FirstOrDefault();
-            Assert.That(nextResult, Is.Null, "Pool1 exhausted, Pool2 zero count, should be null");
-        }
-
-        [Test]
-        public async Task GetNextAssetBehavior_PoolIsExhausted_SwitchesToNextAvailablePool()
-        {
-            var assetP2A1 = CreateAsset("P2A1");
-            var assetP3A1 = CreateAsset("P3A1");
-            var q2 = new Queue<AssetResponseDto>(new[] { assetP2A1 });
-            var q3 = new Queue<AssetResponseDto>(new[] { assetP3A1 });
-
-            _mockPool1.Setup(p => p.GetAssetCount(It.IsAny<CancellationToken>())).ReturnsAsync(0L);
-            _mockPool2.Setup(p => p.GetAssetCount(It.IsAny<CancellationToken>())).ReturnsAsync(() => (long)q2.Count);
-            _mockPool2.Setup(p => p.GetAssets(1, It.IsAny<CancellationToken>())).ReturnsAsync(() => q2.Any() ? new List<AssetResponseDto> { q2.Dequeue() } : new List<AssetResponseDto>());
-            _mockPool3.Setup(p => p.GetAssetCount(It.IsAny<CancellationToken>())).ReturnsAsync(() => (long)q3.Count);
-            _mockPool3.Setup(p => p.GetAssets(1, It.IsAny<CancellationToken>())).ReturnsAsync(() => q3.Any() ? new List<AssetResponseDto> { q3.Dequeue() } : new List<AssetResponseDto>());
+            SetUpPool(_mockPool1, 1, asset1);
+            SetUpPool(_mockPool2, 0);
+            SetUpPool(_mockPool3, 0);
 
             _multiPool = new MultiAssetPool(new List<IAssetPool> { _mockPool1.Object, _mockPool2.Object, _mockPool3.Object });
 
-            var result1 = (await _multiPool.GetAssets(1, CancellationToken.None)).FirstOrDefault();
-            Assert.That(result1, Is.EqualTo(assetP2A1).Or.EqualTo(assetP3A1));
-            var result2 = (await _multiPool.GetAssets(1, CancellationToken.None)).FirstOrDefault();
-            if (result1 == assetP2A1)
-                Assert.That(result2, Is.SameAs(assetP3A1), "Should get asset from Pool 3 if Pool 2 was first");
-            else
-                Assert.That(result2, Is.SameAs(assetP2A1), "Should get asset from Pool 2 if Pool 3 was first");
+            // More than pool1 holds, so that the empty pools would be asked if they could be
+            var result = (await _multiPool.GetAssets(5, CancellationToken.None)).ToList();
+
+            Assert.That(result.Count, Is.EqualTo(1));
+            Assert.That(result.First(), Is.SameAs(asset1));
+            _mockPool2.Verify(p => p.GetAssets(It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never());
+            _mockPool3.Verify(p => p.GetAssets(It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never());
+        }
+
+        [Test]
+        public async Task GetAssets_NoAssetsInAnyPool_ReturnsEmpty()
+        {
+            SetUpPool(_mockPool1, 0);
+            SetUpPool(_mockPool2, 0);
+            _multiPool = new MultiAssetPool(new List<IAssetPool> { _mockPool1.Object, _mockPool2.Object });
+
+            var result = await _multiPool.GetAssets(1, CancellationToken.None);
+            Assert.That(result, Is.Empty);
+        }
+
+        [Test]
+        public async Task GetAssets_AlbumOfThreePhotos_ReturnsEachPhotoOnce()
+        {
+            // Arrange - the pool PooledImmichFrameLogic builds for an account showing one album, over a
+            // real cache: the album pool hands out from the same cached assets on every call, so its
+            // count is what it holds rather than what it has left.
+            var albumId = Guid.NewGuid();
+            var album = new List<AssetResponseDto> { CreateAsset("a1"), CreateAsset("a2"), CreateAsset("a3") };
+
+            var accountSettings = new Mock<IAccountSettings>();
+            accountSettings.SetupGet(s => s.Albums).Returns(new List<Guid> { albumId });
+
+            var immichApi = new Mock<ImmichApi>("", null!);
+            immichApi.Setup(api => api.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.Is<MetadataSearchDto>(d => d.AlbumIds.Contains(albumId)), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new SearchResponseDto { Assets = new SearchAssetResponseDto { Items = album } });
+
+            using var apiCache = new ApiCache(TimeSpan.FromMinutes(5));
+            _multiPool = new MultiAssetPool(new List<IAssetPool> { new AlbumAssetsPool(apiCache, immichApi.Object, accountSettings.Object) });
+
+            // Act - the batch the frame asks for
+            var result = (await _multiPool.GetAssets(25, CancellationToken.None)).ToList();
+
+            // Assert - each photo once, rather than 25 drawn from the 3 and shown back to back
+            Assert.That(result.Select(a => a.Id), Is.EquivalentTo(album.Select(a => a.Id)));
+        }
+
+        [Test]
+        public async Task GetAssets_PoolsOf1000And10_ShareEachBatchByCount()
+        {
+            // Arrange
+            var large = Enumerable.Range(0, 1000).Select(i => CreateAsset($"large{i}")).ToArray();
+            var small = Enumerable.Range(0, 10).Select(i => CreateAsset($"small{i}")).ToArray();
+            SetUpPool(_mockPool1, large.Length, large);
+            SetUpPool(_mockPool2, small.Length, small);
+
+            _multiPool = new MultiAssetPool(new List<IAssetPool> { _mockPool1.Object, _mockPool2.Object });
+
+            // Act - 400 batches of 25, so 10,000 assets in all
+            var batches = new List<List<AssetResponseDto>>();
+            for (var i = 0; i < 400; i++)
+            {
+                batches.Add((await _multiPool.GetAssets(25, CancellationToken.None)).ToList());
+            }
+
+            // Assert - the small pool holds 1% of the assets, so about 100 of the 10,000 are its own.
+            // Picking either pool alike would take about half of every batch from it, up to the 10 it
+            // holds - some 4,000 in all. The range is more than 7 standard deviations wide on either
+            // side of 100.
+            var smallIds = small.Select(a => a.Id).ToHashSet();
+            var fromSmall = batches.Sum(batch => batch.Count(a => smallIds.Contains(a.Id)));
+            Assert.Multiple(() =>
+            {
+                Assert.That(batches.Select(batch => batch.Count), Has.All.EqualTo(25));
+                Assert.That(fromSmall, Is.InRange(25, 250));
+            });
+        }
+
+        [Test]
+        public async Task GetAssets_AssetInTwoPools_ReturnsItOnce()
+        {
+            // Arrange - a favourite that is also in a configured album, found by each pool's own search
+            var shared = CreateAsset("shared");
+            SetUpPool(_mockPool1, 1, shared);
+            SetUpPool(_mockPool2, 1, CreateAsset("shared"));
+
+            _multiPool = new MultiAssetPool(new List<IAssetPool> { _mockPool1.Object, _mockPool2.Object });
+
+            // Act
+            var result = (await _multiPool.GetAssets(2, CancellationToken.None)).ToList();
+
+            // Assert
+            Assert.That(result.Select(a => a.Id), Is.EqualTo(new[] { shared.Id }));
+        }
+
+        [Test]
+        public async Task GetAssets_ShufflesThePoolsTogether()
+        {
+            // Arrange
+            var pool1Assets = Enumerable.Range(0, 20).Select(i => CreateAsset($"p1a{i}")).ToArray();
+            var pool2Assets = Enumerable.Range(0, 20).Select(i => CreateAsset($"p2a{i}")).ToArray();
+            SetUpPool(_mockPool1, pool1Assets.Length, pool1Assets);
+            SetUpPool(_mockPool2, pool2Assets.Length, pool2Assets);
+
+            _multiPool = new MultiAssetPool(new List<IAssetPool> { _mockPool1.Object, _mockPool2.Object });
+
+            // Act - every asset of both
+            var result = (await _multiPool.GetAssets(40, CancellationToken.None)).ToList();
+
+            // Assert - the frame shows a batch in order, so a batch that came out a pool at a time was
+            // shown a pool at a time. A shuffle puts either pool's 20 first once in 69 billion.
+            var firstHalf = result.Take(20).ToList();
+            Assert.That(firstHalf, Is.Not.SubsetOf(pool1Assets).And.Not.SubsetOf(pool2Assets));
         }
     }
 }

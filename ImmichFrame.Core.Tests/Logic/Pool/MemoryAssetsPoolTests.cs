@@ -91,6 +91,43 @@ public class MemoryAssetsPoolTests
     }
 
     [Test]
+    public async Task LoadAssets_SearchesTheMemoriesOfToday()
+    {
+        // Arrange
+        DateTimeOffset? searchDate = null;
+        _mockImmichApi.Setup(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, It.IsAny<CancellationToken>()))
+            .Callback<DateTimeOffset?, bool?, bool?, MemorySearchOrder?, long?, MemoryType?, CancellationToken>((date, _, _, _, _, _, _) => searchDate = date)
+            .ReturnsAsync(new List<MemoryResponseDto>());
+
+        // Act
+        await _memoryAssetsPool.GetAssets(1, CancellationToken.None);
+
+        // Assert - Immich works out which memories are "on this day" from the date it is given
+        Assert.That(searchDate, Is.EqualTo(DateTimeOffset.Now).Within(TimeSpan.FromSeconds(5)));
+    }
+
+    [Test]
+    public async Task LoadAssets_VideosNotShown_DoesNotFetchAssetInfoForAVideo()
+    {
+        // Arrange - a video without ExifInfo, which would be fetched only for the account's filters
+        // to drop the video afterwards
+        var memories = CreateSampleVideoMemories(1, 1, false, DateTime.Now.Year - 2);
+
+        _mockAccountSettings.Setup(x => x.ShowVideos).Returns(false);
+        _mockImmichApi.Setup(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(memories);
+        _mockImmichApi.Setup(x => x.GetAssetInfoAsync(It.IsAny<Guid>(), null, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AssetResponseDto { ExifInfo = new ExifResponseDto(), People = new List<PersonResponseDto>() });
+
+        // Act
+        var result = await _memoryAssetsPool.GetAssets(1, CancellationToken.None);
+
+        // Assert
+        Assert.That(result, Is.Empty);
+        _mockImmichApi.Verify(x => x.GetAssetInfoAsync(It.IsAny<Guid>(), null, null, It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Test]
     public async Task LoadAssets_FetchesAssetInfo_WhenExifInfoIsNull()
     {
         // Arrange

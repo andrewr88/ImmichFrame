@@ -82,6 +82,25 @@ public class FavoriteAssetsPoolTests
     }
 
     [Test]
+    public async Task LoadAssets_ShowVideos_SearchesEveryType()
+    {
+        // Arrange
+        _mockAccountSettings.SetupGet(s => s.ShowVideos).Returns(true);
+        _mockImmichApi.Setup(api => api.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<MetadataSearchDto>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(CreateSearchResult(new List<AssetResponseDto> { CreateAsset("fav_video", AssetTypeEnum.VIDEO) }));
+
+        // Act
+        await _favoriteAssetsPool.TestLoadAssets();
+
+        // Assert
+        _mockImmichApi.Verify(api => api.SearchAssetsAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.Is<MetadataSearchDto>(dto =>
+                dto.IsFavorite == true &&
+                dto.Type == null),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Test]
     public async Task LoadAssets_HandlesEmptyFavorites()
     {
         _mockImmichApi.Setup(api => api.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<MetadataSearchDto>(), It.IsAny<CancellationToken>()))
