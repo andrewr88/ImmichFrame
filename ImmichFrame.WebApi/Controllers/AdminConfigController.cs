@@ -8,7 +8,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace ImmichFrame.WebApi.Controllers;
 
 /// <summary>
-/// The configuration editor's own API: read the settings file, and write it back.
+/// The configuration editor's own API: read the stored settings document, and write it back.
 /// <para>
 /// Both actions carry the <c>AdminOnly</c> policy, which is authentication against the admin cookie
 /// <em>plus</em> the allowlist. Nothing here may follow <c>AdminSessionController.Logout</c>'s
@@ -42,12 +42,13 @@ public class AdminConfigController(ILogger<AdminConfigController> _logger, Admin
         }
         catch (ImmichFrameException ex)
         {
-            // The file on disk no longer loads - hand-edited since startup, most likely. The whole
-            // family is caught because reading it can fail in three different ways: a file that will
-            // not parse (ConfigSaveRefusedException), one that parses but the editor cannot represent
-            // faithfully, such as a YAML document using anchors (SettingsNotValidException), and a
-            // directory holding no readable configuration at all (the base type). Saying which beats
-            // a 500, and this is the one endpoint whose reader can fix it.
+            // The stored document cannot be projected into the editor's view. A current-schema
+            // settings file is imported as the text it was, after checking only that it binds, so
+            // the database can hold a document the editor cannot represent faithfully - such as a
+            // YAML document using anchors (SettingsNotValidException). The base type is
+            // ConfigLoader.CreateDocument refusing a stored format that is neither JSON nor YAML,
+            // which nothing in ImmichFrame writes. An instance nothing has configured is not an
+            // error: it reads as the defaults. Saying which beats a 500.
             _logger.LogWarning("The configuration could not be read for editing: {sanitizedReason}",
                 ex.Message.SanitizeString());
 
@@ -58,10 +59,12 @@ public class AdminConfigController(ILogger<AdminConfigController> _logger, Admin
     /// <summary>
     /// Writes the configuration back and applies it without a restart.
     /// <para>
-    /// 409 for the four refusals an operator can act on - a stale version token, a configuration that
-    /// came from environment variables, a v1 file with no conversion consent, and a directory that
-    /// cannot be written - and 400 for a configuration that simply does not load. In every one of
-    /// them the settings file is left exactly as it was.
+    /// 409 for a stale version token - another save landed after the editor read the configuration,
+    /// in this process or in another one sharing the database - and 400 for a configuration that
+    /// simply does not load. In either case the stored settings are not changed. Environment
+    /// variables and v1 files are no longer refused here: both are dealt with once, on import. Nor
+    /// is a configuration directory that cannot be written, which stops ImmichFrame from starting
+    /// at all.
     /// </para>
     /// </summary>
     [HttpPut(Name = "SaveAdminConfig")]
@@ -80,8 +83,8 @@ public class AdminConfigController(ILogger<AdminConfigController> _logger, Admin
         }
         catch (SettingsNotValidException ex)
         {
-            // The message names what is wrong and the file has not been touched, so handing it back
-            // verbatim is both safe and the whole point of validating before writing.
+            // The message names what is wrong and the stored settings are untouched, so handing it
+            // back verbatim is both safe and the whole point of validating before writing.
             _logger.LogWarning("Configuration save rejected as invalid: {sanitizedReason}",
                 ex.Message.SanitizeString());
 
@@ -89,8 +92,10 @@ public class AdminConfigController(ILogger<AdminConfigController> _logger, Admin
         }
         catch (ImmichFrameException ex)
         {
-            // Last, after its two subclasses: the configuration on disk could not be read at all, so
-            // there is nothing to save against. Not the request's fault, hence 409 rather than 400.
+            // Last, after its two subclasses. What reaches it is ConfigLoader.CreateDocument
+            // refusing a stored format that is neither JSON nor YAML - which nothing in ImmichFrame
+            // writes, so this is defensive. The stored document cannot be read, so there is nothing
+            // to save against: not the request's fault, hence 409 rather than 400.
             _logger.LogWarning("Configuration save could not proceed: {sanitizedReason}",
                 ex.Message.SanitizeString());
 

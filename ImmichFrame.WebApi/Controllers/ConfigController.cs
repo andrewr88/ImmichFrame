@@ -8,10 +8,10 @@ namespace ImmichFrame.WebApi.Controllers
     [Route("api/[controller]")]
     public class ConfigController : ControllerBase
     {
-        private readonly ILogger<AssetController> _logger;
+        private readonly ILogger<ConfigController> _logger;
         private readonly IClientSettings _settings;
 
-        public ConfigController(ILogger<AssetController> logger, IClientSettings settings)
+        public ConfigController(ILogger<ConfigController> logger, IClientSettings settings)
         {
             _logger = logger;
             _settings = settings;

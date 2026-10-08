@@ -11,17 +11,17 @@ using YamlDotNet.Serialization;
 namespace ImmichFrame.WebApi.Helpers.Config;
 
 /// <summary>
-/// Reads and rewrites the settings file on behalf of the admin editor.
+/// Reads and rewrites the stored settings document on behalf of the admin editor.
 /// <para>
-/// A save goes bind, validate, write, swap, in that order and never another: the rewritten file is
-/// parsed and validated in memory first, so a configuration that would not load is refused before
-/// the file on disk is touched, and there is no state in which the editor leaves a broken settings
-/// file behind. Only once the new file is in place is
+/// A save goes bind, validate, write, swap, in that order and never another: the rewritten document
+/// is parsed and validated in memory first, so a configuration that would not load is refused
+/// before the stored settings are touched, and there is no state in which the editor leaves a
+/// broken settings document behind. Only once the new document is stored is
 /// <see cref="SwappableConfigCatalog.Swap"/> called, so a failed write cannot leave the running
-/// process serving a configuration that is not what the file says.
+/// process serving a configuration that is not what is stored.
 /// </para>
 /// <para>
-/// Serialised on one lock. Saves are rare, the file is small, and the alternative - two
+/// Serialised on one lock. Saves are rare, the document is small, and the alternative - two
 /// administrators reading, editing and writing concurrently - is exactly the interleaving the
 /// version token exists to catch. Holding the lock across the read that produces a version token is
 /// what makes that token meaningful.

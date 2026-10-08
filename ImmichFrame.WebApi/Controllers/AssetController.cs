@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 using ImmichFrame.Core.Api;
 using ImmichFrame.Core.Exceptions;
 using ImmichFrame.Core.Interfaces;
@@ -17,15 +18,20 @@ namespace ImmichFrame.WebApi.Controllers
         public required string ImageLocation { get; set; }
     }
 
-
     [ApiController]
     [Route("api/[controller]")]
     [Authorize]
-    public class AssetController : ControllerBase
+    public partial class AssetController : ControllerBase
     {
         private readonly ILogger<AssetController> _logger;
         private readonly IImmichFrameLogic _logic;
         private readonly IGeneralSettings _settings;
+
+        // Every placeholder ImageLocationFormat may contain, matched in a single pass over the
+        // format so that a substituted city, state or country is never itself searched for
+        // placeholders.
+        [GeneratedRegex("City|State|Country")]
+        private static partial Regex LocationPlaceholder();
 
         public AssetController(ILogger<AssetController> logger, IImmichFrameLogic logic, IGeneralSettings settings)
         {
@@ -70,7 +76,7 @@ namespace ImmichFrame.WebApi.Controllers
             var sanitizedClientIdentifier = clientIdentifier.SanitizeString();
             _logger.LogDebug("AlbumInfo '{id}' requested by '{sanitizedClientIdentifier}'", id, sanitizedClientIdentifier);
 
-            return (await _logic.GetAlbumInfoById(id)).ToList() ?? throw new AssetNotFoundException("No asset was found");
+            return (await _logic.GetAlbumInfoById(id)).ToList();
         }
 
         [Obsolete("Use GetAsset instead.")]
@@ -92,7 +98,7 @@ namespace ImmichFrame.WebApi.Controllers
             var sanitizedClientIdentifier = clientIdentifier.SanitizeString();
             _logger.LogDebug("Asset '{id}' requested by '{sanitizedClientIdentifier}' (type hint: {assetType})", id, sanitizedClientIdentifier, assetType);
 
-            var rangeHeader = Request.Headers["Range"].FirstOrDefault();
+            var rangeHeader = Request.Headers.Range.FirstOrDefault();
 
             AssetResponse asset;
             try
@@ -110,11 +116,11 @@ namespace ImmichFrame.WebApi.Controllers
                 _ = _logic.SendWebhookNotification(notification);
             }
 
-            Response.Headers["Accept-Ranges"] = "bytes";
+            Response.Headers.AcceptRanges = "bytes";
 
             if (asset.IsPartial && !string.IsNullOrEmpty(asset.ContentRange))
             {
-                Response.Headers["Content-Range"] = asset.ContentRange;
+                Response.Headers.ContentRange = asset.ContentRange;
                 Response.StatusCode = 206;
                 Response.ContentType = asset.ContentType;
 
@@ -163,27 +169,43 @@ namespace ImmichFrame.WebApi.Controllers
             var notification = new AssetRequestedNotification(randomAsset.Id, sanitizedClientIdentifier);
             _ = _logic.SendWebhookNotification(notification);
 
+            // The image is copied out whole, so nothing reads the asset after this and releasing it
+            // is up to this action. Owner is null for an image, but the stream still needs closing:
+            // with DownloadImages on it is a FileStream in the image cache, and would hold its
+            // handle until the finalizer got to it.
             string randomImageBase64;
+            using (asset.Owner)
+            await using (asset.FileStream)
             using (var memoryStream = new MemoryStream())
             {
                 await asset.FileStream.CopyToAsync(memoryStream);
                 randomImageBase64 = Convert.ToBase64String(memoryStream.ToArray());
             }
 
-            randomAsset.ThumbhashImage!.Position = 0;
-            byte[] byteArray = new byte[randomAsset.ThumbhashImage.Length];
-            randomAsset.ThumbhashImage.Read(byteArray, 0, byteArray.Length);
-            string thumbHashBase64 = Convert.ToBase64String(byteArray);
+            // Immich's schema allows an asset without a thumbhash, and ThumbhashImage is null for
+            // one. A missing placeholder is no reason to fail the image it belongs to.
+            string thumbHashBase64 = string.Empty;
+            if (randomAsset.ThumbhashImage is { } thumbhashImage)
+            {
+                byte[] byteArray = new byte[thumbhashImage.Length];
+                thumbhashImage.Read(byteArray, 0, byteArray.Length);
+                thumbHashBase64 = Convert.ToBase64String(byteArray);
+            }
 
-            CultureInfo cultureInfo = new CultureInfo(_settings.Language);
-            string photoDateFormat = _settings.PhotoDateFormat!.Replace("''", "\\'");
+            CultureInfo cultureInfo = PhotoDateCulture(_settings.Language);
+            // PhotoDateFormat is null when the setting is left empty. The fallback is the web
+            // client's (asset-info.svelte) rather than the "MM/dd/yyyy" an absent key gets, so one
+            // configuration dates a photo the same way on every client.
+            string photoDateFormat = (_settings.PhotoDateFormat ?? "dd.MM.yyyy").Replace("''", "\\'");
             string photoDate = randomAsset.LocalDateTime.ToString(photoDateFormat, cultureInfo) ?? string.Empty;
 
             var locationFormat = _settings.ImageLocationFormat ?? "City,State,Country";
-            var imageLocation = locationFormat
-                .Replace("City", randomAsset.ExifInfo?.City ?? string.Empty)
-                .Replace("State", randomAsset.ExifInfo?.State ?? string.Empty)
-                .Replace("Country", randomAsset.ExifInfo?.Country ?? string.Empty);
+            var imageLocation = LocationPlaceholder().Replace(locationFormat, placeholder => placeholder.Value switch
+            {
+                "City" => randomAsset.ExifInfo?.City,
+                "State" => randomAsset.ExifInfo?.State,
+                _ => randomAsset.ExifInfo?.Country
+            } ?? string.Empty);
             imageLocation = string.Join(",", imageLocation.Split(',').Where(s => !string.IsNullOrWhiteSpace(s)));
 
             return new ImageResponse
@@ -193,6 +215,26 @@ namespace ImmichFrame.WebApi.Controllers
                 PhotoDate = photoDate,
                 ImageLocation = imageLocation
             };
+        }
+
+        /// <summary>
+        /// The culture a photo date is formatted in. <c>Language</c> is free text that nothing
+        /// validates - "en US" names no culture, and an empty YAML key binds it to null - so a
+        /// value no culture answers to costs the date its localisation rather than failing the
+        /// response.
+        /// </summary>
+        private static CultureInfo PhotoDateCulture(string? language)
+        {
+            if (language is null) return CultureInfo.InvariantCulture;
+
+            try
+            {
+                return new CultureInfo(language);
+            }
+            catch (CultureNotFoundException)
+            {
+                return CultureInfo.InvariantCulture;
+            }
         }
     }
 }

@@ -9,10 +9,10 @@ namespace ImmichFrame.WebApi.Controllers
     [Authorize]
     public class CalendarController : ControllerBase
     {
-        private readonly ILogger<AssetController> _logger;
+        private readonly ILogger<CalendarController> _logger;
         private readonly ICalendarService _calendarService;
 
-        public CalendarController(ILogger<AssetController> logger, ICalendarService calendarService)
+        public CalendarController(ILogger<CalendarController> logger, ICalendarService calendarService)
         {
             _logger = logger;
             _calendarService = calendarService;

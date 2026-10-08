@@ -9,10 +9,10 @@ namespace ImmichFrame.WebApi.Controllers
     [Authorize]
     public class WeatherController : ControllerBase
     {
-        private readonly ILogger<AssetController> _logger;
+        private readonly ILogger<WeatherController> _logger;
         private readonly IWeatherService _weatherService;
 
-        public WeatherController(ILogger<AssetController> logger, IWeatherService weatherService)
+        public WeatherController(ILogger<WeatherController> logger, IWeatherService weatherService)
         {
             _logger = logger;
             _weatherService = weatherService;
