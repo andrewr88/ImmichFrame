@@ -208,6 +208,22 @@ or not — re-check the line before trusting it.
     the detail at Debug with secret-bearing parts redacted; never let a raw
     upstream body reach the client.
 
+    The framework writes such messages too. Once `LOG_LEVEL` is Debug or lower
+    (`ImmichFrame.WebApi/Program.cs:72`), `IHttpClientFactory`'s request logging
+    writes each request's full URL, and at Trace every request header — and on
+    .NET 8 redacts neither — so a webhook's or calendar feed's URL, a feed's
+    `Basic` credential or an `X-API-KEY` can reach the log past any redaction
+    the code does itself.
+    Tell: `CreateClient()` with no name, or with a name `Program.cs` never
+    registers, sending a request whose URL or headers carry a secret.
+    Safe: any factory client whose URI or headers carry a secret must be
+    registered by name with `.RemoveAllLoggers()` — the only remedy when the
+    secret is in the URL, as for webhooks and calendar feeds
+    (`ImmichFrame.WebApi/Program.cs:147`, `ImmichFrame.WebApi/Program.cs:153`)
+    — or with `.RedactLoggedHeaders(...)`, which keeps the request line and
+    timing, when it is only in a header, as for both Immich clients
+    (`ImmichFrame.WebApi/Program.cs:123`, `ImmichFrame.WebApi/Program.cs:138`).
+
 11. **A guard dropped in one of a set of parallel implementations** *(both)* —
     when one of a near-identical set gains a check, the others usually don't.
     `JsonConfigDocument.Bind` and

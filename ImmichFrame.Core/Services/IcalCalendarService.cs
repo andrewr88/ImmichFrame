@@ -9,6 +9,15 @@ namespace ImmichFrame.Core.Services;
 
 public class IcalCalendarService : ICalendarService
 {
+    /// <summary>
+    /// The named <c>HttpClient</c> feeds are fetched on, configured in <c>Program.cs</c> without the
+    /// factory's request logging. Once LOG_LEVEL is Debug or lower that logging writes each request's
+    /// full URL - the access token a Google or iCloud feed carries in its path included - and at Trace
+    /// every request header, a feed's Basic credential among them. <see cref="RedactUrl"/> cannot reach
+    /// a line this class does not write.
+    /// </summary>
+    public const string HttpClientName = "CalendarClient";
+
     private readonly IGeneralSettings _serverSettings;
     private readonly ILogger<IcalCalendarService> _logger;
     private readonly IHttpClientFactory _httpClientFactory;
@@ -82,7 +91,7 @@ public class IcalCalendarService : ICalendarService
     public async Task<List<(string url, string ical)>> GetCalendars(IEnumerable<(string? auth, string url)> calendars)
     {
         var icals = new List<(string url, string ical)>();
-        var client = _httpClientFactory.CreateClient();
+        var client = _httpClientFactory.CreateClient(HttpClientName);
 
         foreach (var calendar in calendars)
         {

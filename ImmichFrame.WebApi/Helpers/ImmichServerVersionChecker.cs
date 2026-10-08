@@ -1,6 +1,7 @@
 using ImmichFrame.Core.Api;
 using ImmichFrame.Core.Helpers;
 using ImmichFrame.Core.Interfaces;
+using ImmichFrame.Core.Logic;
 using ImmichFrame.WebApi.Helpers.Config;
 
 namespace ImmichFrame.WebApi.Helpers
@@ -23,7 +24,9 @@ namespace ImmichFrame.WebApi.Helpers
         {
             try
             {
-                var httpClient = httpClientFactory.CreateClient("ImmichApiAccountClient");
+                // The frame's own client, whose registration is what keeps the key below out of the
+                // request log.
+                var httpClient = httpClientFactory.CreateClient(PooledImmichFrameLogic.HttpClientName);
                 httpClient.UseApiKey(account.ApiKey);
                 var immichApi = new ImmichApi(account.ImmichServerUrl, httpClient);
 

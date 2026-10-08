@@ -11,6 +11,15 @@ namespace ImmichFrame.Core.Logic;
 
 public class PooledImmichFrameLogic : IAccountImmichFrameLogic, IDisposable
 {
+    /// <summary>
+    /// The named <c>HttpClient</c> the frame talks to its Immich servers on, here and in the startup
+    /// version check. Configured in <c>Program.cs</c> so that the factory's request logging - every
+    /// request header, once LOG_LEVEL is Trace - writes the <c>X-API-KEY</c> each request carries as
+    /// <c>*</c>. Redacted rather than silenced: the request line and its timing are what an operator
+    /// chasing a slow or failing server reads, and neither holds the key.
+    /// </summary>
+    public const string HttpClientName = "ImmichApiAccountClient";
+
     private readonly IGeneralSettings _generalSettings;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IApiCache _apiCache;
@@ -29,7 +38,7 @@ public class PooledImmichFrameLogic : IAccountImmichFrameLogic, IDisposable
         _generalSettings = generalSettings;
         _httpClientFactory = httpClientFactory;
 
-        var httpClient = httpClientFactory.CreateClient("ImmichApiAccountClient");
+        var httpClient = httpClientFactory.CreateClient(HttpClientName);
         AccountSettings = accountSettings;
 
         httpClient.UseApiKey(accountSettings.ApiKey);

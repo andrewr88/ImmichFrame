@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authentication;
 using System.Reflection;
 using ImmichFrame.Core.Logic;
 using ImmichFrame.Core.Logic.AccountSelection;
+using ImmichFrame.Core.Services;
 using ImmichFrame.WebApi.Database;
 using ImmichFrame.WebApi.Helpers;
 using ImmichFrame.WebApi.Helpers.Admin;
@@ -107,6 +108,21 @@ builder.Services.AddSingleton<AdminConfigService>();
 
 builder.Services.AddHttpClient(); // Ensures IHttpClientFactory is available
 
+// The factory's request logging, shown whenever LOG_LEVEL is Debug or lower, writes each request's
+// full URL and, at Trace, every request header - and in .NET 8 redacts neither. So a client whose URL
+// or headers carry a secret is registered by name below and told what to keep out of the log; created
+// with no name, or a name registered nowhere, it logs all of it.
+
+// The headers an Immich client authenticates with. Redacted, they are logged as '*', and the request
+// line, its timing and the header names still reach the log.
+string[] immichCredentialHeaders = ["X-API-KEY", "Authorization"];
+
+// The frame's own Immich client, shared by the startup version check. Every request carries the
+// account's API key in a header, so the headers are redacted - and nothing more: the request line and
+// its timing are what tell an operator which server is slow or failing.
+builder.Services.AddHttpClient(PooledImmichFrameLogic.HttpClientName)
+    .RedactLoggedHeaders(immichCredentialHeaders);
+
 // The configuration editor's Immich picker fetches from whatever server an administrator names -
 // including one still being typed into the form - so unlike the frame's own client this one is
 // bounded on every axis. An authenticated administrator choosing the target is the point, not the
@@ -116,7 +132,10 @@ builder.Services.AddHttpClient(AdminImmichAccounts.HttpClientName,
     // Redirects are not followed. Following one lets the named host hand the request - and the
     // X-API-KEY header on it - to a host the administrator never named.
     .ConfigurePrimaryHttpMessageHandler(AdminImmichAccounts.CreatePrimaryHandler)
-    .AddHttpMessageHandler(() => new ResponseSizeLimitHandler(AdminImmichAccounts.MaxResponseBytes));
+    .AddHttpMessageHandler(() => new ResponseSizeLimitHandler(AdminImmichAccounts.MaxResponseBytes))
+    // Its requests carry an API key too - whichever one the administrator typed - so they are
+    // redacted the way the frame's own are.
+    .RedactLoggedHeaders(immichCredentialHeaders);
 
 // Singleton, like the AdminConfigService it resolves saved accounts through: it holds no per-request
 // state, and its HttpClients come from IHttpClientFactory.
@@ -126,6 +145,12 @@ builder.Services.AddSingleton<AdminImmichAccounts>();
 // logs nothing: the factory's request logging, shown whenever LOG_LEVEL is Debug or lower, writes each
 // request's full URL, and a webhook URL commonly carries its secret in its path.
 builder.Services.AddHttpClient(WebhookHelper.HttpClientName, client => client.Timeout = WebhookHelper.RequestTimeout)
+    .RemoveAllLoggers();
+
+// Calendar feeds log nothing either, and redacting their headers would not do instead: a Google or
+// iCloud feed carries its access token in its URL's path, and the URL is the request line itself. A
+// feed's Basic credential, which does travel as a header, goes unlogged with it.
+builder.Services.AddHttpClient(IcalCalendarService.HttpClientName)
     .RemoveAllLoggers();
 
 // One set of services per configuration profile, built on first use and cached until the
