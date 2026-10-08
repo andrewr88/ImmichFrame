@@ -141,5 +141,24 @@ public class ServerAccountSettings : IAccountSettings, IConfigSettable
         {
             throw new SettingsNotValidException("Either ApiKey or ApiKeyFile must be provided.");
         }
+
+        // Trimmed as a key file's contents are: a key written into the settings arrives with the line
+        // break it was copied with just as readily, and a YAML block scalar keeps the one it ends on.
+        // The key becomes an X-API-KEY header, and HttpHeaders.Add throws FormatException on a line
+        // break - in the constructor of the account's PooledImmichFrameLogic, inside ProfileRegistry's
+        // Lazy, which caches the exception: every request for the profile would fail until the
+        // configuration was replaced or the process restarted.
+        ApiKey = ApiKey.Trim();
+
+        // What trimming leaves is refused here, as a message, rather than left to be that exception.
+        // char.IsControl as AdminImmichAccounts applies it: a little stricter than the header rules,
+        // and no Immich API key contains one. The key itself is not quoted - this message is logged,
+        // and shown in the admin editor.
+        if (ApiKey.Any(char.IsControl))
+        {
+            throw new SettingsNotValidException(
+                "An account's API key contains a character an HTTP header cannot carry, such as a line break. " +
+                "Copy the key again from Immich into the settings - or into the file the account's ApiKeyFile names.");
+        }
     }
 }

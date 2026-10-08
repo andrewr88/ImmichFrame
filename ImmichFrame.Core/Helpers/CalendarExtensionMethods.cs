@@ -3,37 +3,43 @@ using Ical.Net.DataTypes;
 using ImmichFrame.Core.Interfaces;
 using ImmichFrame.Core.Models;
 
-namespace ImmichFrame.WebApi.Helpers
+namespace ImmichFrame.Core.Helpers
 {
     public static class CalendarExtensionMethods
     {
+        /// <summary>
+        /// One occurrence of a calendar component, as the frame shows it.
+        /// <para>
+        /// The times are the occurrence's own, from its period, never the component's. A recurring
+        /// event's DTSTART and DTEND are those of its first instance: read from there, a daily event
+        /// that began two months ago came back dated two months ago - and was sorted and printed that
+        /// way by the frame - and for a series written in UTC, the time of day was an hour out
+        /// whenever a daylight-saving change lay in between. An event with neither DTEND nor DURATION
+        /// has no end of its own at all, and reading one failed its whole feed.
+        /// </para>
+        /// </summary>
         public static IAppointment ToAppointment(this Occurrence occurrence)
         {
-            if (occurrence.Source.GetType() == typeof(CalendarEvent)) {
-                return ((CalendarEvent)occurrence.Source).ToAppointment();
+            var period = occurrence.Period;
+            var startTime = period.StartTime.AsSystemLocal;
+
+            var appointment = new Appointment
+            {
+                StartTime = startTime,
+                Duration = period.Duration,
+                // Ical.Net leaves EndTime null on a to-do's occurrences, and on those of a journal
+                // entry with a time of day - with a zero duration, so they end where they start.
+                EndTime = period.EndTime?.AsSystemLocal ?? startTime.Add(period.Duration)
+            };
+
+            if (occurrence.Source is CalendarEvent calEvent)
+            {
+                appointment.Summary = calEvent.Summary;
+                appointment.Description = calEvent.Description;
+                appointment.Location = calEvent.Location;
             }
 
-            return new Appointment
-            {
-                //Summary = occurrence.Period.Duration.Summary,
-                //Description = occurrence.Source.Description,
-                StartTime = occurrence.Period.StartTime.AsSystemLocal,
-                Duration = occurrence.Period.Duration,
-                EndTime = occurrence.Period.EndTime.AsSystemLocal,
-                Location = ""
-            };
-        }
-        public static IAppointment ToAppointment(this CalendarEvent calEvent)
-        {
-            return new Appointment
-            {
-                Summary = calEvent.Summary,
-                Description = calEvent.Description,
-                StartTime = calEvent.Start.AsSystemLocal,
-                Duration = calEvent.Duration,
-                EndTime = calEvent.End.AsSystemLocal,
-                Location = calEvent.Location
-            };
+            return appointment;
         }
     }
 }

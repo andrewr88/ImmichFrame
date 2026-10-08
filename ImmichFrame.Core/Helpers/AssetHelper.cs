@@ -10,10 +10,12 @@ public static class AssetHelper
     {
         var excludedAlbumAssets = new List<AssetResponseDto>();
 
-        foreach (var albumId in accountSettings?.ExcludedAlbums ?? new())
+        // Null-guarded although the property is not nullable: an explicit "ExcludedAlbums": null in
+        // the settings binds straight over its initialiser.
+        foreach (var albumId in accountSettings.ExcludedAlbums ?? new())
         {
             int page = 1;
-            int batchSize = 1000;
+            const int batchSize = 1000;
             int itemsInPage;
             do
             {

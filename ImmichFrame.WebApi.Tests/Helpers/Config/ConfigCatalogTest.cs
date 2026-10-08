@@ -410,6 +410,50 @@ public class ConfigCatalogTest
         kitchen.Accounts.Should().NotBeNull().And.BeEmpty();
     }
 
+    /// <summary>
+    /// A key written into the settings arrives with the line break it was copied with as readily as
+    /// one read from a key file: a JSON string that kept it, or a YAML block scalar, which keeps the
+    /// one it ends on. The key becomes an X-API-KEY header, and a header cannot carry a line break.
+    /// </summary>
+    [TestCase("Settings.json", """
+                               {
+                                 "Accounts": [{ "ImmichServerUrl": "https://base.example.com", "ApiKey": "abc123\n" }]
+                               }
+                               """, TestName = "SettingsFileApiKeyWithATrailingNewlineLoadsTrimmed")]
+    [TestCase("Settings.yml", """
+                              Accounts:
+                              - ApiKey: |
+                                  abc123
+                                ImmichServerUrl: https://base.example.com
+                              """, TestName = "YamlBlockScalarApiKeyLoadsTrimmed")]
+    public void ApiKeyWithATrailingNewlineLoadsTrimmed(string fileName, string settings)
+    {
+        InConfigDirectory(fileName, settings, directory =>
+            _configLoader.LoadCatalog(directory).Default.Accounts.Single().ApiKey.Should().Be("abc123"));
+    }
+
+    /// <summary>
+    /// A line break inside the key, which trimming cannot help, is refused while the settings are
+    /// validated. Accepted, it failed only once the account's services were built - inside a Lazy that
+    /// caches the exception, so every request for the profile failed until the configuration was
+    /// replaced or the process restarted. The refusal is logged and shown in the editor, so it must not
+    /// quote the key.
+    /// </summary>
+    [Test]
+    public void SettingsFileApiKeyWithALineBreakInsideIsRefusedWithoutQuotingIt()
+    {
+        const string settings = """
+                                {
+                                  "Accounts": [{ "ImmichServerUrl": "https://base.example.com", "ApiKey": "abc\n123" }]
+                                }
+                                """;
+
+        InConfigDirectory("Settings.json", settings, directory =>
+            _configLoader.Invoking(loader => loader.LoadCatalog(directory))
+                .Should().Throw<SettingsNotValidException>()
+                .Which.Message.Should().Contain("API key").And.NotContain("abc").And.NotContain("123"));
+    }
+
     private static string ResourcePath(string resource)
         => Path.Combine(TestContext.CurrentContext.TestDirectory, "Resources", resource);
 

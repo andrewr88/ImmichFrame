@@ -652,19 +652,17 @@ public class AdminImmichControllerTests
     [Test]
     public async Task ApiKey_StoredWithACharacterAHeaderCannot_PointsAtTheStoredSettingsRatherThanTheForm()
     {
+        // In the settings the process starts from, which is the only way such a key reaches a running
+        // catalog now that validation refuses a save holding one: stored settings that fail validation
+        // are run with anyway, so that the editor which fixes them is still served.
+        File.WriteAllText(Path.Combine(_directory, "Settings.json"),
+            SettingsJson.Replace("saved-api-key", @"stored\u0001key"));
+
         var handler = Immich();
         using var factory = CreateFactory(handler);
         var client = factory.CreateClient();
 
-        // Saved through the editor and swapped in, which is the only way such a key reaches a running
-        // catalog: ImmichServerVersionChecker calls UseApiKey on every configured account at startup,
-        // so a process holding one would have refused to boot rather than reached this endpoint.
-        var config = await GetConfig(client);
-        config.Default.Accounts[0].ApiKey = "stored\u0001key";
-
-        var saved = await PutConfig(client, config);
-        var response = await Post(client, AlbumsUrl,
-            new { profile = ConfigCatalog.DefaultProfileName, version = saved.Version, accountId = saved.Default.Accounts[0].Id });
+        var response = await Post(client, AlbumsUrl, await SavedAccount(client));
         var problem = await response.Content.ReadAsStringAsync();
 
         Assert.Multiple(() =>
@@ -737,35 +735,6 @@ public class AdminImmichControllerTests
         var config = (await response.Content.ReadFromJsonAsync<AdminConfigDto>(Camel))!;
 
         return new SavedAccountRef(ConfigCatalog.DefaultProfileName, config.Version, config.Default.Accounts[0].Id!);
-    }
-
-    private static async Task<AdminConfigDto> GetConfig(HttpClient client)
-    {
-        var response = await Send(client, HttpMethod.Get, "/api/admin/config");
-        response.EnsureSuccessStatusCode();
-
-        return (await response.Content.ReadFromJsonAsync<AdminConfigDto>(Camel))!;
-    }
-
-    /// <summary>
-    /// Saves the configuration back through the editor's own API and returns what the save reports -
-    /// the new version token and the handles issued under it. Going through the endpoint rather than
-    /// writing the file is the point: it is the swap that puts the edited configuration in front of
-    /// the picker without a restart.
-    /// </summary>
-    private static async Task<AdminConfigDto> PutConfig(HttpClient client, AdminConfigDto config)
-    {
-        var request = new HttpRequestMessage(HttpMethod.Put, "/api/admin/config")
-        {
-            Content = JsonContent.Create(
-                new AdminConfigUpdateDto(config.Version, config.Default, config.Profiles), options: Camel)
-        };
-        request.Headers.Add(TestAdminAuthHandler.SubjectHeader, AdminSubject);
-
-        var response = await client.SendAsync(request);
-        response.EnsureSuccessStatusCode();
-
-        return (await response.Content.ReadFromJsonAsync<AdminConfigDto>(Camel))!;
     }
 
     /// <summary>

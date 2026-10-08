@@ -563,6 +563,37 @@ public class AdminConfigControllerTests
         });
     }
 
+    /// <summary>
+    /// The editor cannot send an API key with a line break inside it, but the endpoint can be sent one
+    /// directly. Saved, it was swapped in and then failed every request for the configuration from
+    /// inside the services built for it; it has to be refused instead, in words that do not quote it.
+    /// </summary>
+    [Test]
+    public async Task SaveConfig_ApiKeyWithALineBreakInside_IsRefusedWithoutQuotingIt()
+    {
+        // Arrange
+        WriteSettings("Settings.json", SettingsJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var before = StoredText(factory);
+        var config = await GetConfig(client);
+        config.Default.Accounts[0].ApiKey = "abc\n123";
+
+        // Act
+        var response = await Put(client, config);
+        var detail = (string?)JsonNode.Parse(await response.Content.ReadAsStringAsync())?["detail"];
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+            Assert.That(detail, Does.Contain("API key").And.Not.Contain("abc").And.Not.Contain("123"));
+            Assert.That(StoredText(factory), Is.EqualTo(before),
+                "a rejected configuration must never reach the store");
+        });
+    }
+
     [Test]
     public async Task SaveConfig_StaleVersionToken_Is409WithTheStoredDocumentUntouched()
     {

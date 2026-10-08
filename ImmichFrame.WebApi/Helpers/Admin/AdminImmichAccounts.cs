@@ -234,10 +234,11 @@ public sealed class AdminImmichAccounts(
     }
 
     /// <summary>
-    /// What to tell an administrator whose <em>stored</em> key cannot be sent. Reachable, though not
-    /// at startup: <c>ImmichServerVersionChecker</c> would have refused to boot a process holding
-    /// such an account, so getting here means the key arrived in a configuration saved through the
-    /// editor and swapped in since. The remedy is therefore the file, not the form in front of them.
+    /// What to tell an administrator whose <em>stored</em> key cannot be sent. Reachable only from the
+    /// settings the process started with: <c>ServerAccountSettings.ValidateAndInitialize</c> refuses a
+    /// save holding such a key, but stored settings that fail validation are run with anyway, so that
+    /// the editor which fixes them is served. The remedy is therefore the file, not the form in front
+    /// of them.
     /// </summary>
     private const string StoredKeyRemedy =
         "Fix it in the admin editor - or in the file its ApiKeyFile names - and save the configuration again.";

@@ -3,7 +3,6 @@ using System.Text;
 using Ical.Net;
 using ImmichFrame.Core.Helpers;
 using ImmichFrame.Core.Interfaces;
-using ImmichFrame.WebApi.Helpers;
 using Microsoft.Extensions.Logging;
 
 namespace ImmichFrame.Core.Services;
