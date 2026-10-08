@@ -4,7 +4,11 @@
     {
         public ImmichApi(string url, HttpClient httpClient)
         {
-            BaseUrl = url + "/api";
+            // Trimmed, because a server URL written with a trailing slash is ordinary and "host/" +
+            // "/api" sends every request to "//api/...", which Immich itself answers with a 404 - only a
+            // reverse proxy that merges slashes, as nginx does by default, hides it. Null-tolerant like
+            // the concatenation it replaces, which the tests' Moq-built ImmichApi doubles rely on.
+            BaseUrl = url?.TrimEnd('/') + "/api";
             _httpClient = httpClient;
             _settings = new Lazy<Newtonsoft.Json.JsonSerializerSettings>(CreateSerializerSettings);
         }
@@ -27,8 +31,10 @@
             foreach (var item in response.Headers)
                 headers[item.Key] = item.Value;
             if (response.Content?.Headers != null)
+            {
                 foreach (var item in response.Content.Headers)
                     headers[item.Key] = item.Value;
+            }
 
             var status = (int)response.StatusCode;
             if (status == 200 || status == 206)

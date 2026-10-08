@@ -1,6 +1,7 @@
 using ImmichFrame.Core.Interfaces;
 using ImmichFrame.Core.Logic;
 using ImmichFrame.Core.Logic.AccountSelection;
+using ImmichFrame.Core.Services;
 
 namespace ImmichFrame.WebApi.Helpers.Profiles;
 
