@@ -5,12 +5,14 @@ using ImmichFrame.Core.Helpers;
 using ImmichFrame.Core.Interfaces;
 using ImmichFrame.Core.Logic.Pool;
 using ImmichFrame.Core.Models;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ImmichFrame.Core.Logic;
 
 public class PooledImmichFrameLogic : IAccountImmichFrameLogic, IDisposable
 {
     private readonly IGeneralSettings _generalSettings;
+    private readonly IHttpClientFactory _httpClientFactory;
     private readonly IApiCache _apiCache;
     private readonly IAssetPool _pool;
     private readonly ImmichApi _immichApi;
@@ -25,6 +27,7 @@ public class PooledImmichFrameLogic : IAccountImmichFrameLogic, IDisposable
     public PooledImmichFrameLogic(IAccountSettings accountSettings, IGeneralSettings generalSettings, IHttpClientFactory httpClientFactory)
     {
         _generalSettings = generalSettings;
+        _httpClientFactory = httpClientFactory;
 
         var httpClient = httpClientFactory.CreateClient("ImmichApiAccountClient");
         AccountSettings = accountSettings;
@@ -265,8 +268,13 @@ public class PooledImmichFrameLogic : IAccountImmichFrameLogic, IDisposable
             ContentLength = contentLength
         };
     }
+
+    // Nothing calls this in production: MultiImmichFrameLogicDelegate sends a profile's webhook itself
+    // rather than asking an account to. It goes through the same helper all the same, without a logger
+    // since this class has none, so a failure here is dropped rather than escaping unobserved.
     public async Task SendWebhookNotification(IWebhookNotification notification) =>
-        await WebhookHelper.SendWebhookNotification(notification, _generalSettings.Webhook);
+        await WebhookHelper.SendWebhookNotification(notification, _generalSettings.Webhook,
+            _httpClientFactory.CreateClient(WebhookHelper.HttpClientName), NullLogger.Instance);
 
     public override string ToString() => $"Account Pool [{_immichApi.BaseUrl}]";
 

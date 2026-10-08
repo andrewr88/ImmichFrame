@@ -122,6 +122,12 @@ builder.Services.AddHttpClient(AdminImmichAccounts.HttpClientName,
 // state, and its HttpClients come from IHttpClientFactory.
 builder.Services.AddSingleton<AdminImmichAccounts>();
 
+// Webhook notifications get a client of their own, so their timeout touches no other client - and it
+// logs nothing: the factory's request logging, shown whenever LOG_LEVEL is Debug or lower, writes each
+// request's full URL, and a webhook URL commonly carries its secret in its path.
+builder.Services.AddHttpClient(WebhookHelper.HttpClientName, client => client.Timeout = WebhookHelper.RequestTimeout)
+    .RemoveAllLoggers();
+
 // One set of services per configuration profile, built on first use and cached until the
 // configuration is swapped; the pools, HTTP clients and caches inside are far too expensive to
 // rebuild per request.

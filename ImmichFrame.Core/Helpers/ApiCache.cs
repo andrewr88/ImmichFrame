@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using ImmichFrame.Core.Interfaces;
 using Microsoft.Extensions.Caching.Memory;
 
 namespace ImmichFrame.Core.Helpers;

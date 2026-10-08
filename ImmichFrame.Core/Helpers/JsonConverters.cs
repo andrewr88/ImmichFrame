@@ -1,7 +1,7 @@
 ﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace ImmichFrame.WebApi.Helpers
+namespace ImmichFrame.Core.Helpers
 {
     public class PolymorphicJsonConverter<TInterface> : JsonConverter<TInterface>
     {

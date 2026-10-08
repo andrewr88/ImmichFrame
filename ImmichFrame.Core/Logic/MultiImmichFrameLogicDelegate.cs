@@ -13,13 +13,16 @@ public class MultiImmichFrameLogicDelegate : IImmichFrameLogic, IDisposable
     private readonly IServerSettings _serverSettings;
     private readonly IAccountSelectionStrategy _accountSelectionStrategy;
     private readonly ILogger<MultiImmichFrameLogicDelegate> _logger;
+    private readonly IHttpClientFactory _httpClientFactory;
 
     public MultiImmichFrameLogicDelegate(IServerSettings serverSettings,
         Func<IAccountSettings, IAccountImmichFrameLogic> logicFactory, ILogger<MultiImmichFrameLogicDelegate> logger,
-        Func<IList<IAccountImmichFrameLogic>, IAccountSelectionStrategy> strategyFactory)
+        Func<IList<IAccountImmichFrameLogic>, IAccountSelectionStrategy> strategyFactory,
+        IHttpClientFactory httpClientFactory)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _serverSettings = serverSettings;
+        _httpClientFactory = httpClientFactory;
         _accountToDelegate = serverSettings.Accounts.ToFrozenDictionary(
             keySelector: a => a,
             elementSelector: logicFactory
@@ -54,8 +57,11 @@ public class MultiImmichFrameLogicDelegate : IImmichFrameLogic, IDisposable
         return allInts.Sum();
     }
 
+    // A client per notification, as IHttpClientFactory intends: the handler and the connections behind
+    // it belong to the factory, which pools them across calls, so there is nothing here to dispose.
     public Task SendWebhookNotification(IWebhookNotification notification) =>
-        WebhookHelper.SendWebhookNotification(notification, _serverSettings.GeneralSettings.Webhook);
+        WebhookHelper.SendWebhookNotification(notification, _serverSettings.GeneralSettings.Webhook,
+            _httpClientFactory.CreateClient(WebhookHelper.HttpClientName), _logger);
 
     public void Dispose()
     {
