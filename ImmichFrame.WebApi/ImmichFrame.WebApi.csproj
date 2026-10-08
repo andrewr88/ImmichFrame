@@ -14,6 +14,11 @@
     <PackageReference Include="Microsoft.AspNetCore.SpaProxy" />
     <PackageReference Include="YamlDotNet" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+    <!-- Referenced only to pin its version; nothing here calls it. EF Core Sqlite 8.0.20 depends on
+         the 2.1.6 bundle, whose native SQLite (SQLitePCLRaw.lib.e_sqlite3) is affected by
+         GHSA-2m69-gcr7-jv3q / CVE-2025-6965, and a direct reference makes the patched version win.
+         Drop this once EF's own dependency moves past the advisory. -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
