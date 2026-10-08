@@ -99,7 +99,7 @@ public class ConfigLoaderTest
             if (type.IsGenericType && typeof(IEnumerable).IsAssignableFrom(type))
             {
                 type = type.GetGenericArguments()[0];
-                value = (value as IEnumerable).Cast<object>().FirstOrDefault();
+                value = (value as IEnumerable)?.Cast<object>().FirstOrDefault();
             }
 
             //if it's nullable, unwrap
