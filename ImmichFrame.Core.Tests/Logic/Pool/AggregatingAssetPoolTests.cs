@@ -10,7 +10,7 @@ namespace ImmichFrame.Core.Tests.Logic.Pool
     {
         private Mock<IAssetPool> _mockPool1;
         private Mock<IAssetPool> _mockPool2;
-        private MultiAssetPool _aggregatingPool;
+        private MultiAssetPool _aggregatingPool = null!;
         private List<IAssetPool> _assetPools;
 
         [SetUp]
@@ -181,7 +181,7 @@ namespace ImmichFrame.Core.Tests.Logic.Pool
             _aggregatingPool = new MultiAssetPool(_assetPools); // Use MultiAssetPool
 
             var retrievedAssets = new List<AssetResponseDto>();
-            AssetResponseDto currentAsset;
+            AssetResponseDto? currentAsset;
             while ((currentAsset = (await _aggregatingPool.GetAssets(1, CancellationToken.None)).FirstOrDefault()) != null)
             {
                 retrievedAssets.Add(currentAsset);

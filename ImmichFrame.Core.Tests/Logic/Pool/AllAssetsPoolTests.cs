@@ -18,7 +18,7 @@ public class AllAssetsPoolTests
     public void Setup()
     {
         _mockApiCache = new Mock<IApiCache>();
-        _mockImmichApi = new Mock<ImmichApi>(null, null);
+        _mockImmichApi = new Mock<ImmichApi>(null!, null!);
         _mockAccountSettings = new Mock<IAccountSettings>();
         _allAssetsPool = new AllAssetsPool(_mockApiCache.Object, _mockImmichApi.Object, _mockAccountSettings.Object);
 
@@ -220,7 +220,7 @@ public class AllAssetsPoolTests
     [Test]
     public async Task GetAssets_NullExcludedAlbums_Succeeds()
     {
-        _mockAccountSettings.SetupGet(s => s.ExcludedAlbums).Returns((List<Guid>)null);
+        _mockAccountSettings.SetupGet(s => s.ExcludedAlbums).Returns((List<Guid>)null!);
 
         // Create a set of assets to verify that the code was actually exercised (minimize risk of false positives)
         var allAssets = CreateSampleImageAssets(5, "asset");

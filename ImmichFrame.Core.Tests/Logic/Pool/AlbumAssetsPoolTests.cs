@@ -25,7 +25,7 @@ public class AlbumAssetsPoolTests
                 It.IsAny<Func<Task<IEnumerable<AssetResponseDto>>>>()))
             .Returns<string, Func<Task<IEnumerable<AssetResponseDto>>>>((_, factory) => factory());
 
-        _mockImmichApi = new Mock<ImmichApi>("", null);
+        _mockImmichApi = new Mock<ImmichApi>("", null!);
         _mockAccountSettings = new Mock<IAccountSettings>();
         _albumAssetsPool = new AlbumAssetsPool(_mockApiCache.Object, _mockImmichApi.Object, _mockAccountSettings.Object);
 
@@ -97,7 +97,7 @@ public class AlbumAssetsPoolTests
     [Test]
     public async Task LoadAssets_NullAlbums_ReturnsEmpty()
     {
-        _mockAccountSettings.SetupGet(s => s.Albums).Returns((List<Guid>)null);
+        _mockAccountSettings.SetupGet(s => s.Albums).Returns((List<Guid>)null!);
 
         var result = (await _albumAssetsPool.GetAssets(25)).ToList();
         Assert.That(result, Is.Empty);
@@ -108,7 +108,7 @@ public class AlbumAssetsPoolTests
     [Test]
     public async Task LoadAssets_NullExcludedAlbums_Succeeds()
     {
-        _mockAccountSettings.SetupGet(s => s.ExcludedAlbums).Returns((List<Guid>)null);
+        _mockAccountSettings.SetupGet(s => s.ExcludedAlbums).Returns((List<Guid>)null!);
 
         var result = (await _albumAssetsPool.GetAssets(25)).ToList();
         Assert.That(result, Is.Empty);
