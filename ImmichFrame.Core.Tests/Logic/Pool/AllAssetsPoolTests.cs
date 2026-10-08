@@ -173,6 +173,24 @@ public class AllAssetsPoolTests
     }
 
     [Test]
+    public async Task GetAssets_AppliesDateFilters_FromDateAndUntilDate()
+    {
+        var fromDate = new DateTime(2020, 1, 1);
+        var untilDate = new DateTime(2021, 1, 1);
+        _mockAccountSettings.SetupGet(s => s.ImagesFromDate).Returns(fromDate);
+        _mockAccountSettings.SetupGet(s => s.ImagesUntilDate).Returns(untilDate);
+        _mockAccountSettings.SetupGet(s => s.ImagesFromDays).Returns(10); // ImagesFromDate takes precedence
+        _mockImmichApi.Setup(api => api.SearchRandomAsync(It.IsAny<RandomSearchDto>(), It.IsAny<CancellationToken>()))
+           .ReturnsAsync(new List<AssetResponseDto>());
+
+        await _allAssetsPool.GetAssets(5);
+
+        _mockImmichApi.Verify(api => api.SearchRandomAsync(
+            It.Is<RandomSearchDto>(dto => dto.TakenAfter == fromDate && dto.TakenBefore == untilDate),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Test]
     public async Task GetAssets_ExcludesAssetsFromExcludedAlbums()
     {
         // Arrange

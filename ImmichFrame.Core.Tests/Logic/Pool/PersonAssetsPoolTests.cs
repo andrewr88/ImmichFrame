@@ -42,8 +42,9 @@ public class PersonAssetsPoolTests // Renamed from PeopleAssetsPoolTests to matc
     }
 
     private AssetResponseDto CreateAsset(string id, AssetTypeEnum type = AssetTypeEnum.IMAGE) => new AssetResponseDto { Id = FixtureHelpers.GuidFor(id), Type = type };
-    private SearchResponseDto CreateSearchResult(List<AssetResponseDto> assets, int total) =>
-        new SearchResponseDto { Assets = new SearchAssetResponseDto { Items = assets, Total = total } };
+    // Total is deprecated in the Immich API and deliberately left unset, so paging has to follow each page's own item count
+    private SearchResponseDto CreateSearchResult(List<AssetResponseDto> assets) =>
+        new SearchResponseDto { Assets = new SearchAssetResponseDto { Items = assets } };
 
     [Test]
     public async Task LoadAssets_CallsSearchAssetsForEachPerson_AndPaginates()
@@ -62,13 +63,13 @@ public class PersonAssetsPoolTests // Renamed from PeopleAssetsPoolTests to matc
 
         // Person 1 - Page 1
         _mockImmichApi.Setup(api => api.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.Is<MetadataSearchDto>(d => d.PersonIds.Contains(person1Id) && d.Page == 1 && d.Type == type), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(CreateSearchResult(p1AssetsPage1, batchSize));
+            .ReturnsAsync(CreateSearchResult(p1AssetsPage1));
         // Person 1 - Page 2
         _mockImmichApi.Setup(api => api.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.Is<MetadataSearchDto>(d => d.PersonIds.Contains(person1Id) && d.Page == 2 && d.Type == type), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(CreateSearchResult(p1AssetsPage2, 30));
+            .ReturnsAsync(CreateSearchResult(p1AssetsPage2));
         // Person 2 - Page 1
         _mockImmichApi.Setup(api => api.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.Is<MetadataSearchDto>(d => d.PersonIds.Contains(person2Id) && d.Page == 1 && d.Type == type), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(CreateSearchResult(p2AssetsPage1, 20));
+            .ReturnsAsync(CreateSearchResult(p2AssetsPage1));
 
         // Act
         var result = (await _personAssetsPool.TestLoadAssets()).ToList();
@@ -115,9 +116,9 @@ public class PersonAssetsPoolTests // Renamed from PeopleAssetsPoolTests to matc
 
         var p1Assets = Enumerable.Range(0, 10).Select(i => CreateAsset($"p1_{i}")).ToList();
         _mockImmichApi.Setup(api => api.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.Is<MetadataSearchDto>(d => d.PersonIds.Contains(person1Id) && d.Type == type), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(CreateSearchResult(p1Assets, 10));
+            .ReturnsAsync(CreateSearchResult(p1Assets));
         _mockImmichApi.Setup(api => api.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.Is<MetadataSearchDto>(d => d.PersonIds.Contains(person2Id) && d.Type == type), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(CreateSearchResult(new List<AssetResponseDto>(), 0));
+            .ReturnsAsync(CreateSearchResult(new List<AssetResponseDto>()));
 
         var result = (await _personAssetsPool.TestLoadAssets()).ToList();
         Assert.That(result.Count, Is.EqualTo(10));

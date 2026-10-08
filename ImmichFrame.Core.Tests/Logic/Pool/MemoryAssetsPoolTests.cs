@@ -113,6 +113,28 @@ public class MemoryAssetsPoolTests
     }
 
     [Test]
+    public async Task LoadAssets_SetsDescription_WhenAssetInfoHasNoExifInfo()
+    {
+        // Arrange
+        var memoryYear = DateTime.Now.Year - 2;
+        var memories = CreateSampleImageMemories(1, 1, false, memoryYear); // Asset without ExifInfo
+        var assetId = memories[0].Assets.First().Id;
+
+        _mockImmichApi.Setup(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(memories);
+        // ExifInfo is optional in the Immich API, so the full asset info can lack it too
+        _mockImmichApi.Setup(x => x.GetAssetInfoAsync(assetId, null, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AssetResponseDto { Id = assetId, ExifInfo = null });
+
+        // Act
+        var resultAsset = (await _memoryAssetsPool.GetAssets(1, CancellationToken.None)).First(); // Triggers LoadAssets
+
+        // Assert
+        Assert.That(resultAsset.ExifInfo, Is.Not.Null);
+        Assert.That(resultAsset.ExifInfo.Description, Is.EqualTo("2 years ago"));
+    }
+
+    [Test]
     public async Task LoadAssets_DoesNotFetchAssetInfo_WhenExifInfoIsPresent()
     {
         // Arrange

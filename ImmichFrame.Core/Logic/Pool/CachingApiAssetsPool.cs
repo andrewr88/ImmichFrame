@@ -16,15 +16,17 @@ public abstract class CachingApiAssetsPool(IApiCache apiCache, ImmichApi immichA
 
     public async Task<long> GetAssetCount(CancellationToken ct = default)
     {
-        return (await AllAssets(ct)).Count();
+        return (await AllAssets()).Count();
     }
 
     public async Task<IEnumerable<AssetResponseDto>> GetAssets(int requested, CancellationToken ct = default)
     {
-        return (await AllAssets(ct)).OrderBy(_ => _random.Next()).Take(requested);
+        return (await AllAssets()).OrderBy(_ => _random.Next()).Take(requested);
     }
 
-    private async Task<IEnumerable<AssetResponseDto>> AllAssets(CancellationToken ct = default)
+    // Deliberately takes no CancellationToken: both loads are cached and served to every later
+    // request, so they must not be cut short by whichever request happened to trigger them.
+    private async Task<IEnumerable<AssetResponseDto>> AllAssets()
     {
         var excludedAlbumAssets = await Cache.GetOrAddAsync($"{GetType().FullName}_ExcludedAlbums", () => AssetHelper.GetExcludedAlbumAssets(Api, AccountSettings));
 

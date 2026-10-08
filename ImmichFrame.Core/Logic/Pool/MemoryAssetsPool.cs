@@ -32,6 +32,8 @@ public class MemoryAssetsPool(ImmichApi immichApi, IAccountSettings accountSetti
                     asset.People = assetInfo.People;
                 }
 
+                // ExifInfo is optional in the Immich API, so the full asset info can lack it too
+                asset.ExifInfo ??= new ExifResponseDto();
                 asset.ExifInfo.Description = $"{yearsAgo} {(yearsAgo == 1 ? "year" : "years")} ago";
             }
 

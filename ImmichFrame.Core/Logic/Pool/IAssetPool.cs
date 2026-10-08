@@ -10,16 +10,13 @@ public interface IAssetPool
     protected static async Task<IEnumerable<AssetResponseDto>> WaitAssets(
         int requested,
         Func<CancellationToken, Task<AssetResponseDto?>> supplier,
-        CancellationToken? cancellationToken = null)
+        CancellationToken cancellationToken)
     {
-        //allow up to one minute
-        var ct = cancellationToken ?? new CancellationTokenSource(TimeSpan.FromMinutes(1)).Token;
-
         var itemsRead = new List<AssetResponseDto>(requested > 0 ? requested : 0);
 
         for (var i = 0; i < requested; i++)
         {
-            var asset = await supplier(ct);
+            var asset = await supplier(cancellationToken);
 
             if (asset != null)
             {

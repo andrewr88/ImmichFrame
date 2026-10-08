@@ -29,8 +29,8 @@ public class QueuingAssetPool(ILogger<QueuingAssetPool> _logger, IAssetPool @del
         }
         catch (OperationCanceledException)
         {
-            // This exception occurs if the CancellationTokenSource times out
-            _logger.LogWarning("Read asset list timed out");
+            // This exception occurs if the caller's token is cancelled while waiting for an asset
+            _logger.LogWarning("Read asset list cancelled");
             return null;
         }
         catch (Exception ex)

@@ -40,8 +40,9 @@ public class FavoriteAssetsPoolTests
     }
 
     private AssetResponseDto CreateAsset(string id, AssetTypeEnum type = AssetTypeEnum.IMAGE) => new AssetResponseDto { Id = FixtureHelpers.GuidFor(id), Type = type };
-    private SearchResponseDto CreateSearchResult(List<AssetResponseDto> assets, int total) =>
-        new SearchResponseDto { Assets = new SearchAssetResponseDto { Items = assets, Total = total } };
+    // Total is deprecated in the Immich API and deliberately left unset, so paging has to follow each page's own item count
+    private SearchResponseDto CreateSearchResult(List<AssetResponseDto> assets) =>
+        new SearchResponseDto { Assets = new SearchAssetResponseDto { Items = assets } };
 
     [Test]
     public async Task LoadAssets_CallsSearchAssetsAsync_WithFavoriteTrue_AndPaginates()
@@ -52,8 +53,8 @@ public class FavoriteAssetsPoolTests
         var assetsPage2 = Enumerable.Range(0, 50).Select(i => CreateAsset($"fav_p2_{i}")).ToList();
 
         _mockImmichApi.SetupSequence(api => api.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<MetadataSearchDto>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(CreateSearchResult(assetsPage1, batchSize)) // Page 1, total indicates more might be available
-            .ReturnsAsync(CreateSearchResult(assetsPage2, 50));      // Page 2, total indicates this is the last page
+            .ReturnsAsync(CreateSearchResult(assetsPage1))  // Page 1, a full page indicates more might be available
+            .ReturnsAsync(CreateSearchResult(assetsPage2)); // Page 2, a partial page indicates this is the last page
 
         // Act
         var result = (await _favoriteAssetsPool.TestLoadAssets()).ToList();
@@ -84,7 +85,7 @@ public class FavoriteAssetsPoolTests
     public async Task LoadAssets_HandlesEmptyFavorites()
     {
         _mockImmichApi.Setup(api => api.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<MetadataSearchDto>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(CreateSearchResult(new List<AssetResponseDto>(), 0));
+            .ReturnsAsync(CreateSearchResult(new List<AssetResponseDto>()));
 
         var result = (await _favoriteAssetsPool.TestLoadAssets()).ToList();
         Assert.That(result, Is.Empty);

@@ -43,12 +43,8 @@ public class AllAssetsPool(IApiCache apiCache, ImmichApi immichApi, IAccountSett
             searchDto.Visibility = AssetVisibility.Timeline;
         }
 
-        var takenBefore = accountSettings.ImagesUntilDate.HasValue ? accountSettings.ImagesUntilDate : null;
-        if (takenBefore.HasValue)
-        {
-            searchDto.TakenBefore = takenBefore;
-        }
-        var takenAfter = accountSettings.ImagesFromDate.HasValue ? accountSettings.ImagesFromDate : accountSettings.ImagesFromDays.HasValue ? DateTime.Today.AddDays(-accountSettings.ImagesFromDays.Value) : null;
+        searchDto.TakenBefore = accountSettings.ImagesUntilDate;
+        var takenAfter = accountSettings.ImagesFromDate ?? (accountSettings.ImagesFromDays.HasValue ? DateTime.Today.AddDays(-accountSettings.ImagesFromDays.Value) : null);
 
         if (takenAfter.HasValue)
         {
@@ -67,5 +63,4 @@ public class AllAssetsPool(IApiCache apiCache, ImmichApi immichApi, IAccountSett
 
         return assets.ApplyAccountFilters(accountSettings, excludedAlbumAssets);
     }
-
 }
