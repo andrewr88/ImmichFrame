@@ -3,6 +3,8 @@
 	interface Props {
 		message?: string;
 		authError?: boolean;
+		/** Shown under `message`; the default message carries a note of its own. */
+		retryNote?: string;
 	}
 
 	let authSecret: string = $state('');
@@ -12,7 +14,7 @@
 		location.reload();
 	}
 
-	let { message = '', authError: authError = false }: Props = $props();
+	let { message = '', authError: authError = false, retryNote = '' }: Props = $props();
 	let retryMessage = $derived(
 		!authError
 			? 'The page will automatically refresh every 30 seconds until a connection is re-established.'
@@ -55,6 +57,11 @@
 			<p>
 				{message}
 			</p>
+			{#if retryNote}
+				<p class="text-lg mt-6 opacity-60 animate-pulse">
+					{retryNote}
+				</p>
+			{/if}
 		{:else}
 			<p>
 				{message ||
