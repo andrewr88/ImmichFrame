@@ -27,10 +27,17 @@ self.addEventListener('activate', (event) => {
 // Listen for auth secret updates from the main app. A client only knows its own profile, so
 // each reply is stored under the profile that reply names and resolves only that profile's
 // waiters - a waiter for another profile keeps waiting for a client that can answer it.
+//
+// A reply with no secret in it is no answer at all. Every tab posts when it loads, when its
+// profile changes and whenever it is asked, including one with no secret stored for its profile -
+// opened, say, before the secret was entered in another tab. Stored, its null would replace the
+// secret that other tab gave; resolved with, it would send a stream unsigned while that tab's
+// answer was on its way.
 self.addEventListener('message', (event) => {
     if (event.data && event.data.type === 'SET_AUTH_SECRET') {
         const profile = event.data.profile || '';
         const secret = event.data.authSecret;
+        if (!secret) return;
         authSecrets.set(profile, secret);
 
         // Resolve any pending auth requests for this profile
@@ -80,6 +87,12 @@ async function getAuthSecret(profile, timeoutMs = 2000) {
 }
 
 self.addEventListener('fetch', (event) => {
+    // A navigation is never signed, not even to a stream URL. The frame's pages fetch streams -
+    // a <video> as no-cors, an image preload as cors - but never navigate to one, while any site
+    // can send the browser to one with a link. Signing those would lend the secret to whoever
+    // started the navigation, as a cookie would be - which is what a bearer header exists to avoid.
+    if (event.request.mode === 'navigate') return;
+
     const url = new URL(event.request.url);
 
     // Intercept video streaming requests to add Authorization header.

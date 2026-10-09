@@ -71,7 +71,9 @@ General:
   UnitSystem: 'imperial'  # 'imperial' | 'metric'
   # Set the weather location with lat/lon.
   WeatherLatLong: '40.730610,-73.935242'  # string
-  # 2 digit ISO code, sets the language of the weather description.
+  # 2 digit ISO code, sets the language of the weather description and of the dates on the frame.
+  # The dates also take a code with a region, such as 'pt-BR' or 'zh_TW', and fall back to the
+  # language alone for a region they have no locale for.
   Language: 'en'  # string
   # Webhook URL to be notified e.g. http://example.com/notify
   Webhook: null  # string
