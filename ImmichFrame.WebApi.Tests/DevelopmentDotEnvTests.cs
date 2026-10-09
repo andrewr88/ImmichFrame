@@ -19,7 +19,9 @@ namespace ImmichFrame.WebApi.Tests;
 /// <para>
 /// The host looks for the file relative to its current directory, so this test moves the process's
 /// current directory and puts it back afterwards, along with every variable the file sets.
-/// <c>WebApplicationFactory</c> runs the host as Development, which is what makes it load at all.
+/// <c>WebApplicationFactory</c> runs the host as Development, which is what makes it load at all -
+/// and every other host in the suite is kept from loading it by <see cref="DotEnvIsolation"/>, so
+/// the test that wants the load opts back in.
 /// </para>
 /// </summary>
 [TestFixture]
@@ -27,14 +29,15 @@ public class DevelopmentDotEnvTests
 {
     private const string ConfigPathVariable = "IMMICHFRAME_CONFIG_PATH";
 
-    private static readonly string[] Variables =
+    private static readonly string[] OidcVariables =
     [
-        ConfigPathVariable,
         AdminOidcOptions.AuthorityVariable,
         AdminOidcOptions.ClientIdVariable,
         AdminOidcOptions.ClientSecretVariable,
         AdminOidcOptions.AdminsVariable
     ];
+
+    private static readonly string[] Variables = [Program.SkipDotEnvVariable, ConfigPathVariable, .. OidcVariables];
 
     private string _root = null!;
     private string _previousDirectory = null!;
@@ -69,16 +72,11 @@ public class DevelopmentDotEnvTests
     [Test]
     public void DotEnv_IsLoadedBeforeStartupReadsTheEnvironment()
     {
-        // Arrange
+        // Arrange - opted back in: the suite keeps every host it starts from loading the file.
+        Environment.SetEnvironmentVariable(Program.SkipDotEnvVariable, null);
+
         var configPath = Path.Combine(_root, "config-from-dotenv");
-        File.WriteAllLines(Path.Combine(_root, "docker", ".env"),
-        [
-            $"{ConfigPathVariable}={configPath}",
-            $"{AdminOidcOptions.AuthorityVariable}=https://idp.example.com",
-            $"{AdminOidcOptions.ClientIdVariable}=immichframe",
-            $"{AdminOidcOptions.ClientSecretVariable}=client-secret",
-            $"{AdminOidcOptions.AdminsVariable}=8ab0c1e2-user"
-        ]);
+        WriteDotEnv(configPath);
         Directory.SetCurrentDirectory(Path.Combine(_root, "ImmichFrame.WebApi"));
 
         // Act
@@ -94,6 +92,50 @@ public class DevelopmentDotEnvTests
             Assert.That(services.GetRequiredService<AdminOidcOptions>().IsEnabled, Is.True);
         });
     }
+
+    /// <summary>
+    /// And no other host in the suite loads it. The file is found from wherever the test runner
+    /// started, and from a project directory that is the developer's own: its admin sign-in settings
+    /// would reach the whole process and switch the OpenID Connect handler on in every host started
+    /// after it. The switch is left as the suite set it rather than set here, so this fails if either
+    /// half stops holding - <c>Program</c> honouring it, or the suite setting it.
+    /// </summary>
+    [Test]
+    public void DotEnv_IsNotLoadedByTheSuitesHosts()
+    {
+        // Arrange - what the environment says, and a .env next door that says otherwise.
+        var configPath = Path.Combine(_root, "config-from-environment");
+        Environment.SetEnvironmentVariable(ConfigPathVariable, configPath);
+        foreach (var variable in OidcVariables)
+        {
+            Environment.SetEnvironmentVariable(variable, null);
+        }
+
+        WriteDotEnv(Path.Combine(_root, "config-from-dotenv"));
+        Directory.SetCurrentDirectory(Path.Combine(_root, "ImmichFrame.WebApi"));
+
+        // Act
+        using var factory = CreateFactory();
+        var services = factory.Services;
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(services.GetRequiredService<ConfigLocation>().Directory, Is.EqualTo(configPath));
+            Assert.That(services.GetRequiredService<AdminOidcOptions>().IsEnabled, Is.False);
+        });
+    }
+
+    /// <summary>A <c>.env</c> that moves the configuration directory and switches the admin surface on.</summary>
+    private void WriteDotEnv(string configPath) =>
+        File.WriteAllLines(Path.Combine(_root, "docker", ".env"),
+        [
+            $"{ConfigPathVariable}={configPath}",
+            $"{AdminOidcOptions.AuthorityVariable}=https://idp.example.com",
+            $"{AdminOidcOptions.ClientIdVariable}=immichframe",
+            $"{AdminOidcOptions.ClientSecretVariable}=client-secret",
+            $"{AdminOidcOptions.AdminsVariable}=8ab0c1e2-user"
+        ]);
 
     private static WebApplicationFactory<Program> CreateFactory()
     {

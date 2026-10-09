@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -10,6 +11,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using Moq.Protected;
 using ImmichFrame.Core.Api;
+using ImmichFrame.WebApi.Controllers;
 using ImmichFrame.WebApi.Helpers.Config;
 using ImmichFrame.WebApi.Models;
 using ImmichFrame.WebApi.Tests.Mocks;
@@ -157,13 +159,18 @@ namespace ImmichFrame.WebApi.Tests.Controllers
             // request's DI scope serves the first request and fails every one after it.
             var repeatResponse = await client.GetAsync("/api/Asset/RandomImageAndInfo");
 
-            // Assert
+            // Assert - the very bytes the mock server sent, in both answers. Merely having content
+            // would be met just as well by an image that never came from Immich.
             response.EnsureSuccessStatusCode();
             repeatResponse.EnsureSuccessStatusCode();
-            var content = await response.Content.ReadAsStringAsync();
-            // For now, we'll just check if the response is not empty.
-            // A more robust check would be to deserialize the response and check the asset ID.
-            Assert.That(content, Is.Not.Empty);
+            var image = await response.Content.ReadFromJsonAsync<ImageResponse>();
+            var repeatImage = await repeatResponse.Content.ReadFromJsonAsync<ImageResponse>();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(image?.RandomImageBase64, Is.EqualTo(Convert.ToBase64String(mockImageData)));
+                Assert.That(repeatImage?.RandomImageBase64, Is.EqualTo(Convert.ToBase64String(mockImageData)));
+            });
         }
 
         // Builds a valid AssetResponseDto from the generated client types. Only the

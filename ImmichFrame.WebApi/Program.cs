@@ -25,7 +25,13 @@ var builder = WebApplication.CreateBuilder(args);
 // has to come before anything below reads the environment - LOG_LEVEL, IMMICHFRAME_CONFIG_PATH and
 // the admin surface's OpenID Connect settings are each read once, during startup, so loaded any
 // later the file sets them too late to matter.
-if (builder.Environment.IsDevelopment())
+//
+// Not when IMMICHFRAME_SKIP_DOTENV is true, which the test suite sets for every host it starts. The
+// file is found from the working directory, which under a test runner is wherever the runner
+// started - and from a project directory, ../docker/.env is the developer's own, whose admin sign-in
+// would then switch on in the host under test.
+var skipDotEnv = bool.TryParse(Environment.GetEnvironmentVariable(Program.SkipDotEnvVariable), out var skip) && skip;
+if (builder.Environment.IsDevelopment() && !skipDotEnv)
 {
     var root = Directory.GetCurrentDirectory();
     var dotenv = Path.Combine(root, "..", "docker", ".env");
@@ -384,4 +390,11 @@ _ = Task.Run(async () =>
 app.Run();
 
 // Make Program public for WebApplicationFactory
-public partial class Program { }
+public partial class Program
+{
+    /// <summary>
+    /// Set to <c>true</c>, keeps a Development host from loading <c>docker/.env</c> - see where the
+    /// file is loaded, at the top of this file, for why the test suite sets it.
+    /// </summary>
+    internal const string SkipDotEnvVariable = "IMMICHFRAME_SKIP_DOTENV";
+}

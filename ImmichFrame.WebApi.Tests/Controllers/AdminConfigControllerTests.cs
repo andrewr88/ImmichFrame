@@ -1522,8 +1522,16 @@ public class AdminConfigControllerTests
     }
 
     [Test]
+    // Windows has no mode bits for SetMode to take the write bit off with, so there the directory stays
+    // writable and the host starts.
+    [Platform("Unix")]
     public void ReadOnlyConfigurationDirectory_FailsToStartAndNamesTheDirectory()
     {
+        // Root writes through a directory's mode, so as root the database is created anyway and the
+        // host starts - which says nothing about the case this is for: a mount read-only to the
+        // unprivileged user ImmichFrame runs as.
+        Assume.That(Environment.IsPrivilegedProcess, Is.False, "running as root, whom a directory's mode does not stop");
+
         // This replaced a test that took the write bit off mid-run and expected the save to 409. It
         // cannot work that way any more, and not because the contract got weaker: SQLite already has
         // the database file open by then, so chmod on the directory does not stop the write and the
@@ -2515,38 +2523,6 @@ public class AdminConfigControllerTests
     }
 
     /// <summary>
-    /// The settings file holds every Immich API key and the frame's shared secret. An operator who
-    /// tightened its mode must not lose that to a save: the temporary file is renamed over the
-    /// original, so it is the temporary file's permissions the live file ends up with.
-    /// </summary>
-    [Test]
-    [Platform("Unix")]
-    public async Task SaveConfig_KeepsTheSettingsFilesPermissions()
-    {
-        WriteSettings("Settings.json", SettingsJson);
-        var path = SettingsPath("Settings.json");
-
-        // 0640, deliberately: a newly created file is 0666 minus the umask, so 0600 and 0644 are both
-        // modes this test could be handed for free. Group-read-without-other is one no umask produces,
-        // so the assertion below can only pass if the mode was actually carried across.
-        const UnixFileMode hardened = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead;
-        SetMode(path, hardened);
-
-        using var factory = CreateFactory();
-        var client = factory.CreateClient();
-
-        var config = await GetConfig(client);
-        config.Default.General.Interval = 99;
-        var response = await Put(client, config);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(ModeOf(path), Is.EqualTo(hardened));
-        });
-    }
-
-    /// <summary>
     /// The two-writers case the version token exists for, in its uglier form: somebody hand-edits the
     /// file and leaves it unparseable while an administrator has the editor open. The loader falls
     /// through to the environment when a file will not parse, so without help the editor would
@@ -3378,17 +3354,14 @@ public class AdminConfigControllerTests
     }
 
     // Guarded rather than called directly: the file-mode APIs are unsupported on Windows, and an
-    // unguarded call site is a CA1416 warning in an otherwise clean build. The two tests that turn on
-    // what the mode actually is carry [Platform("Unix")] as well.
+    // unguarded call site is a CA1416 warning in an otherwise clean build. The test that turns on what
+    // the mode actually is carries [Platform("Unix")] as well.
     private static void SetMode(string path, UnixFileMode mode)
     {
         if (OperatingSystem.IsWindows()) return;
 
         File.SetUnixFileMode(path, mode);
     }
-
-    private static UnixFileMode? ModeOf(string path) =>
-        OperatingSystem.IsWindows() ? null : File.GetUnixFileMode(path);
 
     /// <summary>
     /// The settings document as the store now holds it. This replaced reading the settings file

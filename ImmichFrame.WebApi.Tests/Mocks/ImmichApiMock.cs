@@ -18,8 +18,10 @@ namespace ImmichFrame.WebApi.Tests.Mocks
     public static class ImmichApiMock
     {
         /// <summary>
-        /// Sets up the handler to answer <c>GET server/version</c> with a compatible Immich server version,
-        /// so the startup version gate allows ImmichFrame to start during tests.
+        /// Sets up the handler to answer <c>GET server/version</c> - by default with a version this
+        /// ImmichFrame supports. Every host sends that request at startup, to each server it is
+        /// configured with: the check is fire-and-forget and only logs what it hears, so nothing fails
+        /// without this, but the request would go out to the network instead.
         /// </summary>
         public static Mock<HttpMessageHandler> WithServerVersion(
             this Mock<HttpMessageHandler> handler,

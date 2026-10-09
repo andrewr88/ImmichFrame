@@ -25,7 +25,8 @@ namespace ImmichFrame.WebApi.Tests.Controllers;
 /// Everywhere else the <c>AdminOidcOptions</c> singleton is replaced after the host is built, which
 /// cannot reach the <c>AddOpenIdConnect</c> call that already ran - so the challenge, and with it
 /// the open-redirect guard on <c>returnUrl</c>, would never be exercised, and neither would the
-/// claim mapping that decides what of the userinfo response reaches the allowlist. Here the
+/// claim mapping that decides what of the userinfo response reaches the allowlist, or whether
+/// forwarded headers get to choose the address the handshake calls back to. Here the
 /// environment variables are set before <see cref="WebApplicationFactory{T}"/> builds anything, and
 /// the handler's discovery document is supplied statically so no identity provider has to exist.
 /// </para>
@@ -36,12 +37,17 @@ public class AdminLoginChallengeTests
     private const string Authority = "https://idp.example.com/realms/immichframe";
     private const string AuthorizationEndpoint = Authority + "/protocol/openid-connect/auth";
 
+    // What a client sends to choose the address the authorization code is sent back to.
+    private const string ForwardedProto = "https";
+    private const string ForwardedHost = "evil.example";
+
     private static readonly string[] Variables =
     [
         AdminOidcOptions.AuthorityVariable,
         AdminOidcOptions.ClientIdVariable,
         AdminOidcOptions.ClientSecretVariable,
-        AdminOidcOptions.AdminsVariable
+        AdminOidcOptions.AdminsVariable,
+        AdminOidcOptions.TrustProxyHeadersVariable
     ];
 
     private readonly Dictionary<string, string?> _restore = new();
@@ -58,7 +64,15 @@ public class AdminLoginChallengeTests
         Environment.SetEnvironmentVariable(AdminOidcOptions.ClientIdVariable, "immichframe");
         Environment.SetEnvironmentVariable(AdminOidcOptions.ClientSecretVariable, "client-secret");
         Environment.SetEnvironmentVariable(AdminOidcOptions.AdminsVariable, "admin@example.com");
+
+        // Off, as it is by default. The one test that trusts the proxy headers turns it on for itself.
+        Environment.SetEnvironmentVariable(AdminOidcOptions.TrustProxyHeadersVariable, null);
     }
+
+    /// <summary>Turned back off after the test that turned it on, whether or not that test passed.</summary>
+    [TearDown]
+    public void ProxyHeadersNotTrusted() =>
+        Environment.SetEnvironmentVariable(AdminOidcOptions.TrustProxyHeadersVariable, null);
 
     [OneTimeTearDown]
     public void RestoreEnvironment()
@@ -115,6 +129,45 @@ public class AdminLoginChallengeTests
     }
 
     /// <summary>
+    /// The handler builds <c>redirect_uri</c> - where the identity provider sends the authorization
+    /// code - from the request's scheme and host, so whoever sets those picks the address. Any client
+    /// can send <c>X-Forwarded-Proto</c> and <c>X-Forwarded-Host</c>, so unless the proxy headers are
+    /// trusted - opt-in, and off by default - the address stays the one the request really arrived on.
+    /// </summary>
+    [Test]
+    public async Task Login_ProxyHeadersNotTrusted_IgnoresForgedForwardedHeaders()
+    {
+        // Arrange
+        using var factory = CreateFactory();
+        var client = CreateClient(factory);
+
+        // Act
+        var callback = await CallbackAfterForwardedLogin(client);
+
+        // Assert - the address TestServer received the request on.
+        Assert.That(callback, Is.EqualTo(new Uri(client.BaseAddress!, AdminAuthentication.CallbackPath).ToString()));
+    }
+
+    /// <summary>
+    /// And trusted, they are what the address is built from - which is the point of trusting them:
+    /// behind a proxy that terminates TLS, the request arrives as plain http, and an http
+    /// <c>redirect_uri</c> is one the identity provider rejects.
+    /// </summary>
+    [Test]
+    public async Task Login_ProxyHeadersTrusted_BuildsTheCallbackFromTheForwardedHostAndScheme()
+    {
+        // Arrange - read once, while Program runs, so set before the host starts. TearDown puts it back.
+        Environment.SetEnvironmentVariable(AdminOidcOptions.TrustProxyHeadersVariable, "true");
+        using var factory = CreateFactory();
+
+        // Act
+        var callback = await CallbackAfterForwardedLogin(CreateClient(factory));
+
+        // Assert
+        Assert.That(callback, Is.EqualTo($"{ForwardedProto}://{ForwardedHost}{AdminAuthentication.CallbackPath}"));
+    }
+
+    /// <summary>
     /// What a userinfo response says about the address, carried into the session by the handler
     /// <c>Program</c> registered - run through that handler's own claim actions, because those are
     /// exactly what <c>GetClaimsFromUserInfoEndpoint</c> applies to the response, and a claim they do
@@ -160,6 +213,23 @@ public class AdminLoginChallengeTests
     }
 
     /// <summary>
+    /// Nothing here calls the identity provider on the signed-in user's behalf, so the handshake's
+    /// tokens are not kept. Saved, they would travel inside the admin cookie with every request for as
+    /// long as the session lasted, for no use at all. Asked of the handler <c>Program</c> registered,
+    /// which only this fixture has: anywhere else these are the library's defaults.
+    /// </summary>
+    [Test]
+    public void OidcHandler_KeepsNoTokensInTheSession()
+    {
+        using var factory = CreateFactory();
+
+        var handlerOptions = factory.Services.GetRequiredService<IOptionsMonitor<OpenIdConnectOptions>>()
+            .Get(AdminAuthentication.OidcScheme);
+
+        Assert.That(handlerOptions.SaveTokens, Is.False);
+    }
+
+    /// <summary>
     /// Where the browser is sent <em>after</em> the handshake finishes. It travels inside the
     /// protected <c>state</c> parameter, so the assertion has to unprotect it with the handler's own
     /// data format - reading the redirect's query string would only ever show the identity
@@ -184,6 +254,23 @@ public class AdminLoginChallengeTests
         Assert.That(properties, Is.Not.Null);
 
         return properties!.RedirectUri;
+    }
+
+    /// <summary>
+    /// The <c>redirect_uri</c> a login hands the identity provider when the request carries
+    /// <see cref="ForwardedProto"/> and <see cref="ForwardedHost"/>.
+    /// </summary>
+    private static async Task<string> CallbackAfterForwardedLogin(HttpClient client)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/admin/login");
+        request.Headers.Add("X-Forwarded-Proto", ForwardedProto);
+        request.Headers.Add("X-Forwarded-Host", ForwardedHost);
+
+        var response = await client.SendAsync(request);
+
+        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Found), "the login did not redirect to the identity provider");
+
+        return QueryHelpers.ParseQuery(response.Headers.Location!.Query)["redirect_uri"].ToString();
     }
 
     private static HttpClient CreateClient(WebApplicationFactory<Program> factory) =>

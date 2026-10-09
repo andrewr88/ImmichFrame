@@ -93,6 +93,11 @@ public class HttpClientLoggingTests
     /// The frame's own requests to its Immich server, every one carrying the account's key. Redacted
     /// rather than silenced: the request line and its timing are what an operator chasing a slow or
     /// failing server reads.
+    /// <para>
+    /// The request line looked for is the asset call's own search. The startup version check sends
+    /// <c>GET server/version</c> to the same server on the same client, so a looser match would be met
+    /// by that alone, whether or not the asset call logged anything - or made a request at all.
+    /// </para>
     /// </summary>
     [Test]
     public async Task ImmichAccountHttpClient_LogsTheRequestButNotTheApiKey()
@@ -110,7 +115,7 @@ public class HttpClientLoggingTests
         {
             Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
             Assert.That(logs.Messages, Has.None.Contains(ApiKey));
-            Assert.That(logs.Messages, Has.Some.Contains($"GET {ImmichServer}/api/"));
+            Assert.That(logs.Messages, Has.Some.Contains($"POST {ImmichServer}/api/search/random"));
         });
     }
 

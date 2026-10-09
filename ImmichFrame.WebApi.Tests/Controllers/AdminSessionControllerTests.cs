@@ -16,6 +16,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Moq;
 using NUnit.Framework;
+using SetCookieHeaderValue = Microsoft.Net.Http.Headers.SetCookieHeaderValue;
 
 namespace ImmichFrame.WebApi.Tests.Controllers;
 
@@ -263,6 +264,10 @@ public class AdminSessionControllerTests
     /// Sign-out is authentication-only on purpose. A signed-in non-administrator has to be able to
     /// end their own session: the "you are not an administrator" screen polls the session endpoint,
     /// which re-issues the sliding cookie, so a policy-gated sign-out would never let them out.
+    /// <para>
+    /// And succeeding has to mean the session is over: the browser is told to drop the cookie - its
+    /// value emptied and its expiry in the past. A 200 that left the cookie alone would sign nobody out.
+    /// </para>
     /// </summary>
     [Test]
     public async Task Logout_SignedInButNotOnAllowlist_StillSucceeds()
@@ -271,8 +276,15 @@ public class AdminSessionControllerTests
         var client = factory.CreateClient();
 
         var response = await Post(client, "/api/admin/logout", OtherSubject);
+        var cleared = AdminCookieSetBy(factory, response);
 
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(cleared, Is.Not.Null, "the sign-out did not touch the admin cookie");
+            Assert.That(cleared?.Value.ToString(), Is.Empty);
+            Assert.That(cleared?.Expires, Is.LessThan(DateTimeOffset.UtcNow));
+        });
     }
 
     /// <summary>
@@ -309,6 +321,48 @@ public class AdminSessionControllerTests
             Assert.That(issued, Is.Not.Null, "the sign-in issued no admin cookie");
             Assert.That(attributes, Has.Some.EqualTo("httponly").IgnoreCase);
             Assert.That(attributes, Has.Some.EqualTo("samesite=lax").IgnoreCase);
+        });
+    }
+
+    /// <summary>
+    /// How long a session lasts: eight hours, renewed while it is in use. Renewal is what keeps an
+    /// administrator who is still using the editor signed in; the eight hours are what end a session
+    /// somebody walked away from.
+    /// </summary>
+    [Test]
+    public void AdminCookie_LastsEightHoursAndIsRenewedByUse()
+    {
+        using var factory = CreateFactory(Enabled());
+
+        var options = AdminCookieOptions(factory);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.ExpireTimeSpan, Is.EqualTo(TimeSpan.FromHours(8)));
+            Assert.That(options.SlidingExpiration, Is.True);
+        });
+    }
+
+    /// <summary>
+    /// Secure exactly when the sign-in came over https. Always would have the browser refuse the
+    /// cookie from a frame served over plain http, so nobody could sign in there at all; never would
+    /// let a session issued over https be sent over plain http as well.
+    /// </summary>
+    [Test]
+    public async Task AdminCookie_IsSecureWhenTheSignInCameOverHttps()
+    {
+        using var factory = CreateFactory(Enabled());
+        var httpsClient = factory.CreateClient(new WebApplicationFactoryClientOptions { BaseAddress = new Uri("https://localhost") });
+
+        var overHttps = await httpsClient.PostAsync(SignInProbe, null);
+        var overHttp = await factory.CreateClient().PostAsync(SignInProbe, null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(AdminCookieOptions(factory).Cookie.SecurePolicy, Is.EqualTo(CookieSecurePolicy.SameAsRequest));
+
+            Assert.That(AdminCookieSetBy(factory, overHttps)?.Secure, Is.True, "signed in over https");
+            Assert.That(AdminCookieSetBy(factory, overHttp)?.Secure, Is.False, "signed in over plain http");
         });
     }
 
@@ -465,6 +519,20 @@ public class AdminSessionControllerTests
                     services.AddControllers().AddApplicationPart(typeof(AdminProbeController).Assembly);
                 });
             });
+    }
+
+    private static CookieAuthenticationOptions AdminCookieOptions(WebApplicationFactory<Program> factory) =>
+        factory.Services.GetRequiredService<IOptionsMonitor<CookieAuthenticationOptions>>()
+            .Get(AdminAuthentication.CookieScheme);
+
+    /// <summary>What a response's <c>Set-Cookie</c> says of the admin cookie; null if it says nothing.</summary>
+    private static SetCookieHeaderValue? AdminCookieSetBy(WebApplicationFactory<Program> factory, HttpResponseMessage response)
+    {
+        var name = AdminCookieOptions(factory).Cookie.Name;
+
+        return response.Headers.TryGetValues("Set-Cookie", out var headers)
+            ? SetCookieHeaderValue.ParseList(headers.ToList()).SingleOrDefault(cookie => cookie.Name.Equals(name, StringComparison.Ordinal))
+            : null;
     }
 
     private static Task<HttpResponseMessage> Post(HttpClient client, string url, string subject) =>

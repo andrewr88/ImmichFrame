@@ -143,8 +143,9 @@ public class FrameAuthenticationTests
             {
                 builder.ConfigureTestServices(services =>
                 {
-                    // Without this the startup version gate calls Environment.Exit and takes the
-                    // test host down with it.
+                    // The startup version check only logs what it hears, and nothing waits for it -
+                    // but without this its request would go out to the network, to a server that
+                    // does not exist.
                     services.UseMockHandler(versionHandler);
 
                     // Seeded through the catalog, because the per-profile services the handler

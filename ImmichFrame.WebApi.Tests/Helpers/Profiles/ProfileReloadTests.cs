@@ -534,8 +534,9 @@ public class ProfileReloadTests
             {
                 builder.ConfigureTestServices(services =>
                 {
-                    // Without this the startup version gate calls Environment.Exit and takes the
-                    // test host down with it.
+                    // The statistics call GetTotalAssets makes, and the startup version check - which
+                    // only logs what it hears, and nothing waits for it, but without this would send
+                    // its request out to the network, to a server that does not exist.
                     services.UseMockHandler(versionHandler);
 
                     // The catalog below leaves IConfigCatalog forwarding to SwappableConfigCatalog, so
