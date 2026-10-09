@@ -1,4 +1,6 @@
+using System.Linq.Expressions;
 using System.Net.Http;
+using ImmichFrame.Core.Api;
 using ImmichFrame.Core.Interfaces;
 using ImmichFrame.WebApi.Helpers.Config;
 using ImmichFrame.WebApi.Helpers.Profiles;
@@ -94,6 +96,47 @@ public class ProfileGraphLifetimeTests
         // down with it fails here with ObjectDisposedException rather than with a network error.
         Assert.That(await shared.GetTotalAssets(), Is.EqualTo(TotalImages));
     }
+
+    /// <summary>
+    /// The forwarder is there only to keep the container from owning the profile's logic, so it must be
+    /// invisible otherwise: every call reaches that logic once, with exactly the arguments it was made
+    /// with. A case per member of <see cref="IImmichFrameLogic"/> - add one to the interface and it
+    /// belongs in <see cref="ForwardedCalls"/> too.
+    /// </summary>
+    [TestCaseSource(nameof(ForwardedCalls))]
+    public void ForwarderPassesTheCallOnUnchanged(Expression<Action<IImmichFrameLogic>> call)
+    {
+        var shared = new Mock<IImmichFrameLogic>();
+
+        call.Compile()(new NonOwningImmichFrameLogic(shared.Object));
+
+        shared.Verify(call, Times.Once());
+        shared.VerifyNoOtherCalls();
+    }
+
+    // Arguments a forwarder could not come up with on its own: none of them is its type's default,
+    // which is what one that dropped an argument would pass in its place.
+    private static readonly Guid AssetId = Guid.Parse("4f9d1c2a-7b3e-4e5f-9a8b-0c1d2e3f4a5b");
+    private const string RangeHeader = "bytes=1024-2047";
+    private static readonly CancellationToken Cancellation = new CancellationTokenSource().Token;
+    private static readonly IWebhookNotification Notification = Mock.Of<IWebhookNotification>();
+
+    private static IEnumerable<TestCaseData> ForwardedCalls()
+    {
+        yield return Forwarded(nameof(IImmichFrameLogic.GetNextAsset), logic => logic.GetNextAsset());
+        yield return Forwarded(nameof(IImmichFrameLogic.GetAssets), logic => logic.GetAssets());
+        yield return Forwarded(nameof(IImmichFrameLogic.GetAssetInfoById), logic => logic.GetAssetInfoById(AssetId));
+        yield return Forwarded(nameof(IImmichFrameLogic.GetAssetFacesById), logic => logic.GetAssetFacesById(AssetId));
+        yield return Forwarded(nameof(IImmichFrameLogic.GetAlbumInfoById), logic => logic.GetAlbumInfoById(AssetId));
+        yield return Forwarded(nameof(IImmichFrameLogic.GetAsset),
+            logic => logic.GetAsset(AssetId, AssetTypeEnum.VIDEO, RangeHeader, Cancellation));
+        yield return Forwarded(nameof(IImmichFrameLogic.GetTotalAssets), logic => logic.GetTotalAssets());
+        yield return Forwarded(nameof(IImmichFrameLogic.SendWebhookNotification),
+            logic => logic.SendWebhookNotification(Notification));
+    }
+
+    private static TestCaseData Forwarded(string member, Expression<Action<IImmichFrameLogic>> call) =>
+        new TestCaseData(call).SetArgDisplayNames(member);
 
     private static WebApplicationFactory<Program> CreateFactory()
     {

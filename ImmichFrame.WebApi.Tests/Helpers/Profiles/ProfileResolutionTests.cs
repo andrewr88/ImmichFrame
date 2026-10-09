@@ -1,7 +1,9 @@
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Text.Json;
 using System.Text.Json.Nodes;
+using ImmichFrame.Core.Api;
 using ImmichFrame.Core.Exceptions;
 using ImmichFrame.Core.Interfaces;
 using ImmichFrame.WebApi.Helpers.Config;
@@ -12,6 +14,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
+using Moq.Protected;
 using NUnit.Framework;
 
 namespace ImmichFrame.WebApi.Tests.Helpers.Profiles;
@@ -71,6 +74,50 @@ public class ProfileResolutionTests
         });
     }
 
+    /// <summary>
+    /// Which account an asset is fetched from is looked up among the assets the accounts have handed
+    /// out, by a tracker that asks every account it has recorded. Shared between profiles, it would
+    /// serve a request on one profile out of an account configured for another - which
+    /// <see cref="EachProfileGetsItsOwnServices"/> cannot show, as two profiles' logic can be separate
+    /// objects with one tracker underneath. Every account here is on the one server, which describes the
+    /// asset to any account that asks, so only which accounts get asked can keep it from a profile.
+    /// </summary>
+    [Test]
+    public async Task AssetOneProfileHandedOutIsNotFoundThroughAnother()
+    {
+        var asset = new AssetResponseDto
+        {
+            Id = Guid.NewGuid(),
+            Type = AssetTypeEnum.IMAGE,
+            Visibility = AssetVisibility.Timeline,
+            OriginalPath = "/photos/kitchen.jpg",
+            OriginalFileName = "kitchen.jpg",
+            Checksum = "kitchen-checksum",
+        };
+        using var root = new ServiceCollection()
+            .AddLogging()
+            .AddHttpClient()
+            .UseMockHandler(ImmichHolding(asset))
+            .BuildServiceProvider();
+        var registry = new ProfileRegistry(Catalog(), root);
+        var kitchen = registry.For("kitchen").Logic;
+        var bedroom = registry.For("bedroom").Logic;
+
+        // Handing the asset out is what records which of the kitchen's accounts holds it.
+        var handedOut = await kitchen.GetNextAsset();
+        var foundByKitchen = await kitchen.GetAssetInfoById(asset.Id);
+
+        Assert.Multiple(() =>
+        {
+            // Without these two, the refusal below could be nothing more than an asset that was never
+            // recorded, or a server that never answers for it.
+            Assert.That(handedOut?.Id, Is.EqualTo(asset.Id));
+            Assert.That(foundByKitchen.Id, Is.EqualTo(asset.Id), "the profile that handed the asset out finds it again");
+            Assert.That(async () => await bedroom.GetAssetInfoById(asset.Id), Throws.InstanceOf<AssetNotFoundException>(),
+                "none of the bedroom's accounts handed this asset out, so none of them may be asked for it");
+        });
+    }
+
     [Test]
     public void NullEmptyAndDefaultNameAllResolveToTheDefaultProfile()
     {
@@ -80,6 +127,24 @@ public class ProfileResolutionTests
         {
             Assert.That(_registry.For(string.Empty), Is.SameAs(byNull));
             Assert.That(_registry.For(ConfigCatalog.DefaultProfileName), Is.SameAs(byNull));
+        });
+    }
+
+    /// <summary>
+    /// A name of nothing but whitespace is the default profile to the catalog, and
+    /// <see cref="UnknownProfileMiddleware"/> lets <c>?profile=%20</c> through as one. The cache in front
+    /// of the catalog has to agree: keyed as itself, each such spelling would build and keep a whole
+    /// second graph - pools, API caches, HTTP clients - for the default profile.
+    /// </summary>
+    [Test]
+    public void WhitespaceNameResolvesToTheDefaultProfile()
+    {
+        var byNull = _registry.For(null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(_registry.For(" "), Is.SameAs(byNull));
+            Assert.That(_registry.For("\t "), Is.SameAs(byNull));
         });
     }
 
@@ -205,6 +270,29 @@ public class ProfileResolutionTests
 
         return response.StatusCode;
     }
+
+    /// <summary>
+    /// An Immich server holding <paramref name="asset"/> and nothing else: it counts it, draws it at
+    /// random, and describes it to whichever account asks. Answered from the generated DTOs, as
+    /// <c>AssetControllerTests</c> does, so a change to the OpenAPI schema fails at compile time.
+    /// </summary>
+    private static Mock<HttpMessageHandler> ImmichHolding(AssetResponseDto asset)
+    {
+        var immich = new Mock<HttpMessageHandler>().WithAssetStatistics(1);
+
+        Answer(immich, "/search/random", JsonSerializer.Serialize(new[] { asset }));
+        Answer(immich, $"/assets/{asset.Id}", JsonSerializer.Serialize(asset));
+
+        return immich;
+    }
+
+    // Answers the requests to one of Immich's endpoints, named by the end of its path, with a JSON body.
+    private static void Answer(Mock<HttpMessageHandler> immich, string endpoint, string json) =>
+        immich.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.Is<HttpRequestMessage>(r => r.RequestUri!.AbsolutePath.EndsWith(endpoint)),
+                ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync(() => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json) });
 
     private static ConfigCatalog Catalog() =>
         new(Settings(DefaultInterval, DefaultSecret),

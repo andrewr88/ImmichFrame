@@ -118,6 +118,31 @@ public class ProfileReloadTests
     }
 
     /// <summary>
+    /// The registry's half of that promise: a resolve that met the failed seed must leave nothing behind
+    /// that replays the failure. <see cref="ProfileRegistry.For"/> reads the catalog before it caches
+    /// anything, so the failure stops there. Met inside a <c>Lazy</c> already in the registry instead,
+    /// it would be kept - and served to every request on the profile from then on, however readable the
+    /// settings had since become, until a save happened to clear it.
+    /// </summary>
+    [Test]
+    public void ResolveThatMetAFailedSeedLeavesNothingCached()
+    {
+        var attempts = 0;
+        ProfileRegistry registry = null!;
+        var catalog = new SwappableConfigCatalog(() =>
+        {
+            if (attempts++ == 0) throw new InvalidOperationException("The settings database is locked.");
+
+            return Catalog(BeforeInterval, withKitchen: true);
+        }, () => registry);
+        registry = new ProfileRegistry(catalog, _root);
+
+        Assert.That(() => registry.For("kitchen"), Throws.InvalidOperationException, "the resolve the failure happened on sees it");
+        Assert.That(registry.For("kitchen").GeneralSettings.Interval, Is.EqualTo(KitchenInterval),
+            "the next one is built from the catalog the seed has now read");
+    }
+
+    /// <summary>
     /// The other half of the same promise, which held only on paper: <c>Program.cs</c> migrates the
     /// settings database at startup unless a host has a catalog of its own, and it asked whether a
     /// <see cref="SwappableConfigCatalog"/> was registered - which one always is, under whatever the
@@ -168,6 +193,33 @@ public class ProfileReloadTests
             Assert.That(_catalog.TryGet("kitchen", out var kitchen), Is.True);
             Assert.That(kitchen!.GeneralSettings.Interval, Is.EqualTo(KitchenInterval));
         });
+    }
+
+    /// <summary>
+    /// The order inside a swap. <see cref="ProfileRegistry.For"/> reads a profile's settings inside a
+    /// <c>Lazy</c> it has already published, so an entry inserted before a swap and built after it is
+    /// only safe if the replacement is in place by the time the registry drops its entries. The other
+    /// way round, an entry inserted between the two would be built from the outgoing configuration and
+    /// survive the clear, serving it until the next save. Observed from the one place a swap reaches the
+    /// registry through - the factory it was handed - where the catalog must already answer with the
+    /// replacement.
+    /// </summary>
+    [Test]
+    public void SwapPublishesTheReplacementBeforeItInvalidatesTheRegistry()
+    {
+        SwappableConfigCatalog catalog = null!;
+        ProfileRegistry registry = null!;
+        int? intervalAsTheRegistryIsInvalidated = null;
+        catalog = new SwappableConfigCatalog(() => Catalog(BeforeInterval, withKitchen: true), () =>
+        {
+            intervalAsTheRegistryIsInvalidated = catalog.Default.GeneralSettings.Interval;
+            return registry;
+        });
+        registry = new ProfileRegistry(catalog, _root);
+
+        catalog.Swap(Catalog(AfterInterval, withKitchen: true));
+
+        Assert.That(intervalAsTheRegistryIsInvalidated, Is.EqualTo(AfterInterval));
     }
 
     /// <summary>
@@ -290,6 +342,124 @@ public class ProfileReloadTests
             Assert.That(() => scope.Services, Throws.InstanceOf<ObjectDisposedException>(),
                 "a resolve after the scope ended would take a lease nothing is left to release");
         });
+    }
+
+    /// <summary>
+    /// A request that fans out resolves from its scope on several threads at once, and between them they
+    /// must take one lease. Two callers that each found none would each take their own, and the one
+    /// whose assignment lost would never be given back: the graph would outlive the swap that retired
+    /// it, held up by a lease nothing holds. The first caller is kept inside the scope's lock, reading
+    /// the profile name, while the second is let go.
+    /// </summary>
+    [Test]
+    public async Task ConcurrentFirstResolvesOfOneScopeTakeOneLease()
+    {
+        var profile = new ProfileNameHeldOnRead();
+        var scope = new ProfileScope(_registry, profile);
+        ProfileServices? second = null;
+        Exception? secondFailure = null;
+        var secondCaller = new Thread(() =>
+        {
+            try
+            {
+                second = scope.Services;
+            }
+            catch (Exception ex)
+            {
+                secondFailure = ex;
+            }
+        }) { IsBackground = true };
+
+        var first = Task.Run(() => scope.Services);
+        try
+        {
+            await Task.WhenAny(profile.FirstRead, first);
+            StartAndWaitUntilItCanGoNoFurther(secondCaller);
+        }
+        finally
+        {
+            profile.Release();
+        }
+
+        var leased = await first;
+        secondCaller.Join();
+
+        // The scope gives back the lease it holds and the swap retires the graph, so the graph is torn
+        // down unless a second lease is still holding it up.
+        scope.Dispose();
+        _catalog.Swap(Catalog(AfterInterval, withKitchen: true));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(secondFailure, Is.Null);
+            Assert.That(second, Is.SameAs(leased), "one scope is served one graph");
+            Assert.That(profile.Reads, Is.EqualTo(1), "only the first caller gets as far as deciding what to lease");
+            Assert.That(async () => await leased.Logic.GetTotalAssets(), Throws.InstanceOf<ObjectDisposedException>(),
+                "a second lease taken beside the scope's own would hold the retired graph up after the scope ended");
+        });
+    }
+
+    /// <summary>
+    /// The scope ending while its first resolve is still taking the lease. The dispose has to wait for
+    /// that lease and give it back: one that looked while the lease was being taken would find none,
+    /// release nothing and mark the scope ended - and the lease taken a moment later would never be
+    /// given back, holding the graph up past the swap that retires it.
+    /// </summary>
+    [Test]
+    public async Task ScopeEndingWhileItsFirstResolveIsLeasingGivesThatLeaseBack()
+    {
+        var profile = new ProfileNameHeldOnRead();
+        var scope = new ProfileScope(_registry, profile);
+        Exception? disposeFailure = null;
+        var disposer = new Thread(() =>
+        {
+            try
+            {
+                scope.Dispose();
+            }
+            catch (Exception ex)
+            {
+                disposeFailure = ex;
+            }
+        }) { IsBackground = true };
+
+        var resolve = Task.Run(() => scope.Services);
+        try
+        {
+            await Task.WhenAny(profile.FirstRead, resolve);
+            StartAndWaitUntilItCanGoNoFurther(disposer);
+        }
+        finally
+        {
+            profile.Release();
+        }
+
+        var leased = await resolve;
+        disposer.Join();
+
+        _catalog.Swap(Catalog(AfterInterval, withKitchen: true));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(disposeFailure, Is.Null);
+            Assert.That(async () => await leased.Logic.GetTotalAssets(), Throws.InstanceOf<ObjectDisposedException>(),
+                "the lease the resolve took has to be given back by the dispose that waited for it");
+        });
+    }
+
+    /// <summary>
+    /// Starts <paramref name="caller"/> and returns once it can get no further while the first caller is
+    /// held inside the scope: blocked - on the scope's lock, or reading the profile name behind it - or
+    /// finished. Bounded, and deliberately not asserted on: how long this takes decides only whether the
+    /// race is lined up, never which way a correct scope comes out of it.
+    /// </summary>
+    private static void StartAndWaitUntilItCanGoNoFurther(Thread caller)
+    {
+        caller.Start();
+
+        SpinWait.SpinUntil(
+            () => (caller.ThreadState & (ThreadState.WaitSleepJoin | ThreadState.Stopped)) != 0,
+            TimeSpan.FromSeconds(5));
     }
 
     /// <summary>
@@ -419,6 +589,57 @@ public class ProfileReloadTests
             "the queued request gives back a lease it actually took");
         Assert.That(await registry.For(null).Logic.GetTotalAssets(), Is.EqualTo(TotalImages),
             "the graph rebuilt from the new configuration is serving requests");
+    }
+
+    /// <summary>
+    /// Finding its graph evicted, a request compares it with whatever the key holds now - and that need
+    /// not be a graph yet. Another request may have put an entry there whose build is still running, or
+    /// has failed, and asking that entry for its value would tie this request to a build that is not its
+    /// own: waiting on it, or failing with its exception. Pinned with the failed build, the one whose
+    /// effect does not depend on timing: this request built a working graph, and is owed it.
+    /// </summary>
+    [Test]
+    public async Task RequestWhoseGraphWasEvictedIsNotFailedByTheBuildThatReplacedIt()
+    {
+        var firstBuildStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finishFirstBuild = new ManualResetEventSlim();
+        ProfileRegistry registry = null!;
+        var catalog = new SwappableConfigCatalog(() => Catalog(BeforeInterval, withKitchen: true), () => registry);
+        registry = new ProfileRegistry(new CatalogHookedOnEachBuild(catalog, build =>
+        {
+            if (build > 1) throw new InvalidOperationException("The replacement graph could not be built.");
+
+            firstBuildStarted.TrySetResult();
+            finishFirstBuild.Wait();
+        }), _root);
+
+        var leasing = Task.Run(() => registry.Lease("kitchen"));
+        try
+        {
+            await Task.WhenAny(firstBuildStarted.Task, leasing);
+
+            // A swap evicts the entry whose graph is still being built, and another request puts a new
+            // entry under the same key - whose build fails.
+            catalog.Swap(Catalog(AfterInterval, withKitchen: true));
+            Assert.That(() => registry.For("kitchen"), Throws.InvalidOperationException);
+        }
+        finally
+        {
+            finishFirstBuild.Set();
+        }
+
+        Assert.That(async () => await leasing, Throws.Nothing, "the request was failed with another request's build");
+
+        var leased = await leasing;
+        var served = await leased.Logic.GetTotalAssets();
+        leased.Release();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(served, Is.EqualTo(TotalImages), "the request is served from the graph it built");
+            Assert.That(async () => await leased.Logic.GetTotalAssets(), Throws.InstanceOf<ObjectDisposedException>(),
+                "found evicted, that graph still dies with the request that built it");
+        });
     }
 
     /// <summary>
@@ -607,7 +828,7 @@ public class ProfileReloadTests
         public bool TryGet(string? name, [NotNullWhen(true)] out IServerSettings? settings) =>
             _catalog.TryGet(name, out settings);
 
-        public IServerSettings Get(string? name) => new SettingsSwappingOnRead(_catalog.Get(name), SwapOnce);
+        public IServerSettings Get(string? name) => new SettingsHookedOnRead(_catalog.Get(name), SwapOnce);
 
         private void SwapOnce()
         {
@@ -620,10 +841,32 @@ public class ProfileReloadTests
     }
 
     /// <summary>
-    /// Settings that run <paramref name="_onRead"/> when the general settings are asked for, which is
-    /// what puts the swap above inside a graph's construction.
+    /// Runs <paramref name="_onBuild"/> inside each graph built from it, numbering the builds in the
+    /// order they start. A build is what reads the settings - <see cref="ProfileServices"/> does, once,
+    /// in its constructor - so the hook runs inside the <c>Lazy</c> the registry has already published,
+    /// where it can hold a build or fail one. The up-front <see cref="Get"/> in
+    /// <see cref="ProfileRegistry.For"/> reads nothing, so it is not counted.
     /// </summary>
-    private sealed class SettingsSwappingOnRead(IServerSettings _inner, Action _onRead) : IServerSettings
+    private sealed class CatalogHookedOnEachBuild(IConfigCatalog _catalog, Action<int> _onBuild) : IConfigCatalog
+    {
+        private int _builds;
+
+        public IServerSettings Default => _catalog.Default;
+
+        public IReadOnlyCollection<string> ProfileNames => _catalog.ProfileNames;
+
+        public bool TryGet(string? name, [NotNullWhen(true)] out IServerSettings? settings) =>
+            _catalog.TryGet(name, out settings);
+
+        public IServerSettings Get(string? name) =>
+            new SettingsHookedOnRead(_catalog.Get(name), () => _onBuild(Interlocked.Increment(ref _builds)));
+    }
+
+    /// <summary>
+    /// Settings that run <paramref name="_onRead"/> when the general settings are asked for, which is
+    /// what puts the catalogs' hooks above inside a graph's construction.
+    /// </summary>
+    private sealed class SettingsHookedOnRead(IServerSettings _inner, Action _onRead) : IServerSettings
     {
         public IEnumerable<IAccountSettings> Accounts => _inner.Accounts;
 
@@ -638,5 +881,37 @@ public class ProfileReloadTests
         }
 
         public void Validate() => _inner.Validate();
+    }
+
+    /// <summary>
+    /// The profile a request names, which <see cref="ProfileScope"/> reads under its lock the first
+    /// time the request resolves anything. Every read is counted and held until <see cref="Release"/>,
+    /// so a test can keep a first resolve inside that lock for as long as it takes to line a second
+    /// caller up behind it.
+    /// </summary>
+    private sealed class ProfileNameHeldOnRead : ICurrentProfile
+    {
+        private readonly TaskCompletionSource _firstRead = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly ManualResetEventSlim _released = new();
+        private int _reads;
+
+        public Task FirstRead => _firstRead.Task;
+
+        public int Reads => Volatile.Read(ref _reads);
+
+        public string? Name
+        {
+            get
+            {
+                Interlocked.Increment(ref _reads);
+                _firstRead.TrySetResult();
+                _released.Wait();
+
+                // The default profile, which every catalog here configures.
+                return null;
+            }
+        }
+
+        public void Release() => _released.Set();
     }
 }

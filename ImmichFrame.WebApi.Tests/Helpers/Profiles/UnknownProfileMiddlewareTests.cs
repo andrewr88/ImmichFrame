@@ -41,6 +41,27 @@ public class UnknownProfileMiddlewareTests
         });
     }
 
+    /// <summary>
+    /// The name is whatever the query string said, so it reaches the log sanitized. Logged raw, an
+    /// encoded CR LF would end the Warning early and start a line of the sender's own on the operator's
+    /// console - a forged record, in the middle of the frame's log.
+    /// </summary>
+    [Test]
+    public async Task UnknownProfile_IsLoggedWithoutTheLineBreaksItWasSentWith()
+    {
+        var log = new WarningLog();
+        var middleware = new UnknownProfileMiddleware(_ => Task.CompletedTask, log);
+
+        await middleware.InvokeAsync(Request("?profile=bad%0D%0AFORGED"), Catalog());
+
+        Assert.That(log.Lines, Has.Exactly(1).Items);
+        Assert.Multiple(() =>
+        {
+            Assert.That(log.Lines[0], Does.Not.Contain("\r").And.Not.Contain("\n"));
+            Assert.That(log.Lines[0], Does.Contain("bad").And.Contain("FORGED"), "the operator is still told what was asked for");
+        });
+    }
+
     [Test]
     public async Task ConfiguredProfile_IsPassedOn()
     {

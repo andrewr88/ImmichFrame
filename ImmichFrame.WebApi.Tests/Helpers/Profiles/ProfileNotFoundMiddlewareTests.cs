@@ -3,11 +3,15 @@ using System.Net.Http;
 using ImmichFrame.Core.Exceptions;
 using ImmichFrame.Core.Interfaces;
 using ImmichFrame.WebApi.Helpers.Config;
+using ImmichFrame.WebApi.Helpers.Profiles;
 using ImmichFrame.WebApi.Models;
 using ImmichFrame.WebApi.Tests.Mocks;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using NUnit.Framework;
 
@@ -43,6 +47,62 @@ public class ProfileNotFoundMiddlewareTests
             Assert.That(stillWorking.StatusCode, Is.EqualTo(HttpStatusCode.OK),
                 "catching the exception must not swallow the requests that are fine");
         });
+    }
+
+    /// <summary>
+    /// What reaches the client is the 404 alone. Whatever got as far as resolving the profile may already
+    /// have set headers for the response it meant to send, and left in place they would describe the
+    /// 404 instead - a cache told to keep it for a day, a client told it is an image. Run on a bare
+    /// context, as <c>UnknownProfileMiddlewareTests</c> are: no endpoint on the host sets headers and
+    /// then loses its profile on cue.
+    /// </summary>
+    [Test]
+    public async Task ProfileGoneBeforeTheResponseStarted_Is404WithoutTheHeadersSetForTheOneIntended()
+    {
+        var middleware = new ProfileNotFoundMiddleware(downstream =>
+        {
+            downstream.Response.ContentType = "image/jpeg";
+            downstream.Response.Headers.CacheControl = "public, max-age=86400";
+            throw Vanished();
+        }, NullLogger<ProfileNotFoundMiddleware>.Instance);
+        var context = new DefaultHttpContext();
+
+        await middleware.InvokeAsync(context);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(context.Response.StatusCode, Is.EqualTo(StatusCodes.Status404NotFound));
+            Assert.That(context.Response.Headers.ContainsKey("Cache-Control"), Is.False);
+            Assert.That(context.Response.ContentType, Is.Not.EqualTo("image/jpeg"));
+        });
+    }
+
+    /// <summary>
+    /// A response that has started has its status line and headers on their way to the client, and no
+    /// 404 can take their place. The exception goes on out as it was thrown - the server aborts the
+    /// response, and the log says what actually went wrong - where catching it would only try to clear
+    /// a started response, which throws an exception of its own in its place.
+    /// </summary>
+    [Test]
+    public void ProfileGoneAfterTheResponseStarted_PassesTheExceptionOnUnchanged()
+    {
+        var vanished = Vanished();
+        var middleware = new ProfileNotFoundMiddleware(_ => throw vanished, NullLogger<ProfileNotFoundMiddleware>.Instance);
+        var context = new DefaultHttpContext();
+        context.Features.Set<IHttpResponseFeature>(new StartedResponse());
+
+        var thrown = Assert.ThrowsAsync<ProfileNotFoundException>(() => middleware.InvokeAsync(context));
+
+        Assert.That(thrown, Is.SameAs(vanished));
+    }
+
+    private static ProfileNotFoundException Vanished() =>
+        new("No configuration profile named 'vanishing' is configured.");
+
+    /// <summary>A response already sending, which a bare context's own never is.</summary>
+    private sealed class StartedResponse : HttpResponseFeature
+    {
+        public override bool HasStarted => true;
     }
 
     private static WebApplicationFactory<Program> CreateFactory()
