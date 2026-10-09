@@ -172,6 +172,32 @@ public class FrameAuthenticationTests
     }
 
     /// <summary>
+    /// A refused token is answered with the handler's reason, which <c>CustomAuthenticationMiddleware</c>
+    /// writes into the 401 - the only account of the refusal an operator testing a frame's secret gets.
+    /// Without the middleware, <c>[Authorize]</c> would still refuse the request, but with an empty 401
+    /// that says nothing about why, so the status alone cannot show the middleware is there.
+    /// </summary>
+    [Test]
+    public async Task RealSecret_WrongBearerToken_IsRefusedWithTheReason()
+    {
+        // Arrange
+        using var factory = CreateFactory(RealSecret);
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/Calendar");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "not-the-secret");
+
+        // Act
+        var response = await factory.CreateClient().SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Unauthorized));
+            Assert.That(body, Is.EqualTo("The AuthenticationSecret was not correct!"));
+        });
+    }
+
+    /// <summary>
     /// Sends the probe with <paramref name="authorization"/> written onto the request the host sees
     /// exactly as given. Through HttpClient it would not arrive that way: TestServer copies a request's
     /// headers by enumerating them, and enumerating parses an Authorization value and writes it back

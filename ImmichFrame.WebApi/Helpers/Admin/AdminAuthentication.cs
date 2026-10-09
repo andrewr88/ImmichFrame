@@ -72,6 +72,13 @@ public static class AdminAuthentication
         RemoteSignOutPath
     ];
 
+    /// <summary>The rest of <see cref="OwnedPaths"/>: the editor's API and the SPA route that hosts it.</summary>
+    private static readonly PathString[] EditorPaths =
+    [
+        ApiPathPrefix,
+        SpaPath
+    ];
+
     /// <summary>
     /// Whether <paramref name="path"/> belongs to the admin surface.
     /// <para>
@@ -107,8 +114,20 @@ public static class AdminAuthentication
     /// </para>
     /// </summary>
     public static bool IsFrameAuthenticationExempt(PathString path, bool oidcEnabled) =>
-        StartsWithAny(path, [ApiPathPrefix, SpaPath]) ||
+        IsEditorPath(path) ||
         (oidcEnabled && StartsWithAny(path, HandshakePaths));
+
+    /// <summary>
+    /// Whether <paramref name="path"/> is the editor's own - its API, or the SPA route that hosts it -
+    /// rather than one of the three paths the OpenID Connect handler answers on.
+    /// <para>
+    /// Those three belong to the admin surface too, but it is the identity provider that sends a
+    /// browser to them, and to one of them inside a frame: front-channel sign-out loads
+    /// <see cref="RemoteSignOutPath"/> in an iframe on the provider's own page. So what keeps the
+    /// editor out of other sites' frames (<see cref="SecurityHeadersMiddleware"/>) has to leave them be.
+    /// </para>
+    /// </summary>
+    public static bool IsEditorPath(PathString path) => StartsWithAny(path, EditorPaths);
 
     /// <summary>
     /// Whether <paramref name="endpoint"/> is one the admin surface actually declares, as opposed to

@@ -1,7 +1,14 @@
+using System.Collections.Concurrent;
+using System.Net;
 using ImmichFrame.Core.Interfaces;
 using ImmichFrame.WebApi.Helpers.Config;
 using ImmichFrame.WebApi.Helpers.Profiles;
+using ImmichFrame.WebApi.Tests.Controllers;
+using ImmichFrame.WebApi.Tests.Mocks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;
 using NUnit.Framework;
@@ -10,10 +17,11 @@ namespace ImmichFrame.WebApi.Tests.Helpers.Profiles;
 
 /// <summary>
 /// <see cref="UnknownProfileMiddleware"/> on its own rather than over the real host, because over the
-/// host its absence does not show: the authentication handler resolving the unknown profile throws,
+/// host its absence barely shows: the authentication handler resolving the unknown profile throws,
 /// and <see cref="ProfileNotFoundMiddleware"/>, further out, answers that with the same 404. So these
 /// pin what only this middleware does - turning the request away before anything after it runs, and
-/// telling the operator so at Warning.
+/// telling the operator so at Warning. The one test over the host pins the Warning alone, which is
+/// what shows the middleware is in the pipeline at all.
 /// </summary>
 [TestFixture]
 public class UnknownProfileMiddlewareTests
@@ -62,6 +70,42 @@ public class UnknownProfileMiddlewareTests
         });
     }
 
+    /// <summary>
+    /// The middleware is in the host's pipeline, which is the one thing the tests above cannot show:
+    /// they build it by hand. Over the host its 404 is not proof of that - without it the
+    /// authentication handler throws resolving the profile, and <see cref="ProfileNotFoundMiddleware"/>
+    /// answers with the same 404 and the same words. What only this middleware does is tell the
+    /// operator, at Warning; caught out there, a mistyped profile is logged at Debug, as a request
+    /// that outlived a configuration swap, which the default log level does not show.
+    /// </summary>
+    [Test]
+    public async Task UnknownProfile_OverTheHost_Is404AndToldToTheOperator()
+    {
+        // Arrange
+        var log = new HostLog();
+        using var factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder =>
+            {
+                builder.ConfigureTestServices(services =>
+                {
+                    services.UseMockHandler(new Mock<HttpMessageHandler>().WithServerVersion());
+                    services.AddSingleton<IConfigCatalog>(AdminSessionControllerTests.Catalog());
+                    services.AddSingleton<ILoggerProvider>(log);
+                });
+            });
+
+        // Act
+        var response = await factory.CreateClient().GetAsync("/api/Config/Version?profile=bogus");
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+            Assert.That(log.Warnings, Has.Exactly(1).Contains("'bogus'"),
+                "a mistyped profile is the operator's to hear about, by name");
+        });
+    }
+
     [Test]
     public async Task ConfiguredProfile_IsPassedOn()
     {
@@ -96,6 +140,36 @@ public class UnknownProfileMiddlewareTests
         var settings = Mock.Of<IServerSettings>();
 
         return new ConfigCatalog(settings, [KeyValuePair.Create("kitchen", settings)]);
+    }
+
+    /// <summary>
+    /// The Warning lines a whole host logs. Concurrent, because the startup version check logs from a
+    /// thread of its own.
+    /// </summary>
+    private sealed class HostLog : ILoggerProvider
+    {
+        private readonly ConcurrentQueue<string> _warnings = new();
+
+        public IEnumerable<string> Warnings => _warnings;
+
+        public ILogger CreateLogger(string categoryName) => new Logger(_warnings);
+
+        public void Dispose()
+        {
+        }
+
+        private sealed class Logger(ConcurrentQueue<string> _warnings) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+                Func<TState, Exception?, string> formatter)
+            {
+                if (logLevel == LogLevel.Warning) _warnings.Enqueue(formatter(state, exception));
+            }
+        }
     }
 
     /// <summary>The Warning lines the middleware logs, which is where an unknown profile is reported.</summary>

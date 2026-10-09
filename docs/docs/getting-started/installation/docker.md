@@ -18,11 +18,11 @@ Example configuration files:
 
 - [`Settings.yml` example][example-yaml] — imported once on first start
 - [`Settings.json` example][example-json] — imported once on first start
-- [`.env` example][example-env] — admin password, config path and log level
+- [`.env` example][example-env] — config path, log level, time zone and the admin UI's sign-in settings
 
-Starting without a settings file is fine: open the [admin UI](../admin-ui.md) at `/admin`,
-pick an admin password on the setup screen and configure everything there. Setting
-`IMMICHFRAME_ADMIN_PASSWORD` (as below) chooses that password up front instead.
+Starting without a settings file is fine: [turn the admin UI on](../admin-editor.md#turning-it-on)
+by connecting it to your identity provider, then open it at `/admin` and configure everything
+there.
 
 ---
 
@@ -33,10 +33,10 @@ If using yaml or json settings, replace `PATH/TO/CONFIG` with the actual path to
 :::
 
 :::info Writable config folder
-If you want to use the [admin configuration editor](/docs/getting-started/admin-editor), the folder
-you mount at `/app/Config` has to be writable by UID 1000 — ImmichFrame runs as that user and writes
-your settings file and its backups there. Mounting it read-only is fine otherwise; the editor just
-refuses to save.
+The folder you mount at `/app/Config` has to be writable by UID 1000 — ImmichFrame runs as that
+user and keeps its settings database there, along with a `keys` folder holding the keys that sign
+[admin UI](../admin-ui.md) sessions. A read-only mount does not work: the container stops at
+startup with `Cannot open the settings database in '/app/Config'`.
 :::
 
 ```yaml
@@ -52,7 +52,6 @@ services:
       - "8080:8080"
     environment:
       TZ: "Europe/Berlin"
-      IMMICHFRAME_ADMIN_PASSWORD: "CHANGE_ME"
 ```
 
 [github-root]: https://github.com/immichframe/ImmichFrame/blob/main

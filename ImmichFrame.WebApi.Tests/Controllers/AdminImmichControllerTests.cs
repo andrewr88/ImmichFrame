@@ -809,6 +809,13 @@ public class AdminImmichControllerTests
         using var factory = CreateFactory(handler);
         var client = factory.CreateClient();
 
+        // The running configuration read now, before the store moves - as a running process's was,
+        // long before a second one wrote to its database. Left to whatever first asked for it, that was
+        // the startup version check, on a thread of its own: when the check came second, the catalog
+        // was seeded from the row already moved, the two agreed after all, and there was nothing left
+        // for the picker to refuse.
+        _ = factory.Services.GetRequiredService<IConfigCatalog>().Default;
+
         // Written straight to the store rather than through the editor, because going through the
         // editor swaps the catalog in the same breath and the two could never disagree. This is the
         // divergence that is actually left once the settings file stopped being read: a second

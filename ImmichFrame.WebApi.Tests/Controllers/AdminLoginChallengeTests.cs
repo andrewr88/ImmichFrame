@@ -8,6 +8,7 @@ using ImmichFrame.WebApi.Helpers.Config;
 using ImmichFrame.WebApi.Tests.Mocks;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.AspNetCore.WebUtilities;
@@ -40,6 +41,10 @@ public class AdminLoginChallengeTests
     // What a client sends to choose the address the authorization code is sent back to.
     private const string ForwardedProto = "https";
     private const string ForwardedHost = "evil.example";
+
+    // Where a container sees the reverse proxy in front of it: an address on its own network, not
+    // loopback.
+    private static readonly IPAddress ProxyAddress = IPAddress.Parse("172.18.0.2");
 
     private static readonly string[] Variables =
     [
@@ -139,19 +144,20 @@ public class AdminLoginChallengeTests
     {
         // Arrange
         using var factory = CreateFactory();
-        var client = CreateClient(factory);
 
         // Act
-        var callback = await CallbackAfterForwardedLogin(client);
+        var callback = await CallbackAfterForwardedLogin(factory);
 
         // Assert - the address TestServer received the request on.
-        Assert.That(callback, Is.EqualTo(new Uri(client.BaseAddress!, AdminAuthentication.CallbackPath).ToString()));
+        Assert.That(callback, Is.EqualTo(new Uri(factory.Server.BaseAddress, AdminAuthentication.CallbackPath).ToString()));
     }
 
     /// <summary>
     /// And trusted, they are what the address is built from - which is the point of trusting them:
     /// behind a proxy that terminates TLS, the request arrives as plain http, and an http
-    /// <c>redirect_uri</c> is one the identity provider rejects.
+    /// <c>redirect_uri</c> is one the identity provider rejects. Trusted from the proxy's address on
+    /// the container's network, that is: the framework's default trusts loopback alone, which is not
+    /// where a container's proxy is, so <c>Program</c> clears both lists it is kept in.
     /// </summary>
     [Test]
     public async Task Login_ProxyHeadersTrusted_BuildsTheCallbackFromTheForwardedHostAndScheme()
@@ -161,7 +167,7 @@ public class AdminLoginChallengeTests
         using var factory = CreateFactory();
 
         // Act
-        var callback = await CallbackAfterForwardedLogin(CreateClient(factory));
+        var callback = await CallbackAfterForwardedLogin(factory);
 
         // Assert
         Assert.That(callback, Is.EqualTo($"{ForwardedProto}://{ForwardedHost}{AdminAuthentication.CallbackPath}"));
@@ -230,6 +236,40 @@ public class AdminLoginChallengeTests
     }
 
     /// <summary>
+    /// The handshake ends by signing into the admin cookie. Unnamed, it would sign into the default
+    /// scheme - the frame's own, which has no session to sign into - and every sign-in would fail at
+    /// its very last step, after the identity provider had already let the administrator in.
+    /// </summary>
+    [Test]
+    public void OidcHandler_SignsIntoTheAdminCookie()
+    {
+        using var factory = CreateFactory();
+
+        var handlerOptions = factory.Services.GetRequiredService<IOptionsMonitor<OpenIdConnectOptions>>()
+            .Get(AdminAuthentication.OidcScheme);
+
+        Assert.That(handlerOptions.SignInScheme, Is.EqualTo(AdminAuthentication.CookieScheme));
+    }
+
+    /// <summary>
+    /// The userinfo endpoint is asked as well as the id token read. A provider following the
+    /// specification's code flow sends the email claims - <c>email_verified</c> with them - only from
+    /// there: not asking it, such a provider's administrators listed by email are never recognised,
+    /// and the veto in <c>AdminOidcOptions</c> never hears a provider saying an address is unverified.
+    /// The claim mapping pinned above runs only on a userinfo response that was actually fetched.
+    /// </summary>
+    [Test]
+    public void OidcHandler_AsksTheUserInfoEndpointForClaims()
+    {
+        using var factory = CreateFactory();
+
+        var handlerOptions = factory.Services.GetRequiredService<IOptionsMonitor<OpenIdConnectOptions>>()
+            .Get(AdminAuthentication.OidcScheme);
+
+        Assert.That(handlerOptions.GetClaimsFromUserInfoEndpoint, Is.True);
+    }
+
+    /// <summary>
     /// Where the browser is sent <em>after</em> the handshake finishes. It travels inside the
     /// protected <c>state</c> parameter, so the assertion has to unprotect it with the handler's own
     /// data format - reading the redirect's query string would only ever show the identity
@@ -258,19 +298,29 @@ public class AdminLoginChallengeTests
 
     /// <summary>
     /// The <c>redirect_uri</c> a login hands the identity provider when the request carries
-    /// <see cref="ForwardedProto"/> and <see cref="ForwardedHost"/>.
+    /// <see cref="ForwardedProto"/> and <see cref="ForwardedHost"/> and arrives from
+    /// <see cref="ProxyAddress"/>.
+    /// <para>
+    /// Sent through the server rather than an HttpClient, so that the request has a remote address at
+    /// all. TestServer gives one none, and the framework trusts forwarded headers outright from a hop
+    /// it cannot see - so through an HttpClient, a host still trusting only loopback would pass too.
+    /// </para>
     /// </summary>
-    private static async Task<string> CallbackAfterForwardedLogin(HttpClient client)
+    private static async Task<string> CallbackAfterForwardedLogin(WebApplicationFactory<Program> factory)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/admin/login");
-        request.Headers.Add("X-Forwarded-Proto", ForwardedProto);
-        request.Headers.Add("X-Forwarded-Host", ForwardedHost);
+        var context = await factory.Server.SendAsync(request =>
+        {
+            request.Request.Method = HttpMethods.Get;
+            request.Request.Path = "/api/admin/login";
+            request.Request.Headers["X-Forwarded-Proto"] = ForwardedProto;
+            request.Request.Headers["X-Forwarded-Host"] = ForwardedHost;
+            request.Connection.RemoteIpAddress = ProxyAddress;
+        });
 
-        var response = await client.SendAsync(request);
+        Assert.That(context.Response.StatusCode, Is.EqualTo(StatusCodes.Status302Found),
+            "the login did not redirect to the identity provider");
 
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Found), "the login did not redirect to the identity provider");
-
-        return QueryHelpers.ParseQuery(response.Headers.Location!.Query)["redirect_uri"].ToString();
+        return QueryHelpers.ParseQuery(new Uri(context.Response.Headers.Location.ToString()).Query)["redirect_uri"].ToString();
     }
 
     private static HttpClient CreateClient(WebApplicationFactory<Program> factory) =>

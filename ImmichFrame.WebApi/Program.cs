@@ -13,6 +13,9 @@ using ImmichFrame.WebApi.Helpers.Profiles;
 using ImmichFrame.WebApi.Services;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.DataProtection.KeyManagement;
+using Microsoft.AspNetCore.DataProtection.Repositories;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -107,6 +110,22 @@ builder.Services.AddDbContextFactory<SettingsDbContext>((srv, options) =>
     }.ToString()));
 builder.Services.AddSingleton<SettingsService>();
 
+// The keys that sign the admin session cookie and the OpenID Connect handshake's state. Left to the
+// framework they go under the home directory of the user ImmichFrame runs as, which in the container
+// is "/" and not writable by that user - so the key ring was kept in memory, and every restart signed
+// every administrator out and failed any sign-in still under way. They are kept in the configuration
+// directory instead, beside the settings database, which an installation already persists.
+//
+// Read from ConfigLocation, as the database is, so that a host given another directory - a test's -
+// keeps its keys there too. The application is named because the default name is the content root's
+// path, and what was protected under one name will not open under another - so moving the binary
+// would sign everyone out just the same.
+builder.Services.AddDataProtection().SetApplicationName("ImmichFrame");
+builder.Services.AddOptions<KeyManagementOptions>()
+    .Configure<ConfigLocation, ILoggerFactory>((options, location, loggerFactory) =>
+        options.XmlRepository = new FileSystemXmlRepository(
+            new DirectoryInfo(Path.Combine(location.Directory, "keys")), loggerFactory));
+
 // Everything injects IConfigCatalog and gets the forwarding catalog, so the configuration behind it
 // can be replaced at runtime. The seed still runs on first use rather than here, so a test that
 // registers its own catalog never touches the database.
@@ -133,7 +152,24 @@ string[] immichCredentialHeaders = ["X-API-KEY", "Authorization"];
 // The frame's own Immich client, shared by the startup version check. Every request carries the
 // account's API key in a header, so the headers are redacted - and nothing more: the request line and
 // its timing are what tell an operator which server is slow or failing.
+//
+// No cap on how much of a response is read, unlike the picker's and the calendar's clients below:
+// this one streams original videos.
 builder.Services.AddHttpClient(PooledImmichFrameLogic.HttpClientName)
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+    {
+        // The framework's own redirect handling hands X-API-KEY to whatever host a redirect names - it
+        // strips only Authorization - so redirects are left to SameServerRedirectHandler, which follows
+        // only those that stay on the server the request was sent to.
+        AllowAutoRedirect = false,
+        // A profile keeps the client it was built with until the configuration changes, so the factory
+        // rotating its handlers every two minutes never reaches it. Without a lifetime of their own its
+        // connections would live as long, and an Immich server whose address changed in DNS would go
+        // on being dialled at the old one.
+        PooledConnectionLifetime = TimeSpan.FromMinutes(5)
+    })
+    .AddHttpMessageHandler(services =>
+        new SameServerRedirectHandler(services.GetRequiredService<ILogger<SameServerRedirectHandler>>()))
     .RedactLoggedHeaders(immichCredentialHeaders);
 
 // The configuration editor's Immich picker fetches from whatever server an administrator names -
@@ -335,6 +371,11 @@ if (adminOidcOptions.TrustProxyHeaders)
 {
     app.UseForwardedHeaders();
 }
+
+// Ahead of everything that answers - static files and Swagger included - so that every response
+// carries these headers, and ahead of the controllers, so that one setting a policy of its own
+// replaces the one set here.
+app.UseMiddleware<SecurityHeadersMiddleware>();
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())

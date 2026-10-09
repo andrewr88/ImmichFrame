@@ -173,6 +173,33 @@ namespace ImmichFrame.WebApi.Tests.Controllers
             });
         }
 
+        /// <summary>
+        /// An asset's type reaches the web client spelled the way the client compares it: "image",
+        /// the camel-cased name its generated API client was built from, not the "IMAGE" Immich sends.
+        /// The client keeps only the assets it recognises as an image or a video, so spelled any other
+        /// way, every asset is dropped and the frame has nothing to show.
+        /// </summary>
+        [Test]
+        public async Task GetAssets_AnImage_ReachesTheClientWithItsTypeSpelledAsTheClientComparesIt()
+        {
+            // Arrange
+            var id = Guid.NewGuid();
+            HoldAsset(BuildAssetResponse(id));
+            var client = _factory.CreateClient();
+
+            // Act
+            var response = await client.GetAsync("/api/Asset");
+            var assets = JsonNode.Parse(await response.Content.ReadAsStringAsync())!.AsArray();
+
+            // Assert
+            Assert.Multiple(() =>
+            {
+                Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+                Assert.That((string?)assets.Single()?["id"], Is.EqualTo(id.ToString()));
+                Assert.That((string?)assets.Single()?["type"], Is.EqualTo("image"));
+            });
+        }
+
         // Builds a valid AssetResponseDto from the generated client types. Only the
         // fields required by the schema are set; pass type/duration to reuse this for
         // video assets. Changes to the OpenAPI schema surface here as compile errors.

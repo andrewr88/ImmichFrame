@@ -10,47 +10,28 @@ browser. Changes are applied **live**, without restarting the container.
 
 ## Enabling the admin UI
 
-The admin UI is protected by a dedicated admin password. Which screen `/admin` shows
-depends on the state of your instance:
+The admin UI is off until you connect it to an OpenID Connect identity provider you run or
+trust (Authentik, Keycloak, Auth0, Google, and so on). There is no admin password: you sign in
+with your identity provider, and only the administrators you list are let in. Until it is set
+up, `/admin` only tells you that the admin UI is off and what is missing.
 
-| State        | When                                                                 | What you see                                                       |
-| ------------ | -------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| **Setup**    | Fresh install: no admin password anywhere and nothing configured yet | An anonymous onboarding screen where you choose the admin password |
-| **Login**    | An admin password exists (environment variable or database)          | The password prompt                                                |
-| **Disabled** | The instance is already configured but has no admin password         | A notice — onboarding stays shut so nobody can claim your instance |
-
-So on a brand-new instance you do **not** need to set anything: open `/admin` and pick a
-password. To choose it up front instead — or to open the admin UI on an instance that is
-already configured — set the `IMMICHFRAME_ADMIN_PASSWORD` environment variable:
-
-```yaml title="docker-compose.yml"
-services:
-  immichframe:
-    image: ghcr.io/immichframe/immichframe:latest
-    environment:
-      IMMICHFRAME_ADMIN_PASSWORD: your-secret-password
-    volumes:
-      - ./config:/app/Config
-```
-
-Alternatively you can set the `AdminPassword` setting (in the `General` section) via the
-admin UI itself once you are logged in. The environment variable **always wins** — if you
-ever lock yourself out by saving a wrong password, set `IMMICHFRAME_ADMIN_PASSWORD` and
-restart the container to regain access.
+The environment variables to set, and the redirect URI to register with your provider, are
+described in [Admin configuration editor → Turning it on](./admin-editor.md#turning-it-on).
 
 :::caution
-The admin UI exposes your Immich API keys to authenticated admins and transmits them in
-plain text. Run ImmichFrame behind HTTPS (e.g. a reverse proxy) if it is reachable from
-outside your trusted network.
+Run ImmichFrame behind HTTPS (e.g. a reverse proxy) if it is reachable from outside your
+trusted network. Your Immich API keys are never sent to the browser, but a key you type into
+the admin UI reaches ImmichFrame like any other request does, and so does your admin session.
 :::
 
 ## Where settings are stored
 
 Settings edited in the admin UI are stored in a SQLite database (`immichframe.db`) inside
-the config directory (`/app/Config` in Docker). This makes the config directory the one
-place to persist:
+the config directory (`/app/Config` in Docker). Beside it, a `keys` folder holds the keys
+that sign admin UI sessions, which is what keeps you signed in across a restart. This makes
+the config directory the one place to persist:
 
-- Mount `/app/Config` as a **writable** volume, otherwise saving settings fails.
+- Mount `/app/Config` as a **writable** volume.
   The container runs as uid `1000`, so a bind-mounted host directory has to belong to it:
   `chown -R 1000:1000 /path/to/config`. If it does not, the container stops at startup with
   `Cannot open the settings database in '/app/Config'`.
@@ -61,11 +42,16 @@ place to persist:
   settings that used to be set through the environment have to be migrated by hand.
 - Back up the config directory to keep your settings.
 
+The keys are stored unencrypted, protected by the directory's permissions just as the
+database is, and ImmichFrame logs a warning saying so whenever it creates one. Deleting the
+`keys` folder signs every administrator out.
+
 ## Zero-configuration start
 
-ImmichFrame now also starts **without any configuration**: the slideshow shows a hint that
-no accounts are configured, and you can do the entire initial setup — including adding
-your first Immich account — through the admin UI.
+ImmichFrame also starts **without any configuration**: until an account is added, the
+slideshow says that no assets were found and asks you to check your configuration. Once the
+admin UI is enabled, you can do the entire initial setup — including adding your first Immich
+account — there.
 
 Related change: the container no longer exits when an Immich server is unreachable or
 incompatible at startup. It logs a critical warning instead, so you can fix the account
@@ -77,5 +63,3 @@ settings via the admin UI.
   them up the next time the page loads.
 - **Account changes** rebuild the asset pipeline in the background — no restart needed.
 - **Weather and calendar** changes take effect within ~15 minutes (internal caches).
-- Every account has a **Test connection** button to verify the server URL and API key
-  before saving.
