@@ -5,6 +5,7 @@ using ImmichFrame.Core.Interfaces;
 using ImmichFrame.WebApi.Helpers.Config;
 using ImmichFrame.WebApi.Models;
 using ImmichFrame.WebApi.Tests.Mocks;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
@@ -112,6 +113,42 @@ public class FrameAuthenticationTests
     }
 
     /// <summary>
+    /// An authentication scheme is a case-insensitive token (RFC 9110, 11.1): "bearer" and "BEARER"
+    /// name the scheme "Bearer" does, and a client that spells it either way is presenting the secret
+    /// all the same.
+    /// </summary>
+    [TestCase("bearer")]
+    [TestCase("BEARER")]
+    public async Task RealSecret_BearerSchemeInAnotherCase_IsAllowed(string scheme)
+    {
+        // Arrange
+        using var factory = CreateFactory(RealSecret);
+
+        // Act
+        var context = await SendWithAuthorization(factory, $"{scheme} {RealSecret}");
+
+        // Assert
+        Assert.That(context.Response.StatusCode, Is.EqualTo(StatusCodes.Status200OK));
+    }
+
+    /// <summary>
+    /// A Bearer credential may put more than one space between the scheme and the token (RFC 6750,
+    /// 2.1), and the secret is the token, not the token with a space in front of it.
+    /// </summary>
+    [Test]
+    public async Task RealSecret_TokenAfterMoreThanOneSpace_IsAllowed()
+    {
+        // Arrange
+        using var factory = CreateFactory(RealSecret);
+
+        // Act
+        var context = await SendWithAuthorization(factory, $"Bearer  {RealSecret}");
+
+        // Assert
+        Assert.That(context.Response.StatusCode, Is.EqualTo(StatusCodes.Status200OK));
+    }
+
+    /// <summary>
     /// Nothing above sends a wrong token, so without this a handler that let every bearer token
     /// through would pass the whole fixture. Each case is a near miss that some broken comparison
     /// accepts: one that ignores case, and one that stops at the end of the shorter input - which
@@ -133,6 +170,20 @@ public class FrameAuthenticationTests
         // Assert
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Unauthorized));
     }
+
+    /// <summary>
+    /// Sends the probe with <paramref name="authorization"/> written onto the request the host sees
+    /// exactly as given. Through HttpClient it would not arrive that way: TestServer copies a request's
+    /// headers by enumerating them, and enumerating parses an Authorization value and writes it back
+    /// out in the parser's own spelling - "Bearer" and two spaces arrives with one.
+    /// </summary>
+    private static Task<HttpContext> SendWithAuthorization(WebApplicationFactory<Program> factory, string authorization) =>
+        factory.Server.SendAsync(context =>
+        {
+            context.Request.Method = HttpMethods.Get;
+            context.Request.Path = "/api/Calendar";
+            context.Request.Headers.Authorization = authorization;
+        });
 
     private static WebApplicationFactory<Program> CreateFactory(string? authenticationSecret)
     {

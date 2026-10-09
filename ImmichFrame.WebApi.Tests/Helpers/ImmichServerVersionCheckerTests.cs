@@ -28,6 +28,16 @@ public class ImmichServerVersionCheckerTests
     private const string Server = "http://immich.example.com";
     private const string OtherServer = "http://other-immich.example.com";
 
+    /// <summary>How long a server is given to answer where a test waits that out: short, so the suite does not wait on it.</summary>
+    private static readonly TimeSpan ShortTimeout = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>
+    /// The longest a test waits for a check to give up on a server: room for a slow machine, and short
+    /// of both the five seconds a real check allows and the hundred HttpClient allows by default -
+    /// either of which would end the check as well, and pass the test with it.
+    /// </summary>
+    private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(3);
+
     /// <summary>
     /// Read off the server, not assumed: below the major version this ImmichFrame supports the account
     /// is reported unsupported, and either way the message names the version the server runs, so an
@@ -77,6 +87,43 @@ public class ImmichServerVersionCheckerTests
             Assert.That(result.Success, Is.False);
             Assert.That(result.Version, Is.Null);
             Assert.That(result.Message, Does.Contain(Server).And.Contain("Connection refused"));
+        });
+    }
+
+    /// <summary>
+    /// A server that takes the request and never answers it is given only so long before it counts as
+    /// unreachable. The frame's client sets no timeout of its own, and every account's result is logged
+    /// only once all of them are in, so without this one a single silent server would hold back the
+    /// startup log for every other server for HttpClient's hundred seconds.
+    /// </summary>
+    [Test]
+    public async Task CheckAccount_ServerNeverAnswers_FailsOnceItsTimeoutRunsOut()
+    {
+        // Arrange - a server that holds the request for as long as it is let
+        var immich = new Mock<HttpMessageHandler>();
+        immich.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync", ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+            .Returns(async (HttpRequestMessage _, CancellationToken token) =>
+            {
+                await Task.Delay(Timeout.Infinite, token);
+                return new HttpResponseMessage();
+            });
+        using var services = Services(immich);
+
+        // Act
+        var checking = ImmichServerVersionChecker.CheckAccount(
+            Account(Server), services.GetRequiredService<IHttpClientFactory>(), ShortTimeout);
+
+        // Assert
+        Assert.That(await Task.WhenAny(checking, Task.Delay(Deadline)), Is.SameAs(checking),
+            $"the check was still waiting on the server {Deadline.TotalSeconds} s into a {ShortTimeout.TotalMilliseconds} ms timeout");
+
+        var result = await checking;
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Success, Is.False);
+            Assert.That(result.Version, Is.Null);
+            Assert.That(result.Message, Does.Contain(Server));
         });
     }
 

@@ -20,7 +20,15 @@ namespace ImmichFrame.WebApi.Helpers
         /// <summary>
         /// Checks a single account: is the Immich server reachable and running a supported version?
         /// </summary>
-        public static async Task<AccountCheckResult> CheckAccount(IAccountSettings account, IHttpClientFactory httpClientFactory)
+        public static Task<AccountCheckResult> CheckAccount(IAccountSettings account, IHttpClientFactory httpClientFactory) =>
+            CheckAccount(account, httpClientFactory, RequestTimeout);
+
+        /// <summary>
+        /// <see cref="CheckAccount(IAccountSettings, IHttpClientFactory)"/> with the server given
+        /// <paramref name="timeout"/> to answer instead of <see cref="RequestTimeout"/>. Taken apart so
+        /// that a server that never answers can be checked against a timeout short enough to wait out.
+        /// </summary>
+        internal static async Task<AccountCheckResult> CheckAccount(IAccountSettings account, IHttpClientFactory httpClientFactory, TimeSpan timeout)
         {
             try
             {
@@ -30,7 +38,7 @@ namespace ImmichFrame.WebApi.Helpers
                 httpClient.UseApiKey(account.ApiKey);
                 var immichApi = new ImmichApi(account.ImmichServerUrl, httpClient);
 
-                using var cts = new CancellationTokenSource(RequestTimeout);
+                using var cts = new CancellationTokenSource(timeout);
                 var version = await immichApi.GetServerVersionAsync(cts.Token);
                 var versionString = $"{version.Major}.{version.Minor}.{version.Patch}";
 

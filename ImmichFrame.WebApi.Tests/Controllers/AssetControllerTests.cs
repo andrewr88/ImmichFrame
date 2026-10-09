@@ -451,6 +451,10 @@ namespace ImmichFrame.WebApi.Tests.Controllers
         /// a frame still holds the ids of the slideshow it was shown before. A host that has served no
         /// slideshow is that case exactly, and a deterministic one: with nothing handed out there is no
         /// Bloom filter to ask, so none can answer a false positive.
+        /// <para>
+        /// The problem details say so in a sentence of the filter's own. The exception's message is
+        /// written for the log, and the tracker's says nothing at all.
+        /// </para>
         /// </summary>
         [TestCase("AssetInfo")]
         [TestCase("AssetFaces")]
@@ -463,9 +467,15 @@ namespace ImmichFrame.WebApi.Tests.Controllers
 
             // Act
             var response = await client.GetAsync($"/api/Asset/{Guid.NewGuid()}/{action}");
+            var problem = JsonNode.Parse(await response.Content.ReadAsStringAsync());
 
             // Assert
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+            Assert.Multiple(() =>
+            {
+                Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+                Assert.That((int?)problem?["status"], Is.EqualTo((int)HttpStatusCode.NotFound));
+                Assert.That((string?)problem?["detail"], Is.EqualTo("That asset was not found on any of this frame's accounts."));
+            });
         }
 
         // Turns a hang into a failure rather than a stalled run.
