@@ -69,6 +69,38 @@ public class AdminImmichControllerTests
         }
         """;
 
+    private const string KitchenHost = "kitchen-immich.example.com";
+
+    /// <summary>
+    /// <see cref="SettingsJson"/> plus a profile declaring an account of its own, on a server of its
+    /// own - so that an account resolved against the wrong configuration asks a different host, and
+    /// the test can tell.
+    /// </summary>
+    private const string ProfileSettingsJson = $$"""
+        {
+          "General": {
+            "Interval": 45,
+            "AuthenticationSecret": "{{FrameSecret}}"
+          },
+          "Accounts": [
+            {
+              "ImmichServerUrl": "{{SavedServer}}",
+              "ApiKey": "saved-api-key"
+            }
+          ],
+          "Profiles": {
+            "kitchen": {
+              "Accounts": [
+                {
+                  "ImmichServerUrl": "http://{{KitchenHost}}",
+                  "ApiKey": "kitchen-api-key"
+                }
+              ]
+            }
+          }
+        }
+        """;
+
     private string _directory = null!;
 
     [SetUp]
@@ -437,6 +469,36 @@ public class AdminImmichControllerTests
         });
 
         VerifyNothingSentButTheVersionCheck(handler);
+    }
+
+    /// <summary>
+    /// A handle from a profile, sent back under that profile's name in another case. Profile names
+    /// are case-insensitive everywhere else - the catalog will not hold two that differ only in case,
+    /// and the handle itself is derived from the lower-cased name - so the picker has to agree, rather
+    /// than tell an administrator that a profile they can see does not exist.
+    /// </summary>
+    [Test]
+    public async Task Albums_FromAProfileNamedInAnotherCase_AreReadFromThatProfilesOwnAccount()
+    {
+        File.WriteAllText(Path.Combine(_directory, "Settings.json"), ProfileSettingsJson);
+
+        var handler = Immich();
+        using var factory = CreateFactory(handler);
+        var client = factory.CreateClient();
+
+        var saved = await SavedAccount(client, "kitchen");
+        var response = await Post(client, AlbumsUrl, saved with { Profile = "KITCHEN" });
+
+        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK), await response.Content.ReadAsStringAsync());
+
+        // The kitchen's own account, with its own key - not the default configuration's, which sits at
+        // the same position in a list of its own.
+        handler.Protected().Verify("SendAsync", Times.Once(),
+            ItExpr.Is<HttpRequestMessage>(request =>
+                request.RequestUri!.AbsolutePath == "/api/albums" &&
+                request.RequestUri.Host == KitchenHost &&
+                request.Headers.GetValues("X-API-KEY").Single() == "kitchen-api-key"),
+            ItExpr.IsAny<CancellationToken>());
     }
 
     [Test]
@@ -875,6 +937,23 @@ public class AdminImmichControllerTests
     }
 
     [Test]
+    public void PickerHttpClient_IsWiredWithTheRequestTimeout()
+    {
+        // Read off a client the application's own registrations build, as the redirect refusal above
+        // is. The one test that waits on a stalled server shortens this timeout to keep the suite fast,
+        // so it goes on passing with Program.cs no longer setting it - and the picker waiting out
+        // HttpClient's default hundred seconds on every server that takes the connection and then
+        // says nothing.
+        var handler = Immich();
+        using var factory = CreateFactory(handler);
+
+        var client = factory.Services.GetRequiredService<IHttpClientFactory>()
+            .CreateClient(AdminImmichAccounts.HttpClientName);
+
+        Assert.That(client.Timeout, Is.EqualTo(AdminImmichAccounts.RequestTimeout));
+    }
+
+    [Test]
     public async Task ApiKey_StoredWithACharacterAHeaderCannot_PointsAtTheStoredSettingsRatherThanTheForm()
     {
         // In the settings the process starts from, which is the only way such a key reaches a running
@@ -952,14 +1031,18 @@ public class AdminImmichControllerTests
     /// <summary>What the editor holds after a configuration read, and sends back to name an account.</summary>
     private record SavedAccountRef(string Profile, string Version, string AccountId);
 
-    private static async Task<SavedAccountRef> SavedAccount(HttpClient client)
+    private static async Task<SavedAccountRef> SavedAccount(
+        HttpClient client, string profile = ConfigCatalog.DefaultProfileName)
     {
         var response = await Send(client, HttpMethod.Get, "/api/admin/config");
         response.EnsureSuccessStatusCode();
 
         var config = (await response.Content.ReadFromJsonAsync<AdminConfigDto>(Camel))!;
+        var entry = profile == ConfigCatalog.DefaultProfileName
+            ? config.Default
+            : config.Profiles.Single(candidate => candidate.Name == profile);
 
-        return new SavedAccountRef(ConfigCatalog.DefaultProfileName, config.Version, config.Default.Accounts[0].Id!);
+        return new SavedAccountRef(profile, config.Version, entry.Accounts[0].Id!);
     }
 
     /// <summary>

@@ -9,9 +9,11 @@ using ImmichFrame.WebApi.Models;
 using ImmichFrame.WebApi.Tests.Mocks;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Moq;
 using NUnit.Framework;
 
@@ -25,6 +27,7 @@ public class AdminSessionControllerTests
     private const string OtherSubject = "not-an-admin";
 
     private const string PolicyProbe = "/api/admin/probe/policy";
+    private const string SignInProbe = "/api/admin/probe/sign-in";
 
     // Every host here runs with a frame AuthenticationSecret configured: without one the frame
     // scheme succeeds anonymously and the middleware bypass would prove nothing.
@@ -118,16 +121,24 @@ public class AdminSessionControllerTests
     /// no admin surface; only <c>session</c> claims both and survives. The prefix is hidden by
     /// default, so an endpoint added later that claims neither is hidden without anyone deciding it
     /// should be.
+    /// <para>
+    /// In any casing, because routing ignores case: <c>/API/ADMIN/login</c> reaches the login just as
+    /// <c>/api/admin/login</c> does, so a prefix recognised only as written would leave every endpoint
+    /// answering on an installation with no admin surface - the login with a handshake that has no
+    /// handler registered.
+    /// </para>
     /// </summary>
-    [Test]
-    public async Task AdminPrefix_Unconfigured_HidesEvenAnonymousEndpoints()
+    [TestCase("/api/admin")]
+    [TestCase("/API/ADMIN")]
+    [TestCase("/Api/Admin")]
+    public async Task AdminPrefix_Unconfigured_HidesEvenAnonymousEndpoints(string prefix)
     {
         using var factory = CreateFactory(Unconfigured);
         var client = factory.CreateClient();
 
-        var anonymousButNotVisible = await client.GetAsync("/api/admin/login");
-        var authorizedButNotVisible = await client.GetAsync(PolicyProbe);
-        var both = await client.GetAsync("/api/admin/session");
+        var anonymousButNotVisible = await client.GetAsync($"{prefix}/login");
+        var authorizedButNotVisible = await client.GetAsync($"{prefix}/probe/policy");
+        var both = await client.GetAsync($"{prefix}/session");
 
         Assert.Multiple(() =>
         {
@@ -262,6 +273,43 @@ public class AdminSessionControllerTests
         var response = await Post(client, "/api/admin/logout", OtherSubject);
 
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+    }
+
+    /// <summary>
+    /// The admin cookie is the whole session, so what it tells the browser is pinned twice: as the
+    /// scheme is configured, and as a sign-in actually writes it.
+    /// <para>
+    /// HttpOnly, so that no script on the editor's origin - an injected one included - can read the
+    /// session and carry it off. Lax rather than None, because staying off a cross-site POST is what
+    /// lets sign-out go without a CSRF token; and rather than Strict, which would withhold the cookie on
+    /// the top-level redirect back from the identity provider - Program.cs has the longer note.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task AdminCookie_IsHttpOnlyAndSameSiteLax()
+    {
+        using var factory = CreateFactory(Enabled());
+        var client = factory.CreateClient();
+
+        var cookie = factory.Services.GetRequiredService<IOptionsMonitor<CookieAuthenticationOptions>>()
+            .Get(AdminAuthentication.CookieScheme).Cookie;
+
+        var response = await client.PostAsync(SignInProbe, null);
+        var issued = response.Headers.TryGetValues("Set-Cookie", out var headers)
+            ? headers.SingleOrDefault(header => header.StartsWith(cookie.Name + "=", StringComparison.Ordinal))
+            : null;
+        var attributes = issued?.Split(';', StringSplitOptions.TrimEntries).Skip(1).ToList() ?? [];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cookie.HttpOnly, Is.True);
+            Assert.That(cookie.SameSite, Is.EqualTo(SameSiteMode.Lax));
+
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(issued, Is.Not.Null, "the sign-in issued no admin cookie");
+            Assert.That(attributes, Has.Some.EqualTo("httponly").IgnoreCase);
+            Assert.That(attributes, Has.Some.EqualTo("samesite=lax").IgnoreCase);
+        });
     }
 
     /// <summary>

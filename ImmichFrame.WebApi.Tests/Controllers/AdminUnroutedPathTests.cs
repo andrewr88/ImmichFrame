@@ -48,15 +48,19 @@ public class AdminUnroutedPathTests
     [OneTimeTearDown]
     public void RemoveWebRoot() => Directory.Delete(_webRoot, recursive: true);
 
-    [Test]
-    public async Task UnroutedAdminPath_Is404WhileTheShellStillServesElsewhere()
+    [TestCase("/api/admin/does-not-exist")]
+    // Routing ignores case, so the fallback answers /API/ADMIN/... as readily as /api/admin/... - and a
+    // prefix recognised only as written would hand a differently-cased typo the editor's HTML after all.
+    [TestCase("/API/ADMIN/does-not-exist")]
+    [TestCase("/Api/Admin/typo")]
+    public async Task UnroutedAdminPath_Is404WhileTheShellStillServesElsewhere(string unroutedPath)
     {
         using var factory = CreateFactory(Enabled);
         var client = factory.CreateClient();
 
         var spaRoute = await client.GetAsync("/some-spa-route");
         var shell = await spaRoute.Content.ReadAsStringAsync();
-        var unroutedAdmin = await client.GetAsync("/api/admin/does-not-exist");
+        var unroutedAdmin = await client.GetAsync(unroutedPath);
 
         Assert.Multiple(() =>
         {
