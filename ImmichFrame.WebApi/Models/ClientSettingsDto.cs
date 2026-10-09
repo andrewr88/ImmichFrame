@@ -31,5 +31,5 @@ public class ClientSettingsDto(IClientSettings settings) : IClientSettings
     public bool ImageFill => settings.ImageFill;
     public bool PlayAudio => settings.PlayAudio;
     public string Layout => settings.Layout;
-    public string Language => settings.Language;
+    public string? Language => settings.Language;
 }

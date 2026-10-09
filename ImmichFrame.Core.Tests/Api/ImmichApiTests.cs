@@ -63,4 +63,76 @@ public class ImmichApiTests
         // Assert
         Assert.That(_requested.Single().AbsolutePath, Is.EqualTo(string.Format(expectedPath, id)));
     }
+
+    [Test]
+    public void PlayAssetVideoWithRangeAsync_ErrorStatus_ThrowsAndDisposesTheResponse()
+    {
+        // Arrange
+        var body = new TrackedBody();
+        ImmichAnswers(HttpStatusCode.InternalServerError, body);
+        using var client = new HttpClient(_immich.Object);
+        var api = new ImmichApi("https://immich.example.com", client);
+
+        // Act
+        var thrown = Assert.ThrowsAsync<ApiException>(() => api.PlayAssetVideoWithRangeAsync(Guid.NewGuid(), "bytes=0-"));
+
+        // Assert - no FileResponse is handed back to dispose the response, so it is let go of here
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown.StatusCode, Is.EqualTo(500));
+            Assert.That(body.Disposed, Is.True);
+        });
+    }
+
+    /// <summary>
+    /// A body can fail as it is read - the connection dropped partway through it. Whatever the
+    /// status, nothing is handed back to dispose the response then either, and the response was
+    /// left holding its connection until the garbage collector came for it.
+    /// </summary>
+    [TestCase(HttpStatusCode.OK)]
+    [TestCase(HttpStatusCode.PartialContent)]
+    [TestCase(HttpStatusCode.InternalServerError)]
+    public void PlayAssetVideoWithRangeAsync_BodyCannotBeRead_DisposesTheResponse(HttpStatusCode status)
+    {
+        // Arrange
+        var body = new TrackedBody(readFailure: new HttpRequestException("The response ended prematurely."));
+        ImmichAnswers(status, body);
+        using var client = new HttpClient(_immich.Object);
+        var api = new ImmichApi("https://immich.example.com", client);
+
+        // Act
+        Assert.ThrowsAsync<HttpRequestException>(() => api.PlayAssetVideoWithRangeAsync(Guid.NewGuid(), "bytes=0-"));
+
+        // Assert
+        Assert.That(body.Disposed, Is.True);
+    }
+
+    private void ImmichAnswers(HttpStatusCode status, HttpContent body) =>
+        _immich.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync", ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync(new HttpResponseMessage(status) { Content = body });
+
+    /// <summary>
+    /// A response body that records being disposed, which disposing the response it came in does,
+    /// and that can fail as it is read.
+    /// </summary>
+    private sealed class TrackedBody(Exception? readFailure = null) : HttpContent
+    {
+        public bool Disposed { get; private set; }
+
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+            readFailure is null ? stream.WriteAsync("Internal Server Error"u8.ToArray()).AsTask() : Task.FromException(readFailure);
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            Disposed = true;
+            base.Dispose(disposing);
+        }
+    }
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { albumNames, fileDetails, namedPeople, namedTags } from './image-overlay';
+import { albumNames, cameraDetails, fileDetails, namedPeople, namedTags } from './image-overlay';
 
 describe('fileDetails: what the info overlay says under the file name', () => {
 	it.each([
@@ -40,6 +40,62 @@ describe('fileDetails: what the info overlay says under the file name', () => {
 		// Act / Assert: a line the asset cannot fill is left out. Each was filled in regardless, as
 		// "Size: 0.0 MB" and "Dimensions: null x null" - or "undefined x undefined".
 		expect(fileDetails(exif)).toEqual(shown);
+	});
+});
+
+describe('cameraDetails: what the info overlay says about the camera', () => {
+	it.each([
+		{
+			has: 'a make, a model and every setting',
+			exif: {
+				make: 'Canon',
+				model: 'EOS R5',
+				fNumber: 2.8,
+				exposureTime: '1/250',
+				focalLength: 50,
+				iso: 100
+			},
+			shown: { header: 'Canon EOS R5', settings: ['ƒ/2.8', '1/250 s', '50 mm', 'ISO 100'] }
+		},
+		{
+			has: 'a model, and no make or settings',
+			exif: { make: null, model: 'Pixel 8' },
+			shown: { header: 'Pixel 8', settings: [] }
+		},
+		{
+			// An edited export or a scan: the exposure kept, and what took it lost.
+			has: 'settings, and no make or model',
+			exif: { fNumber: 1.8, exposureTime: '1/60', focalLength: null, iso: 400 },
+			shown: { header: 'Camera', settings: ['ƒ/1.8', '1/60 s', 'ISO 400'] }
+		},
+		{
+			has: 'a setting, and a make and model of spaces alone',
+			exif: { make: ' ', model: '\t', iso: 200 },
+			shown: { header: 'Camera', settings: ['ISO 200'] }
+		}
+	])('an asset with $has, gets a header that names something', ({ exif, shown }) => {
+		// Act / Assert: the header was the make and model alone, and without them an empty line
+		// beside the camera icon.
+		expect(cameraDetails(exif)).toEqual(shown);
+	});
+
+	it.each([
+		{
+			has: 'none of them, each sent as null',
+			exif: {
+				make: null,
+				model: null,
+				fNumber: null,
+				exposureTime: null,
+				focalLength: null,
+				iso: null
+			}
+		},
+		{ has: 'none of them, each left out', exif: {} },
+		{ has: 'a make of spaces alone, and nothing else', exif: { make: '  ' } }
+	])('an asset with $has, gets no camera line', ({ exif }) => {
+		// Act / Assert
+		expect(cameraDetails(exif)).toBeUndefined();
 	});
 });
 

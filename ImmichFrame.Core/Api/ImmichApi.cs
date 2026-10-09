@@ -37,13 +37,27 @@
             }
 
             var status = (int)response.StatusCode;
-            if (status == 200 || status == 206)
+            string? error;
+            // A read that throws - the connection dropped partway through the body, or the request
+            // cancelled - leaves before the response reaches the FileResponse that disposes it, or
+            // the Dispose ahead of the ApiException below, so it is disposed here: left undisposed,
+            // it holds its connection until the garbage collector comes for it.
+            try
             {
-                var stream = response.Content == null ? Stream.Null : await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-                return new FileResponse(status, headers, stream, null, response);
+                if (status == 200 || status == 206)
+                {
+                    var stream = response.Content == null ? Stream.Null : await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+                    return new FileResponse(status, headers, stream, null, response);
+                }
+
+                error = response.Content == null ? null : await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                response.Dispose();
+                throw;
             }
 
-            var error = response.Content == null ? null : await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             response.Dispose();
             throw new ApiException($"Unexpected status code ({status}).", status, error, headers, null);
         }

@@ -1055,29 +1055,34 @@ scan_npmaudit() {
 
     # Second pass over the PRODUCTION dependency graph only. npm's report does
     # not say whether a vulnerable package is reachable at runtime, and that
-    # matters a lot for triage: this project declares nothing but
-    # devDependencies, so every advisory here is against build tooling
-    # (postcss, brace-expansion, js-yaml, nanoid, fast-uri). Seeded at face
-    # value they would put 9 high-severity rows at the top of the queue and
-    # bury the genuine findings.
+    # matters for triage: an advisory against build tooling alone should not
+    # crowd out one against code that ships.
     #
-    # They are not dropped — a compromised build dependency can still reach the
-    # shipped bundle — but seeded ONE SEVERITY LEVEL LOWER, with "dev
-    # dependency" in the title so the reason is visible without opening the
-    # row. Severity mapping is how volume is managed here, exactly as it is for
-    # the C# analyzers; filtering is not.
+    # Build-only advisories are not dropped — a compromised build dependency
+    # can still reach the shipped bundle — but seeded ONE SEVERITY LEVEL LOWER,
+    # with "dev dependency" in the title so the reason is visible without
+    # opening the row. Severity mapping is how volume is managed here, exactly
+    # as it is for the C# analyzers; filtering is not.
     #
     # Asking npm rather than reading package.json's devDependencies block is
     # deliberate: a transitive package can be reachable from both graphs, and
     # only npm knows.
     #
-    # The result is gated on an explicit success flag, NOT on the name file
-    # being non-empty, because in this repo those two are byte-identical. There
-    # is no `dependencies` block at all — only devDependencies — so a SUCCESSFUL
-    # --omit=dev pass reports zero vulnerabilities and writes an empty file,
-    # exactly as a registry timeout would. Keying the downgrade off emptiness
-    # would silently downgrade every advisory whenever this second call failed,
-    # and the output would be indistinguishable from a correct run. With the
+    # The split only means something when package.json has `dependencies` to
+    # set apart, and this one has none. The SPA is bundled at build time, so
+    # what ships to the browser — the svelte and kit runtimes, date-fns,
+    # thumbhash — is declared under devDependencies beside the build tooling,
+    # and --omit=dev sees an empty graph. Split on that, every advisory was
+    # demoted and tagged "dev dependency", the shipped runtime's included. So
+    # with `dependencies` absent or empty, the pass is skipped and every
+    # advisory kept at full severity, untagged, with a notice saying why.
+    #
+    # Otherwise the result is gated on an explicit success flag, NOT on the
+    # name file being non-empty: a SUCCESSFUL pass over a production graph
+    # with nothing vulnerable in it writes an empty file, exactly as a
+    # registry timeout would. Keying the downgrade off emptiness would
+    # silently downgrade every advisory whenever this second call failed, and
+    # the output would be indistinguishable from a correct run. With the
     # flag, a failure leaves every advisory at PRODUCTION severity — the
     # conservative direction, since over-reporting a build-only CVE is a triage
     # cost while under-reporting a runtime one is a miss.
@@ -1087,14 +1092,18 @@ scan_npmaudit() {
     # list is never consulted.
     _af_prod_ok=0
     prod="$TMP_DIR/npmaudit.prod.json"
-    npm --prefix "$AUDIT_WEB_ROOT" audit --json --omit=dev \
-        > "$prod" 2>"$TMP_DIR/npmaudit.prod.err" || true
-    if jq -e -s 'length == 1 and (.[0] | has("vulnerabilities"))' "$prod" >/dev/null 2>&1 \
-       && jq -r '.vulnerabilities | keys[]' "$prod" \
-            > "$TMP_DIR/npmaudit.prodnames" 2>/dev/null; then
-        _af_prod_ok=1
+    if ! jq -e '.dependencies | type == "object" and length > 0' "$owner" >/dev/null 2>&1; then
+        echo "  [!] $owner declares no dependencies, so npm has no production graph to set build tooling apart from; every advisory kept at full severity" >&2
     else
-        echo "  [!] production-graph pass failed; every advisory kept at full severity" >&2
+        npm --prefix "$AUDIT_WEB_ROOT" audit --json --omit=dev \
+            > "$prod" 2>"$TMP_DIR/npmaudit.prod.err" || true
+        if jq -e -s 'length == 1 and (.[0] | has("vulnerabilities"))' "$prod" >/dev/null 2>&1 \
+           && jq -r '.vulnerabilities | keys[]' "$prod" \
+                > "$TMP_DIR/npmaudit.prodnames" 2>/dev/null; then
+            _af_prod_ok=1
+        else
+            echo "  [!] production-graph pass failed; every advisory kept at full severity" >&2
+        fi
     fi
 
     # .vulnerabilities is an object keyed by package name; each value carries a
@@ -1131,9 +1140,10 @@ scan_npmaudit() {
         esac
         # Dev-only advisory: not reachable from the production graph, so step
         # the severity down one rung (low is the floor) and say so in the
-        # title. Gated on _af_prod_ok — when the production pass did not
-        # succeed the name list means nothing and everything stays at full
-        # severity. See the --omit=dev pass above.
+        # title. Gated on _af_prod_ok — when the production pass was skipped
+        # (no dependencies to set apart) or did not succeed, the name list
+        # means nothing and everything stays at full severity. See the
+        # --omit=dev pass above.
         kind="package"
         if [ "$_af_prod_ok" = 1 ] && ! grep -Fxq "$name" "$TMP_DIR/npmaudit.prodnames"; then
             kind="dev dependency"

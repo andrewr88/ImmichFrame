@@ -14,24 +14,6 @@
         public AssetNotFoundException(string message, Exception innerException) : base(message, innerException) { }
     }
 
-    public class AlbumNotFoundException : ImmichFrameException
-    {
-        public AlbumNotFoundException() : base() { }
-        public AlbumNotFoundException(string message) : base(message) { }
-        public AlbumNotFoundException(string message, Exception innerException) : base(message, innerException) { }
-    }
-    public class PersonNotFoundException : ImmichFrameException
-    {
-        public PersonNotFoundException() : base() { }
-        public PersonNotFoundException(string message) : base(message) { }
-        public PersonNotFoundException(string message, Exception innerException) : base(message, innerException) { }
-    }
-    public class MemoryNotFoundException : ImmichFrameException
-    {
-        public MemoryNotFoundException() : base() { }
-        public MemoryNotFoundException(string message) : base(message) { }
-        public MemoryNotFoundException(string message, Exception innerException) : base(message, innerException) { }
-    }
     public class ProfileNotFoundException : ImmichFrameException
     {
         public ProfileNotFoundException() : base() { }

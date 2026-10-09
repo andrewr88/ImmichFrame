@@ -41,7 +41,7 @@ public class OpenWeatherMapService : IWeatherService
         });
     }
 
-    public async Task<IWeather?> GetWeather(double latitude, double longitude)
+    private async Task<IWeather?> GetWeather(double latitude, double longitude)
     {
         var apiKey = _settings.WeatherApiKey;
 

@@ -34,6 +34,40 @@ export function fileDetails({
 }
 
 /**
+ * What the info overlay says about the camera that took a photo: its make and model as the header,
+ * and the exposure beneath - or no camera line at all, when the asset has none of them.
+ *
+ * A photo can keep its exposure and lose what took it - an edited export, or a scan, can carry an
+ * aperture and a shutter speed with no make or model. The header was the make and model alone, and
+ * for such a photo it was an empty line beside the camera icon, so it falls back to 'Camera'. A make
+ * or model of spaces alone names nothing either, so it counts for as little as one left out.
+ */
+export function cameraDetails({
+	make,
+	model,
+	fNumber,
+	exposureTime,
+	focalLength,
+	iso
+}: Pick<ExifResponseDto, 'make' | 'model' | 'fNumber' | 'exposureTime' | 'focalLength' | 'iso'>):
+	| { header: string; settings: string[] }
+	| undefined {
+	const camera = `${make ?? ''} ${model ?? ''}`.trim();
+	const settings = [
+		fNumber ? `ƒ/${fNumber}` : null,
+		exposureTime ? `${exposureTime} s` : null,
+		focalLength ? `${focalLength} mm` : null,
+		iso ? `ISO ${iso}` : null
+	].filter((setting): setting is string => setting !== null);
+
+	if (!camera && settings.length === 0) {
+		return undefined;
+	}
+
+	return { header: camera || 'Camera', settings };
+}
+
+/**
  * The names of the albums a photo is in, as both overlays list them: an album without one left out.
  *
  * An album need not have a name in Immich, and one without was listed all the same, as nothing -

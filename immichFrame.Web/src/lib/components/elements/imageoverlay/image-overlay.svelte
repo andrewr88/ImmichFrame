@@ -18,7 +18,7 @@
 	import OverlayQr from './overlay-qr.svelte';
 	import Icon from '../icon.svelte';
 	import { getContext } from 'svelte';
-	import { albumNames, fileDetails, namedPeople, namedTags } from './image-overlay';
+	import { albumNames, cameraDetails, fileDetails, namedPeople, namedTags } from './image-overlay';
 
 	interface Props {
 		asset: AssetResponseDto;
@@ -30,6 +30,7 @@
 	let availableTags = $derived(namedTags(asset.tags));
 	let availableAlbums = $derived(albumNames(albums));
 	let exif: ExifResponseDto = $derived(asset.exifInfo ?? ({} as ExifResponseDto));
+	let camera = $derived(cameraDetails(exif));
 
 	let close = getContext<() => void>('close');
 </script>
@@ -50,17 +51,8 @@
 				{#if asset.originalFileName}
 					<OverlayItem icon={mdiFile} header={asset.originalFileName} items={fileDetails(exif)} />
 				{/if}
-				{#if exif.make || exif.model || exif.fNumber || exif.exposureTime || exif.focalLength || exif.iso}
-					<OverlayItem
-						icon={mdiCamera}
-						header={`${exif.make ?? ''} ${exif.model ?? ''}`.trim()}
-						items={[
-							exif.fNumber ? `ƒ/${exif.fNumber}` : null,
-							exif.exposureTime ? `${exif.exposureTime} s` : null,
-							exif.focalLength ? `${exif.focalLength} mm` : null,
-							exif.iso ? `ISO ${exif.iso}` : null
-						].filter((item): item is string => item !== null)}
-					/>
+				{#if camera}
+					<OverlayItem icon={mdiCamera} header={camera.header} items={camera.settings} />
 				{/if}
 				{#if exif.description}
 					<OverlayItem icon={mdiText} header={exif.description} />
