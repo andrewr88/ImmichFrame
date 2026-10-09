@@ -153,10 +153,18 @@ builder.Services.AddSingleton<AdminImmichAccounts>();
 builder.Services.AddHttpClient(WebhookHelper.HttpClientName, client => client.Timeout = WebhookHelper.RequestTimeout)
     .RemoveAllLoggers();
 
-// Calendar feeds log nothing either, and redacting their headers would not do instead: a Google or
-// iCloud feed carries its access token in its URL's path, and the URL is the request line itself. A
-// feed's Basic credential, which does travel as a header, goes unlogged with it.
-builder.Services.AddHttpClient(IcalCalendarService.HttpClientName)
+// Calendar feeds are bounded like the picker's client, for the same reason: what comes back is
+// whatever the feed's host chooses to send, and every frame's request for the calendar waits on the
+// load that fetches them: a timeout of their own, and the picker's handler capping how much of an
+// answer is read. Unlike the picker's, this client still follows redirects: webcal providers move
+// feeds, and hand out addresses that redirect, as a matter of course.
+//
+// They log nothing either, and redacting their headers would not do instead: a Google or iCloud feed
+// carries its access token in its URL's path, and the URL is the request line itself. A feed's Basic
+// credential, which does travel as a header, goes unlogged with it.
+builder.Services.AddHttpClient(IcalCalendarService.HttpClientName,
+        client => client.Timeout = IcalCalendarService.RequestTimeout)
+    .AddHttpMessageHandler(() => new ResponseSizeLimitHandler(IcalCalendarService.MaxFeedBytes))
     .RemoveAllLoggers();
 
 // One set of services per configuration profile, built on first use and cached until the

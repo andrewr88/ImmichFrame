@@ -3,6 +3,7 @@ using System.Text;
 using Ical.Net;
 using ImmichFrame.Core.Helpers;
 using ImmichFrame.Core.Interfaces;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 
 namespace ImmichFrame.Core.Services;
@@ -18,16 +19,63 @@ public class IcalCalendarService : ICalendarService
     /// </summary>
     public const string HttpClientName = "CalendarClient";
 
+    /// <summary>
+    /// How long fetching one feed may take, set on <see cref="HttpClientName"/>. Feeds are fetched one
+    /// after another while every frame's request for the calendar waits on the load, so a feed that
+    /// accepts the connection and never finishes answering held them all for HttpClient's default of
+    /// a hundred seconds.
+    /// </summary>
+    public static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// The most of one feed that will be read, set on <see cref="HttpClientName"/>. Room for years of a
+    /// busy calendar, which a feed carries whole; without a cap HttpClient would buffer up to two
+    /// gigabytes of whatever a feed's host chose to send. A feed over it fails on its own, as an
+    /// unreachable one does, and says so in the log.
+    /// </summary>
+    public const long MaxFeedBytes = 10L * 1024 * 1024;
+
+    /// <summary>
+    /// The most of a day's occurrences one feed contributes. A frame shows a handful, but a series can
+    /// recur every minute, or every second of every minute - 86,400 a day for FREQ=MINUTELY with every
+    /// second in BYSECOND - and each one was kept in the cache and sent to every frame on every poll.
+    /// <para>
+    /// It bounds what is kept and served, not what is worked out: Ical.Net 4.3.1's GetOccurrences
+    /// expands the whole day into a set before handing any of it back, so the cap applies only after.
+    /// </para>
+    /// </summary>
+    private const int MaxOccurrencesPerFeed = 1000;
+
+    private static readonly TimeSpan RefreshInterval = TimeSpan.FromMinutes(15);
+
     private readonly IGeneralSettings _serverSettings;
     private readonly ILogger<IcalCalendarService> _logger;
     private readonly IHttpClientFactory _httpClientFactory;
-    private readonly ApiCache _appointmentCache = new(TimeSpan.FromMinutes(15));
+    private readonly ApiCache _appointmentCache = new(() => new MemoryCacheEntryOptions
+    {
+        AbsoluteExpiration = ExpiryFor(DateTimeOffset.Now)
+    });
 
     public IcalCalendarService(IGeneralSettings serverSettings, ILogger<IcalCalendarService> logger, IHttpClientFactory httpClientFactory)
     {
         _logger = logger;
         _serverSettings = serverSettings;
         _httpClientFactory = httpClientFactory;
+    }
+
+    /// <summary>
+    /// When appointments loaded at <paramref name="now"/> stop being served: <see cref="RefreshInterval"/>
+    /// later, or at the midnight that ends <paramref name="now"/>'s day if that comes first. They are
+    /// that day's appointments, so a load at ten to midnight went on serving yesterday's for five
+    /// minutes of today. In local time, as <c>DateTimeOffset.Now</c> is, and taken apart from the
+    /// options - as <c>DailyApiCache.ExpiryFor</c> is - so that it can be checked against fixed times.
+    /// </summary>
+    internal static DateTimeOffset ExpiryFor(DateTimeOffset now)
+    {
+        DateTimeOffset midnight = now.Date.AddDays(1);
+        var refresh = now + RefreshInterval;
+
+        return refresh < midnight ? refresh : midnight;
     }
 
     public async Task<List<IAppointment>> GetAppointments()
@@ -57,6 +105,10 @@ public class IcalCalendarService : ICalendarService
 
             var icals = await GetCalendars(cals);
 
+            // Once, for every feed: read per feed, or per bound, a poll running across midnight asked one
+            // feed for yesterday and the next for today - or one feed for two days at once.
+            var today = DateTime.Today;
+
             // Feed by feed, like the fetch: one that is not a calendar - typically a provider's sign-in
             // page, served with a 200 once a session or a shared link has expired - costs its own
             // appointments, rather than failing this factory and with it every calendar on every poll.
@@ -72,9 +124,22 @@ public class IcalCalendarService : ICalendarService
                         continue;
                     }
 
+                    var occurrences = calendar.GetOccurrencesOn(today);
+                    if (occurrences.Count > MaxOccurrencesPerFeed)
+                    {
+                        _logger.LogWarning("Calendar data from '{redactedUrl}' has {occurrenceCount} appointments today; only the first {maxOccurrences} are shown",
+                            RedactUrl(url), occurrences.Count, MaxOccurrencesPerFeed);
+                    }
+
                     // Expanded in full before any of it is added, so a feed that fails partway through
-                    // contributes nothing rather than some of its day.
-                    appointments.AddRange(calendar.GetOccurrences(DateTime.Today, DateTime.Today.AddDays(1)).Select(x => x.ToAppointment()).ToList());
+                    // contributes nothing rather than some of its day. The earliest are kept, which is the
+                    // order the frame lists them in, so a runaway series that starts later in the day
+                    // leaves the feed's other events where they were.
+                    appointments.AddRange(occurrences
+                        .OrderBy(occurrence => occurrence.Period.StartTime.AsUtc)
+                        .Take(MaxOccurrencesPerFeed)
+                        .Select(x => x.ToAppointment())
+                        .ToList());
                 }
                 catch (Exception ex)
                 {

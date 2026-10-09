@@ -26,6 +26,11 @@ internal sealed class ResponseTooLargeException(long limit, long? declared)
 /// bound on what one request can pull into this process.
 /// </para>
 /// <para>
+/// Calendar feeds are read through it too, capped at <c>IcalCalendarService.MaxFeedBytes</c>: a feed
+/// is likewise whatever its host chooses to send, and HttpClient's own buffering stops at two
+/// gigabytes.
+/// </para>
+/// <para>
 /// The body is buffered here, inside the handler, rather than being handed on behind a counting
 /// stream. That costs the streaming of a person thumbnail, which is at most a few hundred kilobytes,
 /// and buys the thing worth more: the whole read happens inside <c>SendAsync</c>, under the token

@@ -167,8 +167,10 @@ public class GeneralSettings : IGeneralSettings, IConfigSettable
         // frame's handler trims the bearer token a frame sends, so a stored secret with whitespace
         // around it matched no token any frame could send, and every frame was refused. This runs
         // first, because stored settings that fail validation are run anyway, and they have to run
-        // with the trimmed secret.
+        // with the trimmed secret. The weather API key is pasted the same way, and OpenWeatherMap takes
+        // it in its query string - whitespace and all - and refuses every request made with it.
         AuthenticationSecret = AuthenticationSecret?.Trim();
+        WeatherApiKey = WeatherApiKey?.Trim();
 
         // A negative number is not a number of hours. The upper bound is explained on the constant.
         if (RefreshAlbumPeopleInterval is < 0 or > MaxRefreshAlbumPeopleInterval)

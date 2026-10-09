@@ -47,6 +47,7 @@ public class OpenWeatherMapServiceTests
     [TestCase("40,7128,-74,0060")]  // decimal commas: read as latitude 40, longitude 7128
     [TestCase("NaN,-74.0060")]      // float.Parse accepts NaN as a number
     [TestCase("91,0")]              // no such latitude
+    [TestCase("0,181")]             // no such longitude
     public async Task GetWeather_LatLongNotACoordinatePair_ReturnsNullAndWarns(string latLong)
     {
         // Arrange
@@ -79,6 +80,20 @@ public class OpenWeatherMapServiceTests
         // Assert
         Assert.That(weather, Is.Not.Null);
         _sut.Protected().Verify("GetCurrentWeather", Times.Once(), 40.7128, -74.006);
+    }
+
+    [Test]
+    public async Task GetWeather_LongitudePastNinetyDegrees_IsAskedAbout()
+    {
+        // Arrange - a longitude runs to 180 degrees either way, where a latitude stops at 90
+        _settings.SetupGet(s => s.WeatherLatLong).Returns("0,120");
+
+        // Act
+        await _sut.Object.GetWeather();
+
+        // Assert
+        _sut.Protected().Verify("GetCurrentWeather", Times.Once(), 0d, 120d);
+        Assert.That(Warnings(), Is.Empty);
     }
 
     [TestCase(null)]
@@ -114,6 +129,31 @@ public class OpenWeatherMapServiceTests
             Assert.That(weather, Is.Null);
             Assert.That(warnings, Has.Count.EqualTo(1));
             Assert.That(warnings.FirstOrDefault(), Does.Contain("HttpRequestException").And.Contain("401"));
+            Assert.That(_logger.Entries.Select(e => e.Text), Has.None.Contains(ApiKey));
+        });
+    }
+
+    /// <summary>
+    /// A key set with whitespace around it - pasted with the line break it was copied with - is masked
+    /// by the key itself, without the whitespace: that is what a message quoting the request carries,
+    /// and the key as set, whitespace and all, matches nothing in it.
+    /// </summary>
+    [Test]
+    public async Task GetWeather_ApiKeySetWithWhitespaceAndOpenWeatherMapFails_WarnsWithoutTheApiKey()
+    {
+        // Arrange
+        _settings.SetupGet(s => s.WeatherApiKey).Returns($" {ApiKey} ");
+        OpenWeatherMap().ThrowsAsync(new HttpRequestException(
+            $"GET https://api.openweathermap.org/data/2.5/weather?lat=40.7128&lon=-74.0060&appid={ApiKey} answered 401 (Unauthorized)"));
+
+        // Act
+        var weather = await _sut.Object.GetWeather();
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(weather, Is.Null);
+            Assert.That(Warnings(), Has.One.Contains("HttpRequestException").And.Contains("401"));
             Assert.That(_logger.Entries.Select(e => e.Text), Has.None.Contains(ApiKey));
         });
     }

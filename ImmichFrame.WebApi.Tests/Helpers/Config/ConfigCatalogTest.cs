@@ -717,6 +717,31 @@ public class ConfigCatalogTest
     }
 
     /// <summary>
+    /// The weather API key arrives padded as readily as an account's: pasted with a space or the line
+    /// break it was copied with, or ending a YAML block scalar. OpenWeatherMap takes it in its query
+    /// string, padding and all, and refuses every request made with it.
+    /// </summary>
+    [TestCase("Settings.json", """
+                               {
+                                 "General": { "WeatherApiKey": " 0123456789abcdef\n" },
+                                 "Accounts": [{ "ImmichServerUrl": "https://base.example.com", "ApiKey": "base-key" }]
+                               }
+                               """, TestName = "SettingsFileWeatherApiKeyWithSurroundingWhitespaceLoadsTrimmed")]
+    [TestCase("Settings.yml", """
+                              General:
+                                WeatherApiKey: |
+                                  0123456789abcdef
+                              Accounts:
+                              - ImmichServerUrl: https://base.example.com
+                                ApiKey: base-key
+                              """, TestName = "YamlBlockScalarWeatherApiKeyLoadsTrimmed")]
+    public void WeatherApiKeyWithSurroundingWhitespaceLoadsTrimmed(string fileName, string settings)
+    {
+        InConfigDirectory(fileName, settings, directory =>
+            Served(directory).Default.GeneralSettings.WeatherApiKey.Should().Be("0123456789abcdef"));
+    }
+
+    /// <summary>
     /// A line break inside the key, which trimming cannot help, is refused while the settings are
     /// validated. Accepted, it failed only once the account's services were built - inside a Lazy that
     /// caches the exception, so every request for the profile failed until the configuration was
