@@ -106,4 +106,7 @@ public class TotalAccountImagesSelectionStrategy(
 
     public Task<T> ForAsset<T>(Guid assetId, Func<IAccountImmichFrameLogic, Task<T>> f, CancellationToken ct = default)
         => _tracker.ForAsset(assetId, f, ct);
+
+    public Task<T> ForAsset<T>(Guid assetId, Func<IAccountImmichFrameLogic, Task<T>> f, Func<T, bool> accept, CancellationToken ct = default)
+        => _tracker.ForAsset(assetId, f, accept, ct);
 }

@@ -110,6 +110,84 @@ public class MultiImmichFrameLogicDelegateTests
         public DateTime DateTime { get; set; } = DateTime.Now;
     }
 
+    // Ten assets for each account, which the tests tell apart by id.
+    private Dictionary<Guid, Mock<IAccountImmichFrameLogic>> EachAccountHandsOutTen()
+    {
+        var accountOf = new Dictionary<Guid, Mock<IAccountImmichFrameLogic>>();
+        foreach (var account in _accounts)
+        {
+            var assets = Enumerable.Range(0, 10).Select(_ => new AssetResponseDto { Id = Guid.NewGuid() }).ToList();
+            account.Setup(a => a.GetAssets()).ReturnsAsync(assets);
+            foreach (var asset in assets)
+                accountOf[asset.Id] = account;
+        }
+
+        return accountOf;
+    }
+
+    /// <summary>
+    /// The frame fetches each asset from the server named on it, so an asset has to carry the server
+    /// of the account it came from.
+    /// </summary>
+    [Test]
+    public async Task GetAssets_EachAssetCarriesItsOwnAccountsServer()
+    {
+        // Arrange
+        var accountOf = EachAccountHandsOutTen();
+
+        // Act
+        var batch = (await _sut.GetAssets()).ToList();
+
+        // Assert
+        Assert.That(batch, Has.Count.EqualTo(20));
+        Assert.That(batch.Select(asset => asset.ImmichServerUrl),
+            Is.EqualTo(batch.Select(asset => accountOf[asset.Id].Object.AccountSettings.ImmichServerUrl)));
+    }
+
+    /// <summary>
+    /// The strategy hands each account's share back in a block, and the frame shows a batch in order:
+    /// left as it came, every batch showed one account's photos and then the other's.
+    /// </summary>
+    [Test]
+    public async Task GetAssets_MixesTheAccountsTogether()
+    {
+        // Arrange
+        var accountOf = EachAccountHandsOutTen();
+
+        // Act - three batches, so that a shuffle leaving one in blocks by chance - 2 in 184,756 for
+        // two accounts of ten - cannot fail the test
+        var changesOfAccount = new List<int>();
+        for (var i = 0; i < 3; i++)
+        {
+            var accounts = (await _sut.GetAssets()).Select(asset => accountOf[asset.Id]).ToList();
+            changesOfAccount.Add(accounts.Zip(accounts.Skip(1)).Count(pair => pair.First != pair.Second));
+        }
+
+        // Assert - in blocks, a batch changes account once
+        Assert.That(changesOfAccount, Has.Some.GreaterThan(1));
+    }
+
+    [Test]
+    public async Task GetAssetInfoById_CarriesTheServerOfTheAccountThatAnswered()
+    {
+        // Arrange
+        IAccountImmichFrameLogic? answered = null;
+        foreach (var account in _accounts)
+        {
+            account.Setup(a => a.GetAssetInfoById(_assetId)).ReturnsAsync(() =>
+            {
+                answered = account.Object;
+                return new AssetResponseDto { Id = _assetId };
+            });
+        }
+
+        // Act
+        var asset = await _sut.GetAssetInfoById(_assetId);
+
+        // Assert
+        Assert.That(asset.ImmichServerUrl, Is.EqualTo(answered!.AccountSettings.ImmichServerUrl));
+    }
+
     [Test]
     public async Task GetAssetInfoById_FirstAccountFailsAsynchronously_ServedByNextAccount()
     {
@@ -152,6 +230,46 @@ public class MultiImmichFrameLogicDelegateTests
 
         // Assert
         Assert.That(result, Is.SameAs(albums));
+    }
+
+    /// <summary>
+    /// Immich answers an album lookup for an asset the account does not hold with no albums rather
+    /// than an error. An account the tracker names wrongly - a Bloom false positive - so ended the
+    /// lookup with nothing, and the account holding the asset was never asked.
+    /// </summary>
+    [Test]
+    public async Task GetAlbumInfoById_FirstAccountAnswersNoAlbums_ServedByNextAccount()
+    {
+        // Arrange - whichever account is asked first answers as one not holding the asset does
+        IEnumerable<AlbumResponseDto> albums = [new AlbumResponseDto()];
+        var calls = 0;
+        foreach (var account in _accounts)
+        {
+            account.Setup(a => a.GetAlbumInfoById(_assetId)).ReturnsAsync(() =>
+                Interlocked.Increment(ref calls) == 1 ? [] : albums);
+        }
+
+        // Act
+        var result = await _sut.GetAlbumInfoById(_assetId);
+
+        // Assert
+        Assert.That(result, Is.SameAs(albums));
+    }
+
+    [Test]
+    public async Task GetAlbumInfoById_InNoAlbumOnAnyAccount_AnswersNoAlbumsOnceEveryAccountIsAsked()
+    {
+        // Arrange - an asset in no album at all, which is an answer rather than a failure
+        foreach (var account in _accounts)
+            account.Setup(a => a.GetAlbumInfoById(_assetId)).ReturnsAsync([]);
+
+        // Act
+        var result = await _sut.GetAlbumInfoById(_assetId);
+
+        // Assert
+        Assert.That(result, Is.Empty);
+        foreach (var account in _accounts)
+            account.Verify(a => a.GetAlbumInfoById(_assetId), Times.Once);
     }
 
     [Test]

@@ -5,7 +5,7 @@ using ImmichFrame.Core.Helpers;
 using ImmichFrame.Core.Interfaces;
 using ImmichFrame.Core.Logic.Pool;
 using ImmichFrame.Core.Models;
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging;
 
 namespace ImmichFrame.Core.Logic;
 
@@ -22,6 +22,7 @@ public class PooledImmichFrameLogic : IAccountImmichFrameLogic, IDisposable
 
     private readonly IGeneralSettings _generalSettings;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly ILogger<PooledImmichFrameLogic> _logger;
     private readonly IApiCache _apiCache;
     private readonly IAssetPool _pool;
     private readonly ImmichApi _immichApi;
@@ -30,13 +31,33 @@ public class PooledImmichFrameLogic : IAccountImmichFrameLogic, IDisposable
     // and anything else as .jpeg.
     private static readonly string[] CachedImageExtensions = ["jpeg", "webp"];
 
-    // Settable only so that tests can give each run an image cache of its own.
-    internal string DownloadLocation { get; init; } = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ImageCache");
+    /// <summary>
+    /// How long a download's file can go unwritten before <see cref="SweepImageCache"/> takes it for
+    /// one a crash cut short. A download under way writes to its file throughout, and the cache is
+    /// shared - by every account, and through a configuration swap with the accounts on their way out
+    /// - so a sweep cannot simply take every download it finds.
+    /// </summary>
+    private static readonly TimeSpan AbandonedDownloadAge = TimeSpan.FromHours(1);
 
-    public PooledImmichFrameLogic(IAccountSettings accountSettings, IGeneralSettings generalSettings, IHttpClientFactory httpClientFactory)
+    // Set once the image cache has failed; see ImageCacheFailed. An int, for Interlocked.
+    private int _imageCacheFailed;
+
+    public PooledImmichFrameLogic(IAccountSettings accountSettings, IGeneralSettings generalSettings,
+        IHttpClientFactory httpClientFactory, ILogger<PooledImmichFrameLogic> logger)
+        : this(accountSettings, generalSettings, httpClientFactory, logger,
+            Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ImageCache"))
+    {
+    }
+
+    // The image cache's directory is a parameter only so that tests can give each run one of its own,
+    // and a constructor's rather than an initializer's because the sweep started here reads it.
+    internal PooledImmichFrameLogic(IAccountSettings accountSettings, IGeneralSettings generalSettings,
+        IHttpClientFactory httpClientFactory, ILogger<PooledImmichFrameLogic> logger, string downloadLocation)
     {
         _generalSettings = generalSettings;
         _httpClientFactory = httpClientFactory;
+        _logger = logger;
+        DownloadLocation = downloadLocation;
 
         var httpClient = httpClientFactory.CreateClient(HttpClientName);
         AccountSettings = accountSettings;
@@ -46,7 +67,17 @@ public class PooledImmichFrameLogic : IAccountImmichFrameLogic, IDisposable
 
         _apiCache = new ApiCache(RefreshInterval(generalSettings.RefreshAlbumPeopleInterval));
         _pool = BuildPool(accountSettings);
+
+        // In the background, since nothing needs to wait for it: an image the sweep has yet to reach
+        // is judged by the same rule when it is asked for.
+        if (generalSettings.DownloadImages)
+            ImageCacheSweep = Task.Run(SweepImageCache);
     }
+
+    internal string DownloadLocation { get; }
+
+    // The sweep the constructor started, for tests to wait on.
+    internal Task ImageCacheSweep { get; } = Task.CompletedTask;
 
     /// <summary>
     /// The longest the account's albums and people are cached, in hours: ten years, the bound a save
@@ -146,11 +177,27 @@ public class PooledImmichFrameLogic : IAccountImmichFrameLogic, IDisposable
     }
     private async Task<(string fileName, string ContentType, Stream fileStream)> GetImageAsset(Guid id, CancellationToken ct)
     {
-        if (_generalSettings.DownloadImages && OpenCachedImage(id) is { } cached)
+        if (CachingImages)
         {
-            return cached;
+            if (OpenCachedImage(id) is { } cached)
+                return cached;
+
+            if (await DownloadToCache(id, ct) is { } downloaded)
+                return downloaded;
         }
 
+        // Not caching - or the cache has just failed, perhaps after reading the image out of the
+        // response it was given, which cannot be read twice. So Immich is asked here afresh.
+        var (response, fileName, contentType) = await RequestImage(id, ct);
+        return (fileName, contentType, response.Stream);
+    }
+
+    /// <summary>
+    /// Asks Immich for an image's preview, and names it by its media type: a WebP preview .webp, and
+    /// anything else .jpeg.
+    /// </summary>
+    private async Task<(FileResponse response, string fileName, string ContentType)> RequestImage(Guid id, CancellationToken ct)
+    {
         var data = await _immichApi.ViewAssetAsync(null, id, string.Empty, AssetMediaSize.Preview, null, ct);
 
         if (data == null)
@@ -167,19 +214,27 @@ public class PooledImmichFrameLogic : IAccountImmichFrameLogic, IDisposable
         var isWebp = MediaTypeHeaderValue.TryParse(contentType, out var mediaType)
             && string.Equals(mediaType.MediaType, "image/webp", StringComparison.OrdinalIgnoreCase);
         var ext = isWebp ? "webp" : "jpeg";
-        var fileName = $"{id}.{ext}";
 
-        if (_generalSettings.DownloadImages)
+        return (data, $"{id}.{ext}", contentType);
+    }
+
+    private bool CachingImages => _generalSettings.DownloadImages && Volatile.Read(ref _imageCacheFailed) == 0;
+
+    /// <summary>
+    /// Stops caching this account's images, and says so - once. A cache is never worth failing an
+    /// image for, and one the frame cannot write to - a directory it may not create, a disk that is
+    /// full - fails every image alike, so after its first failure it is not tried again: each image
+    /// would be another warning, and those it failed part way through a second download. They are
+    /// served straight from Immich instead, as with DownloadImages off, until the account is built
+    /// afresh.
+    /// </summary>
+    private void ImageCacheFailed(Exception e)
+    {
+        if (Interlocked.Exchange(ref _imageCacheFailed, 1) == 0)
         {
-            // The image is served from the cache, so the response is done with once the copy has
-            // finished or failed, and nothing else is in a position to dispose it.
-            using (data)
-            {
-                return (fileName, contentType, await DownloadToCache(data.Stream, fileName, ct));
-            }
+            _logger.LogWarning(e, "Cannot cache images in '{downloadLocation}', so {account} serves them straight from Immich until ImmichFrame restarts or its settings change",
+                DownloadLocation, this);
         }
-
-        return (fileName, contentType, data.Stream);
     }
 
     /// <summary>
@@ -199,44 +254,83 @@ public class PooledImmichFrameLogic : IAccountImmichFrameLogic, IDisposable
             {
                 fs = OpenCachedFile(filePath);
             }
-            catch (IOException e) when (e is FileNotFoundException or DirectoryNotFoundException)
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
-                // Never cached, or expired and deleted by a concurrent request a moment ago.
+                // Never cached, or expired and deleted by a concurrent request a moment ago - or not
+                // to be read, which is no reason to fail the image either: it is downloaded as though
+                // it never had been, and writing it is what finds out whether the cache can be used.
                 continue;
             }
 
             // Judged by the file that was opened, not by its name: a concurrent download can move a
             // fresh copy in under that name at any time.
-            if (_generalSettings.RenewImagesDuration > (DateTime.UtcNow - File.GetCreationTimeUtc(fs.SafeFileHandle)).Days)
+            if (!Expired(File.GetCreationTimeUtc(fs.SafeFileHandle)))
                 return (fileName, $"image/{ext}", fs);
 
             // Deleting by name can also take a fresh copy a concurrent download has just moved in.
             // That costs the next request a download - not the one serving that copy, which keeps
             // its handle.
             fs.Dispose();
-            File.Delete(filePath);
+            TryDelete(filePath);
         }
 
         return null;
     }
 
-    /// <summary>
-    /// Writes a downloaded image into the cache and returns the cached copy, open for reading. The
-    /// download goes to a file of its own and is moved in under <paramref name="fileName"/> only
-    /// once it is complete, so the cache never holds part of an image - not after a failed download,
-    /// and not after a crash - and requests downloading the same image at once do not collide.
-    /// </summary>
-    private async Task<Stream> DownloadToCache(Stream image, string fileName, CancellationToken ct)
-    {
-        Directory.CreateDirectory(DownloadLocation);
-        var tempPath = Path.Combine(DownloadLocation, $"{fileName}.{Guid.NewGuid():N}.tmp");
+    // One rule for the requests and the sweep alike.
+    private bool Expired(DateTime createdUtc) =>
+        _generalSettings.RenewImagesDuration <= (DateTime.UtcNow - createdUtc).Days;
 
+    /// <summary>
+    /// Downloads an image into the cache and returns the cached copy, open for reading - or nothing
+    /// when the cache fails, for the image to be served straight from Immich instead. The download
+    /// goes to a file of its own and is moved in under the image's name only once it is complete, so
+    /// the cache never holds part of an image - not after a failed download, and not after a crash -
+    /// and requests downloading the same image at once do not collide.
+    /// </summary>
+    private async Task<(string fileName, string ContentType, Stream fileStream)?> DownloadToCache(Guid id, CancellationToken ct)
+    {
+        var tempPath = Path.Combine(DownloadLocation, $"{id}.{Guid.NewGuid():N}.tmp");
         FileStream? cached = null;
+
+        // Whether it is Immich being waited on rather than the cache. Immich failing leaves no image
+        // to serve, and fails the request as it always has; only the cache's failures are fallen
+        // back from.
+        var awaitingImmich = false;
         try
         {
+            // Before Immich is asked for the image, so that the likeliest failure - a cache the frame
+            // may not write to - is found out with nothing yet downloaded.
+            Directory.CreateDirectory(DownloadLocation);
+
+            string fileName, contentType;
             await using (var download = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write))
             {
-                await image.CopyToAsync(download, ct);
+                awaitingImmich = true;
+                FileResponse response;
+                (response, fileName, contentType) = await RequestImage(id, ct);
+
+                // The image is served from the cache, so the response is done with once the copy has
+                // finished or failed, and nothing else is in a position to dispose it.
+                using (response)
+                {
+                    // By hand rather than by CopyToAsync, which cannot say which side of it failed.
+                    var buffer = new byte[81920];
+                    while (true)
+                    {
+                        awaitingImmich = true;
+                        var read = await response.Stream.ReadAsync(buffer, ct);
+                        awaitingImmich = false;
+                        if (read == 0) break;
+
+                        await download.WriteAsync(buffer.AsMemory(0, read), ct);
+                    }
+                }
+
+                // Through to the disk before the image's name goes on it: renamed while its contents
+                // were still only in memory, a power cut could leave that name on an empty file, to
+                // be served as the image until it expired.
+                download.Flush(flushToDisk: true);
             }
 
             // Opened before the move rather than after it: once under the image's name, the file can
@@ -244,12 +338,19 @@ public class PooledImmichFrameLogic : IAccountImmichFrameLogic, IDisposable
             // the image just downloaded.
             cached = OpenCachedFile(tempPath);
             File.Move(tempPath, Path.Combine(DownloadLocation, fileName), overwrite: true);
-            return cached;
+            return (fileName, contentType, cached);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException && !awaitingImmich)
+        {
+            cached?.Dispose();
+            TryDelete(tempPath);
+            ImageCacheFailed(e);
+            return null;
         }
         catch
         {
             cached?.Dispose();
-            File.Delete(tempPath);
+            TryDelete(tempPath);
             throw;
         }
     }
@@ -258,6 +359,48 @@ public class PooledImmichFrameLogic : IAccountImmichFrameLogic, IDisposable
     // served; the reader keeps the image it opened.
     private static FileStream OpenCachedFile(string path) =>
         new(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // Left for the next sweep, rather than failing an image that can be served all the same.
+        }
+    }
+
+    /// <summary>
+    /// Deletes what the cache holds but will never serve: images that have expired, which were only
+    /// deleted when the same image was asked for again - by a frame long moved on, never - and the
+    /// files of downloads a crash cut short, which nothing deleted at all. Run in the background as
+    /// the account is built, so it must not throw: nothing awaits it to see.
+    /// </summary>
+    internal void SweepImageCache()
+    {
+        try
+        {
+            var directory = new DirectoryInfo(DownloadLocation);
+            if (!directory.Exists) return;
+
+            foreach (var file in directory.EnumerateFiles())
+            {
+                var stale = file.Extension == ".tmp"
+                    ? DateTime.UtcNow - file.LastWriteTimeUtc > AbandonedDownloadAge
+                    : CachedImageExtensions.Contains(file.Extension.TrimStart('.')) && Expired(file.CreationTimeUtc);
+
+                if (stale) TryDelete(file.FullName);
+            }
+        }
+        catch (Exception e)
+        {
+            // Most likely a cache the frame cannot read - which the first image it downloads reports,
+            // along with what matters about it: that nothing is being cached.
+            _logger.LogDebug(e, "Could not sweep the image cache in '{downloadLocation}'", DownloadLocation);
+        }
+    }
 
     private async Task<AssetResponse> GetVideoAsset(Guid id, string? rangeHeader, CancellationToken cancellationToken)
     {
@@ -293,11 +436,11 @@ public class PooledImmichFrameLogic : IAccountImmichFrameLogic, IDisposable
     }
 
     // Nothing calls this in production: MultiImmichFrameLogicDelegate sends a profile's webhook itself
-    // rather than asking an account to. It goes through the same helper all the same, without a logger
-    // since this class has none, so a failure here is dropped rather than escaping unobserved.
+    // rather than asking an account to. It goes through the same helper all the same, so a failure
+    // here is logged rather than escaping unobserved.
     public async Task SendWebhookNotification(IWebhookNotification notification) =>
         await WebhookHelper.SendWebhookNotification(notification, _generalSettings.Webhook,
-            _httpClientFactory.CreateClient(WebhookHelper.HttpClientName), NullLogger.Instance);
+            _httpClientFactory.CreateClient(WebhookHelper.HttpClientName), _logger);
 
     public override string ToString() => $"Account Pool [{_immichApi.BaseUrl}]";
 

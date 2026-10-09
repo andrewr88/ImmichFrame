@@ -48,7 +48,9 @@ Defaults are below, only one account with `ImmichServerUrl` and `ApiKey`|`ApiKey
 General:
   # When set, every client needs to authenticate via Bearer Token and this value.
   AuthenticationSecret: null  # string, no default
-  # whether to download images to the server
+  # whether to download images to the server, into an ImageCache folder beside ImmichFrame
+  # (/app/ImageCache in Docker). If that folder cannot be written to, images are served
+  # straight from Immich instead, and a warning is logged.
   DownloadImages: false  # boolean
   # if images are downloaded, re-download if age (in days) is more than this
   RenewImagesDuration: 30  # int

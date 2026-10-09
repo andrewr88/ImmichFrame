@@ -44,8 +44,12 @@ public class MultiImmichFrameLogicDelegate : IImmichFrameLogic, IDisposable
         => _accountSelectionStrategy.ForAsset(assetId, async logic => await logic.GetAssetFacesById(assetId));
 
 
+    // Immich answers an album lookup for an asset the account does not hold with no albums rather than
+    // an error, so an account the tracker names wrongly - a Bloom false positive - ended the lookup with
+    // nothing, before the account holding the asset was asked. No albums sends it on to the next
+    // account instead, and is the answer only once every account named has given it.
     public Task<IEnumerable<AlbumResponseDto>> GetAlbumInfoById(Guid assetId)
-        => _accountSelectionStrategy.ForAsset(assetId, logic => logic.GetAlbumInfoById(assetId));
+        => _accountSelectionStrategy.ForAsset(assetId, logic => logic.GetAlbumInfoById(assetId), albums => albums.Any());
 
 
     public Task<AssetResponse> GetAsset(Guid assetId, AssetTypeEnum? assetType = null, string? rangeHeader = null, CancellationToken ct = default)

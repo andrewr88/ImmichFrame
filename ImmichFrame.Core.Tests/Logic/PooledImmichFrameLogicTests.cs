@@ -1,12 +1,17 @@
 using System.Net;
 using System.Security.Cryptography;
 using ImmichFrame.Core.Api;
+using ImmichFrame.Core.Exceptions;
 using ImmichFrame.Core.Interfaces;
 using ImmichFrame.Core.Logic;
+using ImmichFrame.Core.Logic.AccountSelection;
 using ImmichFrame.Core.Models;
+using ImmichFrame.Core.Tests.Services;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Moq.Protected;
 using NUnit.Framework;
+using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 
 namespace ImmichFrame.Core.Tests.Logic;
 
@@ -24,10 +29,11 @@ public class PooledImmichFrameLogicTests
     private Mock<IAccountSettings> _accountSettings;
     private Mock<HttpMessageHandler> _immich;
     private Mock<IHttpClientFactory> _httpClientFactory;
+    private ListLogger<PooledImmichFrameLogic> _logger;
     private PooledImmichFrameLogic _sut;
 
     [SetUp]
-    public void Setup()
+    public async Task Setup()
     {
         // A cache of its own for every test, and one that does not exist yet, as on a fresh install.
         _cacheDirectory = Path.Combine(Path.GetTempPath(), $"ImmichFrame.Core.Tests.{Guid.NewGuid():N}");
@@ -46,18 +52,53 @@ public class PooledImmichFrameLogicTests
         _httpClientFactory = new Mock<IHttpClientFactory>();
         _httpClientFactory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(() => new HttpClient(_immich.Object));
 
-        _sut = new PooledImmichFrameLogic(_accountSettings.Object, _generalSettings.Object, _httpClientFactory.Object)
-        {
-            DownloadLocation = _cacheDirectory
-        };
+        _logger = new ListLogger<PooledImmichFrameLogic>();
+        _sut = await CreateLogic();
     }
 
     [TearDown]
     public void TearDown()
     {
         _sut.Dispose();
-        if (Directory.Exists(_cacheDirectory))
-            Directory.Delete(_cacheDirectory, recursive: true);
+        if (!Directory.Exists(_cacheDirectory)) return;
+
+        // A read-only case may have taken the write bit off the directory itself.
+        SetMode(_cacheDirectory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        Directory.Delete(_cacheDirectory, recursive: true);
+    }
+
+    // An account's logic over the test's image cache, unless given another. Returned once the sweep
+    // it starts is over, so that no test has a sweep running through the files it arranges.
+    private async Task<PooledImmichFrameLogic> CreateLogic(string? cacheDirectory = null)
+    {
+        var logic = new PooledImmichFrameLogic(_accountSettings.Object, _generalSettings.Object,
+            _httpClientFactory.Object, _logger, cacheDirectory ?? _cacheDirectory);
+        await logic.ImageCacheSweep.WaitAsync(WaitLimit);
+        return logic;
+    }
+
+    private List<string> Warnings() =>
+        _logger.Entries.Where(e => e.Level == LogLevel.Warning).Select(e => e.Text).ToList();
+
+    // A file in the test's cache, written as long ago as given. On Linux, which keeps no creation
+    // time to set, setting one sets the last write time, which then stands in for it.
+    private string CacheFile(string name, TimeSpan age)
+    {
+        var path = Path.Combine(_cacheDirectory, name);
+        File.WriteAllBytes(path, [1, 2, 3]);
+        File.SetCreationTimeUtc(path, DateTime.UtcNow - age);
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow - age);
+        return path;
+    }
+
+    // Guarded rather than called directly: the file-mode APIs are unsupported on Windows, and an
+    // unguarded call site is a CA1416 warning in an otherwise clean build. The tests that turn on what
+    // the mode actually is carry [Platform("Unix")] as well.
+    private static void SetMode(string path, UnixFileMode mode)
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        File.SetUnixFileMode(path, mode);
     }
 
     private void ImmichServes(Func<HttpResponseMessage> response) =>
@@ -215,6 +256,133 @@ public class PooledImmichFrameLogicTests
     }
 
     /// <summary>
+    /// A cache the frame cannot write to is no reason to fail the image it was to keep a copy of. In
+    /// the shipped image the cache belonged beside the binary, in a directory only root may write to,
+    /// so it could never be created and every image failed.
+    /// </summary>
+    [Test]
+    // Windows has no mode bits for SetMode to take the write bit off with.
+    [Platform("Unix")]
+    public async Task GetAsset_CacheDirectoryCannotBeCreated_ServesTheImageFromImmich()
+    {
+        // Root writes through a directory's mode, so as root the cache is created all the same.
+        Assume.That(Environment.IsPrivilegedProcess, Is.False, "running as root, whom a directory's mode does not stop");
+
+        // Arrange - the cache belongs in a directory the frame may only read, as /app is in the image
+        Directory.CreateDirectory(_cacheDirectory);
+        SetMode(_cacheDirectory, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        var cacheDirectory = Path.Combine(_cacheDirectory, "ImageCache");
+        using var logic = await CreateLogic(cacheDirectory);
+        ImmichServes(() => ImageResponse(new UpstreamBody(Image)));
+
+        // Act
+        var first = await ReadAll(await logic.GetAsset(_assetId, AssetTypeEnum.IMAGE));
+        var second = await ReadAll(await logic.GetAsset(_assetId, AssetTypeEnum.IMAGE));
+
+        // Assert - served both times, from one request to Immich each, and the operator told which
+        // directory to fix once rather than for every image
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Is.EqualTo(Image));
+            Assert.That(second, Is.EqualTo(Image));
+            Assert.That(Warnings(), Has.Count.EqualTo(1));
+            Assert.That(Warnings(), Has.All.Contains(cacheDirectory));
+        });
+        VerifyImmichRequests(Times.Exactly(2));
+    }
+
+    /// <summary>
+    /// What the frame made of that: the tracker takes an account failing to serve an asset for a
+    /// Bloom false positive, so every image came back as not found.
+    /// </summary>
+    [Test]
+    [Platform("Unix")]
+    public async Task GetAsset_ThroughTheTrackerWithACacheThatCannotBeCreated_ServesTheImage()
+    {
+        Assume.That(Environment.IsPrivilegedProcess, Is.False, "running as root, whom a directory's mode does not stop");
+
+        // Arrange
+        Directory.CreateDirectory(_cacheDirectory);
+        SetMode(_cacheDirectory, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        using var logic = await CreateLogic(Path.Combine(_cacheDirectory, "ImageCache"));
+        ImmichServes(() => ImageResponse(new UpstreamBody(Image)));
+        // The tracker sizes the account's filter by its count: for an account narrowed to nothing,
+        // this search
+        ImmichAnswers("/search/statistics", """{"total":1}""");
+        var tracker = new BloomFilterAssetAccountTracker(NullLogger<BloomFilterAssetAccountTracker>.Instance);
+        await tracker.RecordAssetLocation(logic, _assetId);
+
+        // Act
+        var asset = await tracker.ForAsset(_assetId, account => account.GetAsset(_assetId, AssetTypeEnum.IMAGE));
+
+        // Assert
+        Assert.That(await ReadAll(asset), Is.EqualTo(Image));
+    }
+
+    /// <summary>
+    /// The cache can fail once the image has been read out of Immich's response, too - a disk that
+    /// fills part way, a name the download cannot be moved in under - and a response cannot be read
+    /// twice. Immich is asked again and that answer served as it arrives, with nothing left behind.
+    /// </summary>
+    [Test]
+    public async Task GetAsset_CacheFailsOnceTheImageIsDownloaded_ServesItFromASecondRequest()
+    {
+        // Arrange - a directory squats on the image's name in the cache, so the finished download
+        // cannot be moved in under it: a failure after the whole response is read, even for root
+        var squatter = Path.Combine(_cacheDirectory, $"{_assetId}.jpeg");
+        Directory.CreateDirectory(squatter);
+        ImmichServes(() => ImageResponse(new UpstreamBody(Image)));
+
+        // Act
+        var served = await ReadAll(await _sut.GetAsset(_assetId, AssetTypeEnum.IMAGE));
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(served, Is.EqualTo(Image));
+            Assert.That(Directory.GetFileSystemEntries(_cacheDirectory), Is.EqualTo(new[] { squatter }),
+                "the download was left behind");
+        });
+        VerifyImmichRequests(Times.Exactly(2));
+    }
+
+    /// <summary>
+    /// An expired image was deleted only when the same image was asked for again, which for a frame
+    /// long moved on is never, and a crash part way through a download left its file behind for good.
+    /// The sweep takes both - but no image that can still be served, nor a download under way.
+    /// </summary>
+    [Test]
+    public void SweepImageCache_TakesExpiredImagesAndAbandonedDownloads_LeavesTheRest()
+    {
+        // Arrange - images are renewed after 30 days
+        Directory.CreateDirectory(_cacheDirectory);
+        CacheFile($"{Guid.NewGuid()}.jpeg", age: TimeSpan.FromDays(31));
+        CacheFile($"{Guid.NewGuid()}.{Guid.NewGuid():N}.tmp", age: TimeSpan.FromDays(1));
+        var fresh = CacheFile($"{Guid.NewGuid()}.webp", age: TimeSpan.FromDays(29));
+        var underWay = CacheFile($"{Guid.NewGuid()}.{Guid.NewGuid():N}.tmp", age: TimeSpan.Zero);
+
+        // Act
+        _sut.SweepImageCache();
+
+        // Assert
+        Assert.That(Directory.GetFiles(_cacheDirectory), Is.EquivalentTo(new[] { fresh, underWay }));
+    }
+
+    [Test]
+    public async Task Constructor_DownloadImagesOn_SweepsTheImageCache()
+    {
+        // Arrange
+        Directory.CreateDirectory(_cacheDirectory);
+        var expired = CacheFile($"{Guid.NewGuid()}.jpeg", age: TimeSpan.FromDays(31));
+
+        // Act - returned once the sweep the logic starts is over
+        using var logic = await CreateLogic();
+
+        // Assert
+        Assert.That(File.Exists(expired), Is.False);
+    }
+
+    /// <summary>
     /// A frame that hangs up while Immich is still to answer - on a video it has already moved on
     /// from, say - takes its request to Immich with it, rather than leaving that to run its course
     /// for an answer nobody will read. Each request GetAsset can make: the image, the whole video, a
@@ -266,7 +434,7 @@ public class PooledImmichFrameLogicTests
 
         // Act - the counts further apart than the millisecond an interval of 0 caches for, so the
         // second is only the cache's when the interval was kept long
-        using var logic = new PooledImmichFrameLogic(_accountSettings.Object, _generalSettings.Object, _httpClientFactory.Object);
+        using var logic = await CreateLogic();
         var assets = await logic.GetAssets();
         var firstCount = await logic.GetTotalAssets();
         await Task.Delay(TimeSpan.FromMilliseconds(20));
@@ -279,6 +447,147 @@ public class PooledImmichFrameLogicTests
             Assert.That(counts, Is.EqualTo(new long[] { 7, 7 }));
         });
         VerifyImmichRequests("/search/statistics", Times.Once());
+    }
+
+    // Answers every search with nothing found, and keeps each request as its method, path and body -
+    // read as it is sent, since the client disposes a request once it is answered.
+    private List<string> ImmichFindsNothing()
+    {
+        const string noAssets = """
+            {"albums":{"count":0,"facets":[],"items":[],"total":0},
+             "assets":{"count":0,"facets":[],"items":[],"nextPage":null,"total":0}}
+            """;
+        var requests = new List<string>();
+        _immich.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync", ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+            .Returns(async (HttpRequestMessage request, CancellationToken cancellationToken) =>
+            {
+                var path = request.RequestUri!.AbsolutePath;
+                var body = request.Content == null ? "" : await request.Content.ReadAsStringAsync(cancellationToken);
+                lock (requests) requests.Add($"{request.Method} {path} {body}");
+
+                var json = path.EndsWith("/search/metadata") ? noAssets
+                    : path.EndsWith("/search/statistics") ? """{"total":0}"""
+                    : "[]";
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json) };
+            });
+        return requests;
+    }
+
+    /// <summary>
+    /// An account showing one kind of asset draws on that kind's own search, and on nothing else.
+    /// Taken for an account narrowed to nothing, it would draw at random from its whole library;
+    /// built without the kind's pool, it would show nothing at all.
+    /// </summary>
+    [TestCase("Favorites", "POST /api/search/metadata", "\"isFavorite\":true")]
+    [TestCase("Memories", "GET /api/memories", "")]
+    [TestCase("Albums", "POST /api/search/metadata", "\"albumIds\":")]
+    [TestCase("People", "POST /api/search/metadata", "\"personIds\":")]
+    [TestCase("Tags", "GET /api/tags", "")]
+    public async Task GetAssets_AccountShowingOneKindOnly_SearchesThatKindRatherThanTheLibrary(
+        string kind, string request, string body)
+    {
+        // Arrange - the account's pool is built along with its logic
+        switch (kind)
+        {
+            case "Favorites": _accountSettings.SetupGet(s => s.ShowFavorites).Returns(true); break;
+            case "Memories": _accountSettings.SetupGet(s => s.ShowMemories).Returns(true); break;
+            case "Albums": _accountSettings.SetupGet(s => s.Albums).Returns([Guid.NewGuid()]); break;
+            case "People": _accountSettings.SetupGet(s => s.People).Returns([Guid.NewGuid()]); break;
+            case "Tags": _accountSettings.SetupGet(s => s.Tags).Returns(["Holiday"]); break;
+        }
+
+        var requests = ImmichFindsNothing();
+        using var logic = await CreateLogic();
+
+        // Act
+        await logic.GetAssets();
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(requests, Has.Some.Matches<string>(r => r.StartsWith(request) && r.Contains(body)));
+            Assert.That(requests, Has.None.Contains("/search/random"));
+        });
+    }
+
+    /// <summary>
+    /// Only images and videos are shown. Anything else is not found, rather than streamed from the
+    /// endpoint that plays videos.
+    /// </summary>
+    [TestCase(AssetTypeEnum.AUDIO)]
+    [TestCase(AssetTypeEnum.OTHER)]
+    public void GetAsset_NeitherImageNorVideo_NotFoundWithoutAskingImmich(AssetTypeEnum assetType)
+    {
+        // Act / Assert
+        Assert.That(async () => await _sut.GetAsset(_assetId, assetType), Throws.TypeOf<AssetNotFoundException>());
+        VerifyImmichRequests(Times.Never());
+    }
+
+    /// <summary>
+    /// The cache is read only while DownloadImages is on: an image cached while it was, however
+    /// fresh, is not served once it has been turned off.
+    /// </summary>
+    [Test]
+    public async Task GetAsset_CachedImageWithDownloadImagesOff_ServedFromImmich()
+    {
+        // Arrange
+        Directory.CreateDirectory(_cacheDirectory);
+        await File.WriteAllBytesAsync(Path.Combine(_cacheDirectory, $"{_assetId}.jpeg"), [1, 2, 3]);
+        _generalSettings.SetupGet(s => s.DownloadImages).Returns(false);
+        ImmichServes(() => ImageResponse(new UpstreamBody(Image)));
+
+        // Act
+        var served = await ReadAll(await _sut.GetAsset(_assetId, AssetTypeEnum.IMAGE));
+
+        // Assert
+        Assert.That(served, Is.EqualTo(Image));
+        VerifyImmichRequests(Times.Once());
+    }
+
+    // A video as Immich streams it, with the headers given.
+    private static HttpResponseMessage VideoResponse(long? contentLength = null, string? contentType = null)
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new MemoryStream(new byte[1234])) };
+        if (contentLength.HasValue)
+            response.Content.Headers.ContentLength = contentLength;
+        if (contentType != null)
+            response.Content.Headers.TryAddWithoutValidation("Content-Type", contentType);
+        return response;
+    }
+
+    // AssetController answers a range of a video with the length Immich gave it, which the stream the
+    // range arrives on cannot tell.
+    [Test]
+    public async Task GetAsset_VideoOfKnownLength_PassesTheLengthOn()
+    {
+        // Arrange
+        ImmichServes(() => VideoResponse(contentLength: 1234, contentType: "video/quicktime"));
+
+        // Act
+        var asset = await _sut.GetAsset(_assetId, AssetTypeEnum.VIDEO);
+        using (asset.Owner)
+        await using (asset.FileStream)
+        {
+            // Assert
+            Assert.That(asset.ContentLength, Is.EqualTo(1234));
+        }
+    }
+
+    [Test]
+    public async Task GetAsset_VideoWithoutAContentType_ServedAsMp4()
+    {
+        // Arrange
+        ImmichServes(() => VideoResponse());
+
+        // Act
+        var asset = await _sut.GetAsset(_assetId, AssetTypeEnum.VIDEO);
+        using (asset.Owner)
+        await using (asset.FileStream)
+        {
+            // Assert
+            Assert.That(asset.ContentType, Is.EqualTo("video/mp4"));
+        }
     }
 
     /// <summary>

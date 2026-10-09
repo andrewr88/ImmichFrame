@@ -143,6 +143,34 @@ namespace ImmichFrame.Core.Tests.Logic.AccountSelection
             _mockTracker.Verify(t => t.RecordAssetLocation(account.Object, asset.Id), Times.Once);
         }
 
+        /// <summary>
+        /// An account can hand out assets while counting none: its count is cached, and can date
+        /// from before its first photo. The tracker sizes the account's filter by that count, and
+        /// no filter can be built for none at all - so recording the asset threw, and failed the
+        /// whole batch.
+        /// </summary>
+        [Test]
+        public async Task GetAssets_AccountCountingNoAssetsHandsOneOut_ReturnsItAndFindsItsAccount()
+        {
+            // Arrange - the real tracker, which builds the filter
+            var asset = CreateAsset();
+            var account = CreateAccount(0, [asset]);
+            var tracker = new BloomFilterAssetAccountTracker(NullLogger<BloomFilterAssetAccountTracker>.Instance);
+            var strategy = new TotalAccountImagesSelectionStrategy(
+                NullLogger<TotalAccountImagesSelectionStrategy>.Instance, tracker, [account.Object]);
+
+            // Act
+            var returned = (await strategy.GetAssets()).ToList();
+            var holder = await strategy.ForAsset(asset.Id, logic => Task.FromResult(logic));
+
+            // Assert
+            Assert.Multiple(() =>
+            {
+                Assert.That(returned.Select(t => t.Item2), Is.EqualTo(new[] { asset }));
+                Assert.That(holder, Is.SameAs(account.Object));
+            });
+        }
+
         [TestCase(1)]
         [TestCase(2)]
         public async Task GetNextAsset_AllAccountsEmpty_ReturnsNull(int accountCount)
