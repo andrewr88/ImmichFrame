@@ -22,14 +22,24 @@ namespace ImmichFrame.Core.Helpers
         {
             var period = occurrence.Period;
             var startTime = period.StartTime.AsSystemLocal;
+            var endTime = period.EndTime?.AsSystemLocal;
+
+            // Ical.Net leaves EndTime null on a to-do's occurrences, and on those of a journal entry
+            // with a time of day, and makes it the start itself on those of an event with neither
+            // DTEND nor DURATION - so an all-day event of that kind ended the moment it began, and
+            // the frame printed it as 00:00 - 00:00. RFC 5545 gives such an all-day event the day it
+            // falls on, and one with a time of day no length at all. Ical.Net's Duration says a day
+            // for both a date and a time of exactly midnight, so the date-or-time of the start
+            // decides, not the duration.
+            var end = endTime is { } e && e > startTime ? e
+                : period.StartTime.HasTime ? startTime
+                : startTime.Add(period.Duration);
 
             var appointment = new Appointment
             {
                 StartTime = startTime,
-                Duration = period.Duration,
-                // Ical.Net leaves EndTime null on a to-do's occurrences, and on those of a journal
-                // entry with a time of day - with a zero duration, so they end where they start.
-                EndTime = period.EndTime?.AsSystemLocal ?? startTime.Add(period.Duration)
+                Duration = end - startTime,
+                EndTime = end
             };
 
             if (occurrence.Source is CalendarEvent calEvent)

@@ -97,6 +97,37 @@ namespace ImmichFrame.Core.Tests.Logic.AccountSelection
                 Times.Exactly(5));
         }
 
+        /// <summary>
+        /// The tracker is how a later request for an asset finds the account holding it, so what it
+        /// records is what is handed out. A smaller account's share is a random part of its assets,
+        /// read once to record it and once more to return it: drawn afresh for each read, the tracker
+        /// recorded one part and the frame was sent another, whose assets no account was found for.
+        /// </summary>
+        [Test]
+        public async Task GetAssets_SmallerAccountsShare_IsWhatTheTrackerRecords()
+        {
+            // Arrange - the small account holds half the large one's count, so half its assets are taken
+            var largeAccount = CreateAccount(1000, Enumerable.Range(0, 40).Select(_ => CreateAsset()).ToList());
+            var smallAccount = CreateAccount(500, Enumerable.Range(0, 40).Select(_ => CreateAsset()).ToList());
+            var recorded = new List<(IAccountImmichFrameLogic, Guid)>();
+            _mockTracker
+                .Setup(t => t.RecordAssetLocation(It.IsAny<IAccountImmichFrameLogic>(), It.IsAny<Guid>()))
+                .Callback((IAccountImmichFrameLogic account, Guid assetId) => recorded.Add((account, assetId)))
+                .ReturnsAsync(true);
+            var strategy = CreateStrategy(largeAccount.Object, smallAccount.Object);
+
+            // Act
+            var returned = (await strategy.GetAssets()).Select(t => (t.Item1, t.Item2.Id)).ToList();
+
+            // Assert
+            Assert.Multiple(() =>
+            {
+                Assert.That(returned.Count(t => ReferenceEquals(t.Item1, smallAccount.Object)), Is.EqualTo(20),
+                    "the small account's share is a part of its assets");
+                Assert.That(recorded, Is.EquivalentTo(returned));
+            });
+        }
+
         [Test]
         public async Task GetNextAsset_ReturnsAssetAndRecordsLocation()
         {

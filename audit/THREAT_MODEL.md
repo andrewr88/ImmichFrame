@@ -59,7 +59,8 @@ or not — re-check the line before trusting it.
    Safe: sanitize into a local at the top of the action and log that local.
    `SanitizeString` keeps every printable character and replaces each control
    character (C0 and C1: CR, LF, tab, `\u001B`, `\u0085`, `\u009B`) and the
-   Unicode line and paragraph separators with a space — so treat it as "safe for
+   Unicode line and paragraph separators, and every format character (Cf: the
+   bidi overrides and isolates, zero-width characters), with a space — so treat it as "safe for
    this log sink", never as general escaping. `ToLegacyWebhookClientIdentifier`,
    beside it, is the webhook payload's old punctuation-stripping transform and is
    not a log sanitiser.

@@ -21,7 +21,9 @@ public class PooledImmichFrameLogicTests
     private readonly Guid _assetId = Guid.NewGuid();
     private string _cacheDirectory;
     private Mock<IGeneralSettings> _generalSettings;
+    private Mock<IAccountSettings> _accountSettings;
     private Mock<HttpMessageHandler> _immich;
+    private Mock<IHttpClientFactory> _httpClientFactory;
     private PooledImmichFrameLogic _sut;
 
     [SetUp]
@@ -34,17 +36,17 @@ public class PooledImmichFrameLogicTests
         _generalSettings.SetupGet(s => s.DownloadImages).Returns(true);
         _generalSettings.SetupGet(s => s.RenewImagesDuration).Returns(30);
 
-        var accountSettings = new Mock<IAccountSettings>();
-        accountSettings.SetupGet(s => s.ImmichServerUrl).Returns("http://immich.test");
-        accountSettings.SetupGet(s => s.ApiKey).Returns("api-key");
+        _accountSettings = new Mock<IAccountSettings>();
+        _accountSettings.SetupGet(s => s.ImmichServerUrl).Returns("http://immich.test");
+        _accountSettings.SetupGet(s => s.ApiKey).Returns("api-key");
 
         // Immich is faked below the generated client, so the tests see the same response objects,
         // and the same need to dispose them, as a real server produces.
         _immich = new Mock<HttpMessageHandler>();
-        var httpClientFactory = new Mock<IHttpClientFactory>();
-        httpClientFactory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(() => new HttpClient(_immich.Object));
+        _httpClientFactory = new Mock<IHttpClientFactory>();
+        _httpClientFactory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(() => new HttpClient(_immich.Object));
 
-        _sut = new PooledImmichFrameLogic(accountSettings.Object, _generalSettings.Object, httpClientFactory.Object)
+        _sut = new PooledImmichFrameLogic(_accountSettings.Object, _generalSettings.Object, _httpClientFactory.Object)
         {
             DownloadLocation = _cacheDirectory
         };
@@ -65,6 +67,19 @@ public class PooledImmichFrameLogicTests
 
     private void VerifyImmichRequests(Times times) =>
         _immich.Protected().Verify("SendAsync", times, ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>());
+
+    // Answers the requests to one of Immich's endpoints, named by the end of its path, with a JSON body.
+    private void ImmichAnswers(string endpoint, string json) =>
+        _immich.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.Is<HttpRequestMessage>(r => r.RequestUri!.AbsolutePath.EndsWith(endpoint)),
+                ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync(() => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json) });
+
+    private void VerifyImmichRequests(string endpoint, Times times) =>
+        _immich.Protected().Verify("SendAsync", times,
+            ItExpr.Is<HttpRequestMessage>(r => r.RequestUri!.AbsolutePath.EndsWith(endpoint)),
+            ItExpr.IsAny<CancellationToken>());
 
     private static HttpResponseMessage ImageResponse(Stream body, string contentType = "image/jpeg")
     {
@@ -231,6 +246,39 @@ public class PooledImmichFrameLogicTests
 
         // Assert
         Assert.That(async () => await asset.WaitAsync(WaitLimit), Throws.InstanceOf<OperationCanceledException>());
+    }
+
+    /// <summary>
+    /// Stored settings are run even when they fail validation, so a RefreshAlbumPeopleInterval far
+    /// beyond the bound a save is held to still reaches the account. More hours than a TimeSpan holds
+    /// failed the account as it was built; more than the cache can set an expiry for failed every
+    /// request for its photos, when the first load was committed. Both are cached for the longest
+    /// interval a save allows instead - cached, as so long an interval means, rather than not at all.
+    /// </summary>
+    [TestCase(100_000_000, TestName = "GetAssets_RefreshIntervalPastTheLatestExpiryTheCacheCanSet_ServesAndCaches")]
+    [TestCase(int.MaxValue, TestName = "GetAssets_RefreshIntervalLongerThanATimeSpanHolds_ServesAndCaches")]
+    public async Task GetAssets_RefreshIntervalTooLongToCacheFor_ServesAndCaches(int hours)
+    {
+        // Arrange - an account with nothing narrowed, so its count is a cached statistics search
+        _generalSettings.SetupGet(s => s.RefreshAlbumPeopleInterval).Returns(hours);
+        ImmichAnswers("/search/random", "[]");
+        ImmichAnswers("/search/statistics", """{"total":7}""");
+
+        // Act - the counts further apart than the millisecond an interval of 0 caches for, so the
+        // second is only the cache's when the interval was kept long
+        using var logic = new PooledImmichFrameLogic(_accountSettings.Object, _generalSettings.Object, _httpClientFactory.Object);
+        var assets = await logic.GetAssets();
+        var firstCount = await logic.GetTotalAssets();
+        await Task.Delay(TimeSpan.FromMilliseconds(20));
+        long[] counts = [firstCount, await logic.GetTotalAssets()];
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(assets, Is.Empty);
+            Assert.That(counts, Is.EqualTo(new long[] { 7, 7 }));
+        });
+        VerifyImmichRequests("/search/statistics", Times.Once());
     }
 
     /// <summary>

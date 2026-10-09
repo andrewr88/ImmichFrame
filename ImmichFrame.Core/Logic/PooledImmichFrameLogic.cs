@@ -48,8 +48,18 @@ public class PooledImmichFrameLogic : IAccountImmichFrameLogic, IDisposable
         _pool = BuildPool(accountSettings);
     }
 
+    /// <summary>
+    /// The longest the account's albums and people are cached, in hours: ten years, the bound a save
+    /// holds RefreshAlbumPeopleInterval to (<c>ServerSettings.MaxRefreshAlbumPeopleInterval</c> in
+    /// ImmichFrame.WebApi, which this project cannot reference). Repeated here because stored
+    /// settings that fail validation are run all the same, so a longer interval still arrives - and
+    /// more hours than a TimeSpan holds failed the account as it was built, and more than the cache
+    /// can set an expiry for failed every request for its photos.
+    /// </summary>
+    private const int MaxRefreshIntervalHours = 87600;
+
     private static TimeSpan RefreshInterval(int hours)
-        => hours > 0 ? TimeSpan.FromHours(hours) : TimeSpan.FromMilliseconds(1);
+        => hours > 0 ? TimeSpan.FromHours(Math.Min(hours, MaxRefreshIntervalHours)) : TimeSpan.FromMilliseconds(1);
 
     public IAccountSettings AccountSettings { get; }
 

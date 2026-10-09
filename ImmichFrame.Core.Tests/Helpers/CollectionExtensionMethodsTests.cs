@@ -59,6 +59,66 @@ public class CollectionExtensionMethodsTests
         });
     }
 
+    /// <summary>
+    /// A source holding nothing spans none of the draw, wherever it stands. Placed first, it is
+    /// reached by a draw of 0 before anything has been taken off the draw - where comparing with
+    /// &lt;= rather than &lt; would choose it one draw in five here.
+    /// </summary>
+    [Test]
+    public async Task ChooseOne_EmptySourceFirst_IsNeverChosen()
+    {
+        // Arrange - in this order
+        (string Name, long Count)[] sources = [("empty", 0), ("only", 5)];
+        var chosen = new List<string>();
+
+        // Act
+        for (var i = 0; i < 1_000; i++)
+        {
+            chosen.Add((await sources.ChooseOne(source => Task.FromResult(source.Count))).Name);
+        }
+
+        // Assert
+        Assert.That(chosen, Has.All.EqualTo("only"));
+    }
+
+    /// <summary>
+    /// TotalAccountImagesSelectionStrategy reads what this returns three times - to count it, to
+    /// record each asset with the tracker and to hand them out - so it is the same items each time.
+    /// Taken lazily from a shuffle, every read shuffled again, and the tracker recorded other assets
+    /// than the frame was sent.
+    /// </summary>
+    [Test]
+    public void TakeProportional_OfAShuffle_IsTheSameItemsEveryTimeItIsRead()
+    {
+        // Arrange
+        var items = Enumerable.Range(0, 100).ToList();
+
+        // Act
+        var taken = items.Shuffle().TakeProportional(0.5);
+        var firstRead = taken.ToList();
+        var secondRead = taken.ToList();
+
+        // Assert
+        Assert.That(secondRead, Is.EqualTo(firstRead));
+    }
+
+    /// <summary>
+    /// Rounded up, so that an account given a sliver of a batch still shows something: the strategy
+    /// scales each account's batch of 25 by its share, and a small account's 1% of it is one asset,
+    /// not none.
+    /// </summary>
+    [TestCase(1, 0.5, 1)]
+    [TestCase(25, 0.01, 1)]
+    [TestCase(25, 0.5, 13)]
+    public void TakeProportional_PartOfAnItem_IsRoundedUpToAWholeOne(int count, double proportion, int expected)
+    {
+        // Act
+        var taken = Enumerable.Range(0, count).TakeProportional(proportion);
+
+        // Assert
+        Assert.That(taken.Count(), Is.EqualTo(expected));
+    }
+
     [Test]
     public void Shuffle_PutsTheItemsInEveryOrderAlike()
     {

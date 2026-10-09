@@ -1,6 +1,7 @@
 using NUnit.Framework;
 using Moq;
 using ImmichFrame.Core.Api;
+using ImmichFrame.Core.Helpers;
 using ImmichFrame.Core.Interfaces;
 using ImmichFrame.Core.Logic.Pool;
 
@@ -9,6 +10,9 @@ namespace ImmichFrame.Core.Tests.Logic.Pool;
 [TestFixture]
 public class AllAssetsPoolTests
 {
+    // Turns a hang into a failure rather than a stalled run.
+    private static readonly TimeSpan WaitLimit = TimeSpan.FromSeconds(10);
+
     private Mock<IApiCache> _mockApiCache;
     private Mock<ImmichApi> _mockImmichApi;
     private Mock<IAccountSettings> _mockAccountSettings;
@@ -294,6 +298,61 @@ public class AllAssetsPoolTests
         var mainIds = mainAssets.Select(a => a.Id);
         Assert.That(result.All(a => mainIds.Contains(a.Id)));
         _mockImmichApi.Verify(api => api.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.Is<MetadataSearchDto>(d => d.AlbumIds.Contains(excludedAlbumId)), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    /// <summary>
+    /// The count is loaded once and shared with every request that asks while the load is running,
+    /// so the request that happened to start it cannot take it down for the rest by giving up.
+    /// </summary>
+    [Test]
+    public async Task GetAssetCount_RequestThatStartedTheLoadGivesUp_RequestSharingItStillGetsTheCount()
+    {
+        // Arrange - the search answers when the test says so, unless its token gives up first
+        var answer = new TaskCompletionSource<SearchStatisticsResponseDto>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _mockImmichApi.Setup(api => api.SearchAssetStatisticsAsync(It.IsAny<StatisticsSearchDto>(), It.IsAny<CancellationToken>()))
+            .Returns((StatisticsSearchDto _, CancellationToken token) => answer.Task.WaitAsync(token));
+        using var cache = new ApiCache(TimeSpan.FromHours(1));
+        var pool = new AllAssetsPool(cache, _mockImmichApi.Object, _mockAccountSettings.Object);
+        using var starter = new CancellationTokenSource();
+
+        // Act - one request starts the load, another joins it, and the first gives up before it is done
+        _ = pool.GetAssetCount(starter.Token);
+        var sharing = pool.GetAssetCount();
+        await starter.CancelAsync();
+        answer.SetResult(new SearchStatisticsResponseDto { Total = 7 });
+
+        // Assert
+        Assert.That(await sharing.WaitAsync(WaitLimit), Is.EqualTo(7));
+    }
+
+    /// <summary>
+    /// So are the excluded albums. The random draw is the request's own, though, and still goes with
+    /// its token.
+    /// </summary>
+    [Test]
+    public async Task GetAssets_RequestThatStartedTheExcludedAlbumsLoadGivesUp_RequestSharingItStillGetsItsAssets()
+    {
+        // Arrange
+        _mockAccountSettings.SetupGet(s => s.ExcludedAlbums).Returns([Guid.NewGuid()]);
+        var drawn = CreateSampleImageAssets(3);
+        _mockImmichApi.Setup(api => api.SearchRandomAsync(It.IsAny<RandomSearchDto>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(drawn);
+        var answer = new TaskCompletionSource<SearchResponseDto>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _mockImmichApi.Setup(api => api.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<MetadataSearchDto>(), It.IsAny<CancellationToken>()))
+            .Returns((string _, string _, MetadataSearchDto _, CancellationToken token) => answer.Task.WaitAsync(token));
+        using var cache = new ApiCache(TimeSpan.FromHours(1));
+        var pool = new AllAssetsPool(cache, _mockImmichApi.Object, _mockAccountSettings.Object);
+        using var starter = new CancellationTokenSource();
+
+        // Act - one request starts the load, another joins it, and the first gives up before it is done
+        _ = pool.GetAssets(3, starter.Token);
+        var sharing = pool.GetAssets(3);
+        await starter.CancelAsync();
+        answer.SetResult(new SearchResponseDto { Assets = new SearchAssetResponseDto { Items = [] } });
+
+        // Assert
+        Assert.That(await sharing.WaitAsync(WaitLimit), Is.EqualTo(drawn));
+        _mockImmichApi.Verify(api => api.SearchRandomAsync(It.IsAny<RandomSearchDto>(), starter.Token), Times.Once);
     }
 
     [Test]

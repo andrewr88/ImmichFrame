@@ -59,6 +59,40 @@ public class DotEnvTests
         });
     }
 
+    /// <summary>
+    /// A line means what it means to docker compose, short of escapes and of values over several
+    /// lines: it is trimmed, an <c>export</c> in front is ignored, so is whitespace around the name
+    /// and the value, and a value loses one pair of quotes - keeping what they hold as written - or,
+    /// unquoted, a comment, which a space and a '#' begin. Each was taken as it stood, so a line set
+    /// another name or value under <c>dotnet run</c> than compose hands the container, and a line
+    /// naming nothing threw and stopped the host starting.
+    /// </summary>
+    [TestCase("  KEY=value  ", "value", TestName = "Load_IndentedLine_IsReadTrimmed")]
+    [TestCase("export KEY=value", "value", TestName = "Load_ExportInFront_IsIgnored")]
+    [TestCase("KEY = value", "value", TestName = "Load_SpacesAroundTheEqualsSign_AreIgnored")]
+    [TestCase("=no-name\nKEY=value", "value", TestName = "Load_LineThatNamesNothing_IsSkipped")]
+    [TestCase("KEY=\"double quoted\"", "double quoted", TestName = "Load_DoubleQuotedValue_LosesItsQuotes")]
+    [TestCase("KEY='single quoted'", "single quoted", TestName = "Load_SingleQuotedValue_LosesItsQuotes")]
+    [TestCase("KEY=\" kept # as written \"", " kept # as written ", TestName = "Load_QuotedValue_KeepsWhatItsQuotesHold")]
+    [TestCase("KEY=\"value\" # comment", "value", TestName = "Load_CommentAfterAQuotedValue_IsLeftOut")]
+    [TestCase("KEY=value # comment", "value", TestName = "Load_CommentAfterAnUnquotedValue_IsLeftOut")]
+    [TestCase("KEY=value#not-a-comment", "value#not-a-comment", TestName = "Load_HashWithNoSpaceBeforeIt_IsPartOfTheValue")]
+    public void Load_Line_IsReadAsDockerComposeReadsIt(string content, string expected)
+    {
+        // Arrange - KEY stands for the marker, so a line read as some other name is found all the same
+        File.WriteAllText(_file, content.Replace("KEY", _marker));
+
+        // Act
+        DotEnv.Load(_file);
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(VariablesCarryingTheMarker(), Is.EquivalentTo(new[] { _marker }));
+            Assert.That(Environment.GetEnvironmentVariable(_marker), Is.EqualTo(expected));
+        });
+    }
+
     private List<string> VariablesCarryingTheMarker() =>
         Environment.GetEnvironmentVariables().Keys
             .Cast<string>()

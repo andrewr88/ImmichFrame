@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Net;
 using ImmichFrame.Core.Interfaces;
 using ImmichFrame.Core.Services;
@@ -216,6 +216,63 @@ public class IcalCalendarServiceTests
         {
             Assert.That(appointment.StartTime, Is.EqualTo(DateTime.Today));
             Assert.That(appointment.EndTime, Is.EqualTo(DateTime.Today.AddDays(1)));
+        });
+    }
+
+    /// <summary>
+    /// An all-day event with neither DTEND nor DURATION lasts its one day (RFC 5545). Ical.Net gives
+    /// its occurrence a day's duration but an end equal to its start, so it ended the moment it began
+    /// and the frame printed it as 00:00 - 00:00, where one with a DTEND reads as the whole day.
+    /// </summary>
+    [Test]
+    public async Task GetAppointments_AllDayEventWithNoEnd_LastsTheDay()
+    {
+        // Arrange
+        OnlyFeed($"""
+            BEGIN:VEVENT
+            UID:holiday@immichframe.test
+            DTSTAMP:20240101T000000Z
+            DTSTART;VALUE=DATE:{Day(DateTime.Today)}
+            SUMMARY:Bank holiday
+            END:VEVENT
+            """);
+
+        // Act
+        var appointment = (await _sut.GetAppointments()).Single();
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(appointment.StartTime, Is.EqualTo(DateTime.Today));
+            Assert.That(appointment.EndTime, Is.EqualTo(DateTime.Today.AddDays(1)));
+            Assert.That(appointment.Duration, Is.EqualTo(TimeSpan.FromDays(1)));
+        });
+    }
+
+    [Test]
+    public async Task GetAppointments_EventAtMidnightWithNoEnd_EndsWhereItStarts()
+    {
+        // Arrange - a time of day that happens to be midnight, which Ical.Net gives a day's
+        // duration as it does a date; RFC 5545 gives an event with a time of day and no end none
+        var start = DateTime.Today;
+        OnlyFeed($"""
+            BEGIN:VEVENT
+            UID:midnight@immichframe.test
+            DTSTAMP:20240101T000000Z
+            DTSTART:{Floating(start)}
+            SUMMARY:New day
+            END:VEVENT
+            """);
+
+        // Act
+        var appointment = (await _sut.GetAppointments()).Single();
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(appointment.StartTime, Is.EqualTo(start));
+            Assert.That(appointment.EndTime, Is.EqualTo(start));
+            Assert.That(appointment.Duration, Is.EqualTo(TimeSpan.Zero));
         });
     }
 

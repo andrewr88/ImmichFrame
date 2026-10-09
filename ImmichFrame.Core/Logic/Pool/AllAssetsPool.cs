@@ -14,8 +14,12 @@ public class AllAssetsPool(IApiCache apiCache, ImmichApi immichApi, IAccountSett
         // its last 7 days cut an account showing a 500-photo album to about one photo a batch.
         // Excluded albums cannot be put to the search, so their assets are still counted - an
         // over-count, as the random search draws them too and only drops them afterwards.
+        //
+        // Loaded without the request's token, as the excluded albums below are: the count is cached
+        // and shared with every request that asks while it loads, so whichever request started the
+        // load must not be able to cancel it for the rest.
         var stats = await apiCache.GetOrAddAsync(nameof(AllAssetsPool),
-            () => immichApi.SearchAssetStatisticsAsync(WithAccountFilters(new StatisticsSearchDto()), ct));
+            () => immichApi.SearchAssetStatisticsAsync(WithAccountFilters(new StatisticsSearchDto()), CancellationToken.None));
 
         return stats.Total;
     }
@@ -29,10 +33,12 @@ public class AllAssetsPool(IApiCache apiCache, ImmichApi immichApi, IAccountSett
             WithPeople = true
         });
 
+        // The draw is this request's own, so it goes with the request's token; the excluded albums
+        // are cached and shared, so they are loaded without it.
         var assets = await immichApi.SearchRandomAsync(searchDto, ct);
         var excludedAlbumAssets = await apiCache.GetOrAddAsync(
             $"{nameof(AllAssetsPool)}_ExcludedAlbums",
-            () => AssetHelper.GetExcludedAlbumAssets(immichApi, accountSettings, ct));
+            () => AssetHelper.GetExcludedAlbumAssets(immichApi, accountSettings));
 
         return assets.ApplyAccountFilters(accountSettings, excludedAlbumAssets);
     }

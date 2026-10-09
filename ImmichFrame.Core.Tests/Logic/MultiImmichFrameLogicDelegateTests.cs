@@ -89,12 +89,12 @@ public class MultiImmichFrameLogicDelegateTests
 
     // Answers a POST to the configured webhook only, so a notification sent anywhere else gets no
     // response and fails.
-    private void ReceiverAnswers(HttpStatusCode status) =>
+    private void ReceiverAnswers(HttpStatusCode status, HttpContent? body = null) =>
         _webhookReceiver.Protected()
             .Setup<Task<HttpResponseMessage>>("SendAsync",
                 ItExpr.Is<HttpRequestMessage>(r => r.Method == HttpMethod.Post && r.RequestUri == new Uri(WebhookUrl)),
                 ItExpr.IsAny<CancellationToken>())
-            .ReturnsAsync(() => new HttpResponseMessage(status));
+            .ReturnsAsync(() => new HttpResponseMessage(status) { Content = body });
 
     private void VerifyWebhookRequests(Times times) =>
         _webhookReceiver.Protected().Verify("SendAsync", times, ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>());
@@ -261,6 +261,70 @@ public class MultiImmichFrameLogicDelegateTests
         // Assert - reported through the logger, so LOG_LEVEL decides whether it is shown at all
         VerifyWebhookRequests(Times.Once());
         Assert.That(_logger.Entries.Select(e => e.Level), Is.EqualTo(new[] { LogLevel.Debug }));
+    }
+
+    /// <summary>
+    /// Nothing reads what a receiver answers but its status, so nothing waits for the rest. The body
+    /// was read in full before the status was looked at - a notification for every asset served, each
+    /// holding its connection, and the body in memory, for as long as the receiver took to send it.
+    /// </summary>
+    [Test]
+    public async Task SendWebhookNotification_ReceiverAnswersWithABody_LeavesItUnreadAndLetsGoOfIt()
+    {
+        // Arrange
+        var body = new WatchedBody();
+        ReceiverAnswers(HttpStatusCode.OK, new StreamContent(body));
+
+        // Act
+        await _sut.SendWebhookNotification(new TestNotification());
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(body.WasRead, Is.False, "the body was read");
+            Assert.That(body.IsDisposed, Is.True, "the response was not let go of");
+            Assert.That(_logger.Entries.Select(e => e.Level), Is.EqualTo(new[] { LogLevel.Debug }));
+        });
+    }
+
+    /// <summary>
+    /// A response body that records whether anything read it, and whether it was disposed - which
+    /// it is when the response it belongs to is.
+    /// </summary>
+    private sealed class WatchedBody : Stream
+    {
+        public bool WasRead { get; private set; }
+        public bool IsDisposed { get; private set; }
+
+        public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+
+        public override int Read(Span<byte> buffer)
+        {
+            WasRead = true;
+            return 0;
+        }
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult(Read(buffer.Span));
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            Task.FromResult(Read(buffer.AsSpan(offset, count)));
+
+        protected override void Dispose(bool disposing)
+        {
+            IsDisposed = true;
+            base.Dispose(disposing);
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     [TestCase(null)]

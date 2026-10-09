@@ -6,6 +6,10 @@ namespace ImmichFrame.Core.Logic.Pool;
 
 public abstract class CachingApiAssetsPool(IApiCache apiCache, ImmichApi immichApi, IAccountSettings accountSettings) : IAssetPool
 {
+    // One key for every kind of pool, not one per type: an account's pools share its cache and its
+    // excluded albums, and keyed by type each of them fetched every excluded album again.
+    private const string ExcludedAlbumsCacheKey = "ExcludedAlbums";
+
     // Derived pools read these instead of their own constructor parameters, which would
     // otherwise be captured a second time on top of the copy held here (CS9107).
     protected IApiCache Cache { get; } = apiCache;
@@ -26,7 +30,7 @@ public abstract class CachingApiAssetsPool(IApiCache apiCache, ImmichApi immichA
     // request, so they must not be cut short by whichever request happened to trigger them.
     private async Task<IEnumerable<AssetResponseDto>> AllAssets()
     {
-        var excludedAlbumAssets = await Cache.GetOrAddAsync($"{GetType().FullName}_ExcludedAlbums", () => AssetHelper.GetExcludedAlbumAssets(Api, AccountSettings));
+        var excludedAlbumAssets = await Cache.GetOrAddAsync(ExcludedAlbumsCacheKey, () => AssetHelper.GetExcludedAlbumAssets(Api, AccountSettings));
 
         return await Cache.GetOrAddAsync(GetType().FullName!, () => LoadDistinctAssets().ApplyAccountFilters(AccountSettings, excludedAlbumAssets));
     }

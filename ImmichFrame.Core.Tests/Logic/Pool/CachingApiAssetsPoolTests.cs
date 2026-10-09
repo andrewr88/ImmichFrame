@@ -1,6 +1,7 @@
 using NUnit.Framework;
 using Moq;
 using ImmichFrame.Core.Api;
+using ImmichFrame.Core.Helpers;
 using ImmichFrame.Core.Interfaces;
 using ImmichFrame.Core.Logic.Pool;
 
@@ -183,6 +184,35 @@ public class CachingApiAssetsPoolTests
 
         // Assert
         Assert.That(loadAssetsCallCount, Is.EqualTo(1), "LoadAssets should only be called once.");
+    }
+
+    /// <summary>
+    /// An account's pools share its cache, and every one of them leaves out the same excluded albums,
+    /// so those are fetched once for the account. Cached under each pool's own type, an account showing
+    /// its favourites and an album paged through every excluded album twice, and once more for each
+    /// further kind of pool.
+    /// </summary>
+    [Test]
+    public async Task GetAssets_TwoKindsOfPoolOnOneCache_FetchTheExcludedAlbumsOnce()
+    {
+        // Arrange
+        var excludedAlbumId = Guid.NewGuid();
+        _mockAccountSettings.SetupGet(s => s.ExcludedAlbums).Returns([excludedAlbumId]);
+        _mockAccountSettings.SetupGet(s => s.Albums).Returns([Guid.NewGuid()]);
+        _mockImmichApi.Setup(api => api.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<MetadataSearchDto>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new SearchResponseDto { Assets = new SearchAssetResponseDto { Items = [] } });
+
+        using var cache = new ApiCache(TimeSpan.FromHours(1));
+        var favorites = new FavoriteAssetsPool(cache, _mockImmichApi.Object, _mockAccountSettings.Object);
+        var album = new AlbumAssetsPool(cache, _mockImmichApi.Object, _mockAccountSettings.Object);
+
+        // Act
+        await favorites.GetAssets(1);
+        await album.GetAssets(1);
+
+        // Assert
+        _mockImmichApi.Verify(api => api.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(),
+            It.Is<MetadataSearchDto>(d => d.AlbumIds != null && d.AlbumIds.Contains(excludedAlbumId)), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Test]

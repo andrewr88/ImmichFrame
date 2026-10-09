@@ -54,6 +54,38 @@ public class AssetExtensionMethodsTests
         });
     }
 
+    /// <summary>
+    /// Both ends of the date range are inclusive: an asset taken at the very moment ImagesFromDate or
+    /// ImagesUntilDate names is shown. One taken a tick outside it is not, which shows the filter ran.
+    /// </summary>
+    [TestCase(nameof(IAccountSettings.ImagesFromDate), -1, TestName = "ApplyAccountFilters_AssetTakenAtImagesFromDate_IsKept")]
+    [TestCase(nameof(IAccountSettings.ImagesUntilDate), 1, TestName = "ApplyAccountFilters_AssetTakenAtImagesUntilDate_IsKept")]
+    public void ApplyAccountFilters_AssetTakenAtEitherEndOfTheRange_IsKept(string end, int ticksOutside)
+    {
+        // Arrange
+        var boundary = new DateTime(2024, 6, 1, 12, 0, 0);
+        if (end == nameof(IAccountSettings.ImagesFromDate))
+            _accountSettings.SetupGet(s => s.ImagesFromDate).Returns(boundary);
+        else
+            _accountSettings.SetupGet(s => s.ImagesUntilDate).Returns(boundary);
+
+        var atTheEnd = TakenAt(boundary);
+        var outside = TakenAt(boundary.AddTicks(ticksOutside));
+
+        // Act
+        var kept = new[] { atTheEnd, outside }.ApplyAccountFilters(_accountSettings.Object, []);
+
+        // Assert
+        Assert.That(kept, Is.EqualTo(new[] { atTheEnd }));
+    }
+
+    private static AssetResponseDto TakenAt(DateTime taken) => new()
+    {
+        Id = Guid.NewGuid(),
+        Type = AssetTypeEnum.IMAGE,
+        ExifInfo = new ExifResponseDto { DateTimeOriginal = taken }
+    };
+
     private sealed class CountingEnumerable<T>(IEnumerable<T> items) : IEnumerable<T>
     {
         public int Enumerations { get; private set; }

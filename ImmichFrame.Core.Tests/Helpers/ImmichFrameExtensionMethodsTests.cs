@@ -22,6 +22,7 @@ public class ImmichFrameExtensionMethodsTests
     [TestCase("Frame_Kitchen", TestName = "SanitizeString_Underscore_IsKeptAsSent")]
     [TestCase("admin@example.com", TestName = "SanitizeString_EmailAddress_IsKeptAsSent")]
     [TestCase("'quoted' (and \"double\") it’s [1] {2} <3> #4 !5 ~6 |7 `8 *9 ^10 $11 ;12 ,13 \\14", TestName = "SanitizeString_OtherPunctuation_IsKeptAsSent")]
+    [TestCase("Küche \U0001F4F7", TestName = "SanitizeString_LettersAndEmojiBeyondAscii_AreKeptAsSent")]
     public void SanitizeString_PrintableCharacters_AreKeptAsSent(string input)
     {
         // Act
@@ -53,6 +54,25 @@ public class ImmichFrameExtensionMethodsTests
 
         // Assert
         Assert.That(sanitized, Is.EqualTo("frame forged"));
+    }
+
+    /// <summary>
+    /// Format characters are invisible, and change how a line reads without being seen. A
+    /// right-to-left override shows the rest of the line backwards, so a record can be forged over
+    /// a real one, and a zero-width character makes a name nobody can tell from the real one - or
+    /// copy out of the log and have match. Characters beyond the Basic Multilingual Plane are two
+    /// chars, and a tag character is one of those.
+    /// </summary>
+    [TestCase("a\u202Eb\u2066c\u2069", "a b c", TestName = "SanitizeString_BidirectionalControls_AreReplacedWithSpaces")]
+    [TestCase("kitchen\u200Bframe", "kitchen frame", TestName = "SanitizeString_ZeroWidthSpace_IsReplacedWithASpace")]
+    [TestCase("kitchen\U000E006Bframe", "kitchen frame", TestName = "SanitizeString_TagCharacter_IsReplacedWithASpace")]
+    public void SanitizeString_FormatCharacters_AreReplacedWithSpaces(string input, string expected)
+    {
+        // Act
+        var sanitized = input.SanitizeString();
+
+        // Assert
+        Assert.That(sanitized, Is.EqualTo(expected));
     }
 
     /// <summary>

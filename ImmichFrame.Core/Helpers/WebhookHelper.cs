@@ -58,8 +58,15 @@ public static class WebhookHelper
         try
         {
             var json = JsonSerializer.Serialize(notification, SerializerOptions);
-            using var content = new StringContent(json, Encoding.UTF8, "application/json");
-            using var response = await httpClient.PostAsync(webhookUrl, content);
+            using var request = new HttpRequestMessage(HttpMethod.Post, webhookUrl)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json")
+            };
+
+            // Done once the headers are in: only the status is read, and PostAsync read the whole
+            // body first, holding the connection - and the body in memory - for however long the
+            // receiver took to send it. Disposing the response lets go of the rest unread.
+            using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
 
             if (response.IsSuccessStatusCode)
             {
