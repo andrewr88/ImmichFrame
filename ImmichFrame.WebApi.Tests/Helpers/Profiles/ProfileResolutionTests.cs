@@ -83,6 +83,22 @@ public class ProfileResolutionTests
         });
     }
 
+    /// <summary>
+    /// The catalog matches profile names case-insensitively, so the cache in front of it has to as
+    /// well. Keyed by the name as the client happened to spell it, <c>?profile=Kitchen</c> and
+    /// <c>?profile=kitchen</c> would each build and keep a whole graph - pools, API caches, HTTP
+    /// clients - for what is one profile, and so would every casing of the default's own name.
+    /// </summary>
+    [Test]
+    public void NamesDifferingOnlyInCaseResolveToTheSameServices()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(_registry.For("Kitchen"), Is.SameAs(_registry.For("kitchen")));
+            Assert.That(_registry.For("DEFAULT"), Is.SameAs(_registry.For(null)));
+        });
+    }
+
     [Test]
     public void UnknownProfileThrows()
     {

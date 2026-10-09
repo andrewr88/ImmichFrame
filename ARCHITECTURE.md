@@ -82,7 +82,8 @@ configurations, and controllers keep injecting the same interfaces they always h
 profiles entirely.
 
 Profile names are validated in `ConfigCatalog`: `^[A-Za-z0-9_-]{1,64}$`, case-insensitive, with
-`api`, `static`, `swagger`, `admin`, and `default` reserved.
+`api`, `static`, `swagger`, `admin`, `default`, and the three OIDC handshake paths (`signin-oidc`,
+`signout-oidc`, `signout-callback-oidc`, taken from `AdminAuthentication`) reserved.
 
 ### Asset selection: the pool hierarchy
 

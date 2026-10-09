@@ -8,10 +8,14 @@ namespace ImmichFrame.WebApi.Helpers.Profiles;
 /// Rejects a request naming a configuration profile that does not exist, before anything
 /// downstream tries to resolve it.
 /// <para>
-/// Without this the first thing to ask for the profile - often the authentication handler, well
-/// before any controller - would throw and the client would see a 500 for what is really a bad
-/// request. Turning it away here also means everything downstream can resolve the profile
-/// without handling failure.
+/// It is no longer what stands between an unknown profile and a 500: without it the first thing to
+/// ask for the profile - the authentication handler, well before any controller - would throw, and
+/// <see cref="ProfileNotFoundMiddleware"/>, further out, would answer the same 404. What it adds is
+/// what that cannot. The request stops here, before anything downstream has run, so everything
+/// downstream can still resolve the profile without handling failure. The operator is told which
+/// profile was asked for, at Warning - caught out there, a mistyped URL would be logged at Debug, as
+/// a request that outlived a configuration swap. And an unknown profile stays a 404 should that
+/// middleware ever be reordered or removed.
 /// </para>
 /// </summary>
 public class UnknownProfileMiddleware(RequestDelegate _next, ILogger<UnknownProfileMiddleware> _logger)

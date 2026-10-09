@@ -23,7 +23,17 @@ export const ACCOUNTS_KEY = 'Accounts';
 export const DEFAULT_ENTRY_NAME = 'default';
 
 /** `ConfigCatalog.ReservedProfileNames`, so a name the editor accepts is one the API accepts. */
-const RESERVED_PROFILE_NAMES = ['api', 'static', 'swagger', 'admin', DEFAULT_ENTRY_NAME];
+const RESERVED_PROFILE_NAMES = [
+	'api',
+	'static',
+	'swagger',
+	'admin',
+	DEFAULT_ENTRY_NAME,
+	// The OpenID Connect handshake paths, which the server reserves whether or not sign-in is on.
+	'signin-oidc',
+	'signout-callback-oidc',
+	'signout-oidc'
+];
 
 /** `ConfigCatalog.ValidProfileName()`. */
 const PROFILE_NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;

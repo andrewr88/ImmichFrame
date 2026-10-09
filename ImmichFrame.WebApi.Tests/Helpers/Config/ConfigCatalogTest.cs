@@ -194,6 +194,25 @@ public class ConfigCatalogTest
             .WithMessage($"*'{name}' is a reserved name*");
     }
 
+    /// <summary>
+    /// The paths the admin surface's OpenID Connect handler answers on, which a browser asking for
+    /// the profile at <c>/{profile}</c> would reach instead of the web client. Reserved on every
+    /// installation, not only those with the admin surface switched on: switching it on takes nothing
+    /// but environment variables, and a profile that stopped opening the day someone did would be a
+    /// stranger failure than one refused when it was named.
+    /// </summary>
+    [TestCase("signin-oidc")]
+    [TestCase("SignIn-OIDC")]
+    [TestCase("signout-callback-oidc")]
+    [TestCase("SignOut-Callback-Oidc")]
+    [TestCase("signout-oidc")]
+    [TestCase("SIGNOUT-OIDC")]
+    public void OpenIdConnectHandshakePathsAreRejectedAsProfileNames(string name)
+    {
+        CatalogWithProfile(name).Should().Throw<SettingsNotValidException>()
+            .WithMessage($"*'{name}' is a reserved name*");
+    }
+
     [TestCase("")]
     [TestCase(" ")]
     [TestCase("has space")]

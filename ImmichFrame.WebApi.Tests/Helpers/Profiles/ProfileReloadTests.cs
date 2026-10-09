@@ -36,6 +36,7 @@ public class ProfileReloadTests
     private ServiceProvider _root = null!;
     private SwappableConfigCatalog _catalog = null!;
     private ProfileRegistry _registry = null!;
+    private string _directory = null!;
 
     [SetUp]
     public void Setup()
@@ -55,12 +56,18 @@ public class ProfileReloadTests
         // an instance.
         _catalog = new SwappableConfigCatalog(() => Catalog(BeforeInterval, withKitchen: true), () => _registry);
         _registry = new ProfileRegistry(_catalog, _root);
+
+        // The configuration directory for the hosts CreateFactory starts. Only named here: a host's
+        // startup creates it, and a test that starts no host never does.
+        _directory = Path.Combine(Path.GetTempPath(), $"immichframe-profile-reload-{Guid.NewGuid():N}");
     }
 
     [TearDown]
     public void TearDown()
     {
         _root.Dispose();
+
+        if (Directory.Exists(_directory)) Directory.Delete(_directory, recursive: true);
     }
 
     /// <summary>
@@ -340,6 +347,81 @@ public class ProfileReloadTests
     }
 
     /// <summary>
+    /// The other request caught in that race: one that asked for the same profile while the graph was
+    /// being built, and so was queued behind the build. By the time it is let through, the request that
+    /// built the graph has found it evicted and retired it, so the lease this one reaches for is
+    /// refused - and <see cref="ProfileRegistry.Lease"/> has to go round again for the graph rebuilt
+    /// from the new configuration. Handed the retired graph without a lease instead, this request would
+    /// have it torn down underneath it the moment the builder let go, and would then give back a lease
+    /// it never took.
+    /// <para>
+    /// Which of the two reaches the finished graph first is the scheduler's call. Once the lease path
+    /// has been compiled it is the builder, which is already running while the queued request has
+    /// still to be woken. The first time through in a process the builder usually stops to compile
+    /// it, and the queued request gets there first and leases the graph before it is retired: the two
+    /// then share it, which is just as correct but leaves the retry unexercised. Hence the repeats, at
+    /// a few milliseconds a run - run on its own, a single pass practically never reaches the retry.
+    /// </para>
+    /// </summary>
+    [Test]
+    [Repeat(10)]
+    public async Task RequestQueuedBehindAnEvictedGraphIsNotHandedItUnleased()
+    {
+        ProfileRegistry registry = null!;
+        var catalog = new SwappableConfigCatalog(() => Catalog(BeforeInterval, withKitchen: true), () => registry);
+
+        ProfileServices? queuedLease = null;
+        Exception? queuedFailure = null;
+        var queued = new Thread(() =>
+        {
+            try
+            {
+                queuedLease = registry.Lease(null);
+            }
+            catch (Exception ex)
+            {
+                queuedFailure = ex;
+            }
+        }) { IsBackground = true };
+        var queuedBehindTheBuild = false;
+
+        // The second request is started from inside the build, and the swap held back until that
+        // request is blocked on the build's Lazy - which is what queues it behind a graph the swap is
+        // about to evict.
+        registry = new ProfileRegistry(
+            new CatalogSwappingOnFirstSettingsRead(catalog, Catalog(AfterInterval, withKitchen: true), () =>
+            {
+                queued.Start();
+                queuedBehindTheBuild = SpinWait.SpinUntil(
+                    () => queued.ThreadState.HasFlag(ThreadState.WaitSleepJoin), TimeSpan.FromSeconds(5));
+            }),
+            _root);
+
+        var builderLease = registry.Lease(null);
+        var queuedCameBack = queued.Join(TimeSpan.FromSeconds(5));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(queuedBehindTheBuild, Is.True,
+                "the second request never queued behind the build, so there was no race");
+            Assert.That(queuedCameBack, Is.True, "the second request never came back from asking for a lease");
+            Assert.That(queuedFailure, Is.Null, "the second request was refused a graph");
+        });
+
+        // In this order, because each step is only meaningful after the one before it: the queued
+        // request's graph has to outlive the builder letting go, and only then is its own lease the
+        // last one holding it.
+        Assert.That(() => builderLease.Release(), Throws.Nothing,
+            "the builder gives back the lease it took");
+        Assert.That(await queuedLease!.Logic.GetTotalAssets(), Is.EqualTo(TotalImages),
+            "the queued request's graph is kept up by a lease of its own, not by the builder's");
+        Assert.That(() => queuedLease.Release(), Throws.Nothing,
+            "the queued request gives back a lease it actually took");
+        Assert.That(await registry.For(null).Logic.GetTotalAssets(), Is.EqualTo(TotalImages),
+            "the graph rebuilt from the new configuration is serving requests");
+    }
+
+    /// <summary>
     /// End to end over the real host: the only thing that proves the scoped registrations in
     /// <c>Program.cs</c> resolve through the swapped catalog rather than through one captured at
     /// startup, and that a profile the swap dropped is turned away by
@@ -442,9 +524,10 @@ public class ProfileReloadTests
         });
     }
 
-    private static WebApplicationFactory<Program> CreateFactory()
+    private WebApplicationFactory<Program> CreateFactory()
     {
         var versionHandler = new Mock<HttpMessageHandler>().WithServerVersion().WithAssetStatistics(TotalImages);
+        var directory = _directory;
 
         return new WebApplicationFactory<Program>()
             .WithWebHostBuilder(builder =>
@@ -454,6 +537,12 @@ public class ProfileReloadTests
                     // Without this the startup version gate calls Environment.Exit and takes the
                     // test host down with it.
                     services.UseMockHandler(versionHandler);
+
+                    // The catalog below leaves IConfigCatalog forwarding to SwappableConfigCatalog, so
+                    // startup still migrates a settings database for this host - into a directory of
+                    // the test's own, because left alone it lands beside the test binaries, in the one
+                    // configuration directory every host that does not move it shares.
+                    services.AddSingleton(new ConfigLocation(directory));
 
                     // Seeding the swappable catalog rather than replacing IConfigCatalog outright:
                     // the forwarding registration has to stay in place for a swap to reach the host.
@@ -500,10 +589,12 @@ public class ProfileReloadTests
     /// value under it, which is the only way to make the eviction race happen on purpose.
     /// <para>
     /// Only <see cref="Get"/> is hooked, because it is the only member <see cref="ProfileRegistry"/>
-    /// resolves a profile through.
+    /// resolves a profile through. <paramref name="_beforeSwap"/>, when there is one, runs first and
+    /// inside the same window, which is how a second request is queued behind the build.
     /// </para>
     /// </summary>
-    private sealed class CatalogSwappingOnFirstSettingsRead(SwappableConfigCatalog _catalog, IConfigCatalog _replacement)
+    private sealed class CatalogSwappingOnFirstSettingsRead(
+        SwappableConfigCatalog _catalog, IConfigCatalog _replacement, Action? _beforeSwap = null)
         : IConfigCatalog
     {
         private bool _swapped;
@@ -522,6 +613,7 @@ public class ProfileReloadTests
             if (_swapped) return;
 
             _swapped = true;
+            _beforeSwap?.Invoke();
             _catalog.Swap(_replacement);
         }
     }

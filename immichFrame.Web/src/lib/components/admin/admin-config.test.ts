@@ -830,7 +830,16 @@ describe('profileNameError', () => {
 		{ case: 'a space', name: 'living room', error: PATTERN },
 		{ case: 'a dot', name: 'hall.tv', error: PATTERN },
 		{ case: 'a letter outside ASCII', name: 'küche', error: PATTERN },
-		...['api', 'STATIC', 'Swagger', 'ADMIN', 'Default'].map((name) => ({
+		...[
+			'api',
+			'STATIC',
+			'Swagger',
+			'ADMIN',
+			'Default',
+			'signin-oidc',
+			'SignOut-Callback-OIDC',
+			'signout-oidc'
+		].map((name) => ({
 			case: `the reserved '${name}'`,
 			name,
 			error: `'${name}' is a reserved name.`

@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Text.RegularExpressions;
 using ImmichFrame.Core.Exceptions;
 using ImmichFrame.Core.Interfaces;
+using ImmichFrame.WebApi.Helpers.Admin;
 
 namespace ImmichFrame.WebApi.Helpers.Config;
 
@@ -23,8 +24,20 @@ public partial class ConfigCatalog : IConfigCatalog
     // Paths the backend already serves, plus 'admin', which the web client keeps for its
     // configuration editor. A profile named after one of these could never be reached at /{profile}
     // in the browser, so reject it up front rather than let it fail mysteriously.
+    //
+    // That includes the three the admin surface's OpenID Connect handler answers on, whether or not
+    // the surface is switched on: nothing but environment variables switches it on, and from then on
+    // the handler answers a page load there itself - a failed sign-in, or an empty page - so a profile
+    // named after one would stop opening the day somebody did. Taken from AdminAuthentication rather
+    // than spelled out again, so that moving one of those paths moves its reservation with it.
     private static readonly HashSet<string> ReservedProfileNames =
-        new(StringComparer.OrdinalIgnoreCase) { "api", "static", "swagger", "admin", DefaultProfileName };
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            "api", "static", "swagger", "admin", DefaultProfileName,
+            AdminAuthentication.CallbackPath.TrimStart('/'),
+            AdminAuthentication.SignedOutCallbackPath.TrimStart('/'),
+            AdminAuthentication.RemoteSignOutPath.TrimStart('/')
+        };
 
     private readonly Dictionary<string, IServerSettings> _profiles;
 
