@@ -282,9 +282,17 @@ if (adminOidcOptions.IsEnabled)
         options.ResponseType = OpenIdConnectResponseType.Code;
         options.UsePkce = true;
         // Nothing here calls the identity provider on the user's behalf, so the tokens are not kept
-        // in the cookie; the claims that decide access are copied out of the id token instead.
+        // in the cookie; the claims that decide access are copied out of the id token and the
+        // userinfo response instead.
         options.SaveTokens = false;
         options.GetClaimsFromUserInfoEndpoint = true;
+        // The default claim actions carry sub, name, given_name, family_name, profile and email out
+        // of the userinfo response and drop everything else - email_verified with it. A provider
+        // that sends its email claims only there, as the specification has a code flow do, would
+        // then never be heard saying an address is unverified, and the veto in AdminOidcOptions
+        // would let someone who typed an allowlisted address into their own profile in as an
+        // administrator. A JSON boolean arrives as "True" or "False", which the veto parses.
+        options.ClaimActions.MapUniqueJsonKey(AdminOidcOptions.EmailVerifiedClaimType, AdminOidcOptions.EmailVerifiedClaimType);
         options.CallbackPath = AdminAuthentication.CallbackPath;
         options.SignedOutCallbackPath = AdminAuthentication.SignedOutCallbackPath;
         options.RemoteSignOutPath = AdminAuthentication.RemoteSignOutPath;
@@ -294,6 +302,10 @@ if (adminOidcOptions.IsEnabled)
 }
 
 var app = builder.Build();
+
+// Said once, at startup, because nothing else will say it: a half-configured admin surface is simply
+// off, which from outside looks exactly like an installation that never asked for the editor.
+adminOidcOptions.WarnIfHalfConfigured(app.Logger);
 
 // First in the pipeline, before anything reads Request.Scheme or Request.Host - which is what the
 // OpenID Connect handler builds redirect_uri from. Behind a TLS-terminating proxy without this the

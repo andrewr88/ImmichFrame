@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http;
+using System.Security.Claims;
+using System.Text.Json;
 using ImmichFrame.Core.Interfaces;
 using ImmichFrame.WebApi.Helpers.Admin;
 using ImmichFrame.WebApi.Helpers.Config;
@@ -22,9 +24,10 @@ namespace ImmichFrame.WebApi.Tests.Controllers;
 /// <para>
 /// Everywhere else the <c>AdminOidcOptions</c> singleton is replaced after the host is built, which
 /// cannot reach the <c>AddOpenIdConnect</c> call that already ran - so the challenge, and with it
-/// the open-redirect guard on <c>returnUrl</c>, would never be exercised. Here the environment
-/// variables are set before <see cref="WebApplicationFactory{T}"/> builds anything, and the
-/// handler's discovery document is supplied statically so no identity provider has to exist.
+/// the open-redirect guard on <c>returnUrl</c>, would never be exercised, and neither would the
+/// claim mapping that decides what of the userinfo response reaches the allowlist. Here the
+/// environment variables are set before <see cref="WebApplicationFactory{T}"/> builds anything, and
+/// the handler's discovery document is supplied statically so no identity provider has to exist.
 /// </para>
 /// </summary>
 [TestFixture]
@@ -109,6 +112,51 @@ public class AdminLoginChallengeTests
             Assert.That(await RedirectUriAfterLogin(factory, "?returnUrl=//evil.example"), Is.EqualTo(AdminAuthentication.SpaPath));
             Assert.That(await RedirectUriAfterLogin(factory, ""), Is.EqualTo(AdminAuthentication.SpaPath));
         });
+    }
+
+    /// <summary>
+    /// What a userinfo response says about the address, carried into the session by the handler
+    /// <c>Program</c> registered - run through that handler's own claim actions, because those are
+    /// exactly what <c>GetClaimsFromUserInfoEndpoint</c> applies to the response, and a claim they do
+    /// not map is dropped before <c>AdminOidcOptions</c> ever sees it.
+    /// <para>
+    /// This is the case the id token cannot cover. A provider following the specification's code
+    /// flow puts the email claims in userinfo rather than in the id token - Zitadel does by default,
+    /// Authelia does under its claims policies - so the only <c>email_verified</c> it ever sends is
+    /// this one, and dropping it turned the veto off: a self-registered account carrying an
+    /// allowlisted address was let in.
+    /// </para>
+    /// </summary>
+    [TestCase("false", false)]
+    // Sent as a string by some providers rather than as a JSON boolean.
+    [TestCase("\"false\"", false)]
+    [TestCase("true", true)]
+    // Absent is the provider saying nothing either way, which is not a veto - see
+    // AdminOidcOptions.EmailClaimsAreTrusted for why demanding the claim is not an option.
+    [TestCase(null, true)]
+    public void UserInfo_EmailVerified_IsWhatTheAllowlistDecidesAnEmailEntryOn(string? emailVerified, bool admitted)
+    {
+        using var factory = CreateFactory();
+
+        var handlerOptions = factory.Services.GetRequiredService<IOptionsMonitor<OpenIdConnectOptions>>()
+            .Get(AdminAuthentication.OidcScheme);
+
+        var json = emailVerified is null
+            ? """{"sub":"8ab0c1e2-user","email":"admin@example.com"}"""
+            : $$"""{"sub":"8ab0c1e2-user","email":"admin@example.com","email_verified":{{emailVerified}}}""";
+
+        using var userInfo = JsonDocument.Parse(json);
+        var identity = new ClaimsIdentity(AdminAuthentication.OidcScheme);
+
+        foreach (var action in handlerOptions.ClaimActions)
+        {
+            action.Run(userInfo.RootElement, identity, Authority);
+        }
+
+        // The allowlist the host itself built from the environment, whose one entry is that address.
+        var allowlist = factory.Services.GetRequiredService<AdminOidcOptions>();
+
+        Assert.That(allowlist.IsAdmin(new ClaimsPrincipal(identity)), Is.EqualTo(admitted));
     }
 
     /// <summary>

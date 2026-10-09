@@ -47,7 +47,8 @@ Then set these environment variables:
 The surface stays **off** unless the authority, the client id, the client secret *and* a non-empty
 administrator list are all present. An empty `IMMICHFRAME_OIDC_ADMINS` never means "everyone" — it
 means the editor is off, because a sign-in that can only produce a session nobody may use is not
-worth offering.
+worth offering. If you set some of the four but not all of them, a warning in ImmichFrame's startup
+log names the ones that are missing.
 
 These five are read from the environment only, and are deliberately not settings in
 `Settings.json`/`Settings.yml`: the editor rewrites that file, so it must not be able to break the
@@ -83,9 +84,13 @@ front, any client can forge them and choose the host your sign-in is redirected 
 
 ## Who is an administrator
 
-Each entry in `IMMICHFRAME_OIDC_ADMINS` is compared against both the `sub` and the `email` claim of
-whoever signs in, and a match on either one grants access. `sub` is compared exactly; email is
-compared case-insensitively.
+Each entry in `IMMICHFRAME_OIDC_ADMINS` is one of two things, told apart by whether it contains an
+`@`. An entry with an `@` is an email address: it is compared with the `email` claim of whoever
+signs in, ignoring case. Any other entry is a `sub`: it is compared with the `sub` claim, exactly.
+An entry is never compared with the other claim, so nobody gets in because their email address
+happens to read the same as an administrator's `sub`, or their `sub` the same as an administrator's
+address. If your provider uses an email address as the `sub`, list the address — it is matched
+against the `email` claim, which carries the same address.
 
 Prefer `sub` on anything but a single-tenant identity provider you control. Your provider assigns a
 `sub` and a user can never choose it. An email entry is refused only when the provider explicitly

@@ -805,6 +805,43 @@ public class AdminImmichControllerTests
         });
     }
 
+    /// <summary>
+    /// The headers arrive and the body never finishes. The picker's client timeout has to end that,
+    /// and end it as the ordinary "could not reach" answer an administrator can act on - not a 500,
+    /// and not a request still open long after they have given up waiting for it.
+    /// <para>
+    /// Run with the picker client's timeout shortened to a second, so this waits on nothing like
+    /// <see cref="AdminImmichAccounts.RequestTimeout"/>. The stalled body gives up after ten seconds of
+    /// its own, so that a picker that ignores the timeout fails this test rather than hanging it.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task Albums_FromAServerWhoseBodyStalls_EndWithTheTimeoutAsUnreachable()
+    {
+        var handler = Immich(albums: _ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StreamContent(new StallingStream(TimeSpan.FromSeconds(10)))
+        });
+
+        using var factory = CreateFactory(handler, pickerTimeout: TimeSpan.FromSeconds(1));
+        var client = factory.CreateClient();
+
+        var posting = Post(client, AlbumsUrl, new { serverUrl = TypedServer, apiKey = "typed-api-key" });
+
+        Assert.That(await Task.WhenAny(posting, Task.Delay(TimeSpan.FromSeconds(5))), Is.SameAs(posting),
+            "the picker was still waiting on a stalled body four seconds after its timeout");
+
+        var response = await posting;
+        var problem = await response.Content.ReadAsStringAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadGateway));
+            Assert.That(problem, Does.Contain("Could not reach"));
+            Assert.That(problem, Does.Contain(TypedHost));
+        });
+    }
+
     [Test]
     public void PickerHttpClient_IsWiredToRefuseRedirects()
     {
@@ -1089,7 +1126,37 @@ public class AdminImmichControllerTests
     private static HttpResponseMessage Json(string body) =>
         new(HttpStatusCode.OK) { Content = new StringContent(body) };
 
-    private WebApplicationFactory<Program> CreateFactory(Mock<HttpMessageHandler> handler)
+    /// <summary>
+    /// A body that never sends a byte. It waits on the token it is read with, the way a socket read
+    /// does, and gives up on its own after <paramref name="_giveUpAfter"/> so that a reader which
+    /// passes no token ends rather than hangs.
+    /// </summary>
+    private sealed class StallingStream(TimeSpan _giveUpAfter) : Stream
+    {
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(_giveUpAfter, cancellationToken);
+
+            return 0;
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    private WebApplicationFactory<Program> CreateFactory(Mock<HttpMessageHandler> handler, TimeSpan? pickerTimeout = null)
     {
         var directory = _directory;
 
@@ -1100,6 +1167,13 @@ public class AdminImmichControllerTests
                 {
                     services.UseMockHandler(handler);
                     services.AddSingleton(new ConfigLocation(directory));
+
+                    if (pickerTimeout is { } timeout)
+                    {
+                        // Appended after Program's own client action, so it is the one that sticks.
+                        services.Configure<HttpClientFactoryOptions>(AdminImmichAccounts.HttpClientName,
+                            options => options.HttpClientActions.Add(client => client.Timeout = timeout));
+                    }
 
                     services.AddSingleton(new AdminOidcOptions
                     {
