@@ -2,7 +2,6 @@
 	import { untrack } from 'svelte';
 	import type { AssetResponseDto } from '$lib/immichFrameApi';
 	import * as api from '$lib/index';
-	import ErrorElement from './error-element.svelte';
 	import Asset from './asset.svelte';
 	import type AssetComponent from './asset.svelte';
 	import LoadingElement from './LoadingElement.svelte';
@@ -16,7 +15,6 @@
 	interface Props {
 		assets: [string, AssetResponseDto, api.AssetFaceResponseDto[], api.AlbumResponseDto[]][];
 		interval?: number;
-		error?: boolean;
 		loaded?: boolean;
 		split?: boolean;
 		hasBday?: boolean;
@@ -33,13 +31,13 @@
 		playAudio?: boolean;
 		onVideoWaiting?: () => void;
 		onVideoPlaying?: () => void;
+		onAssetLoaded?: () => void;
 		onAssetError?: () => void;
 	}
 
 	let {
 		assets,
 		interval = 20,
-		error = false,
 		loaded = false,
 		split = false,
 		hasBday = false,
@@ -56,6 +54,7 @@
 		playAudio = false,
 		onVideoWaiting = () => {},
 		onVideoPlaying = () => {},
+		onAssetLoaded = () => {},
 		onAssetError = () => {}
 	}: Props = $props();
 	let instantTransition = slideshowStore.instantTransition;
@@ -86,6 +85,7 @@
 		playAudio,
 		onVideoWaiting,
 		onVideoPlaying,
+		onAssetLoaded,
 		onAssetError
 	});
 
@@ -131,9 +131,7 @@
 	</div>
 {/if}
 
-{#if error}
-	<ErrorElement />
-{:else if loaded}
+{#if loaded}
 	{#key assets}
 		<div
 			class="grid absolute h-dvh-safe w-screen"

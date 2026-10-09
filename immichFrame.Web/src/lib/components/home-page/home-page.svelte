@@ -13,15 +13,22 @@
 	import ErrorElement from '../elements/error-element.svelte';
 	import Clock from '../elements/clock.svelte';
 	import Appointments from '../elements/appointments.svelte';
-	import LoadingElement from '../elements/LoadingElement.svelte';
 	import { page } from '$app/state';
 	import { ProgressBarLocation, ProgressBarStatus } from '../elements/progress-bar.types';
 	import { isImageAsset, isVideoAsset } from '$lib/constants/asset-type';
-	import { isBirthdayToday, okArray } from './home-page';
+	import {
+		FailureStreak,
+		isBirthdayToday,
+		okArray,
+		recordShown,
+		slideDuration,
+		takeNext,
+		takePrevious,
+		whatLoaded
+	} from './home-page';
 
 	interface AssetsState {
 		assets: [string, api.AssetResponseDto, api.AssetFaceResponseDto[], api.AlbumResponseDto[]][];
-		error: boolean;
 		loaded: boolean;
 		split: boolean;
 		hasBday: boolean;
@@ -34,25 +41,32 @@
 	const VIDEO_STALL_MS = 15000;
 	const CURSOR_HIDE_MS = 2000;
 	const RELOAD_ON_ERROR_MS = 30000;
+	const MAX_FAILURES_IN_A_ROW = 10;
 
-	let assetHistory: api.AssetResponseDto[] = $state([]);
+	// The slides shown before the one on screen, oldest first, each as it went up - see takePrevious.
+	let assetHistory: api.AssetResponseDto[][] = $state([]);
 	let assetBacklog: api.AssetResponseDto[] = $state([]);
 
+	// The slide on screen, as it went up. A step moves it on as the step starts - into history going
+	// forward, back onto the backlog going back - and this is empty until the step puts its own slide
+	// up, so that a step the watchdog gives up on cannot move it on twice, and a slide that came to
+	// nothing is never moved on at all.
 	let displayingAssets: api.AssetResponseDto[] = $state([]);
 
-	const { restartProgress, stopProgress, instantTransition } = slideshowStore;
+	const { instantTransition } = slideshowStore;
 
-	let progressBarStatus: ProgressBarStatus = $state(ProgressBarStatus.Playing);
 	let progressBar: ProgressBar = $state() as ProgressBar;
 	let assetComponent: AssetComponentInstance = $state() as AssetComponentInstance;
 	let currentDuration: number = $state($configStore.interval ?? 20);
 
-	let consecutiveErrorSkips = 0;
+	const failureStreak = new FailureStreak(MAX_FAILURES_IN_A_ROW);
 	let errorSkipScheduled = false;
 	let watchdogTimer: number | undefined;
 	let videoStallTimeout: number | undefined;
 	let timeoutId: number | undefined;
 
+	// Whether the user has paused the slideshow, with the pause button or the info. A video that
+	// stalls pauses the progress bar as well, so it is this, not the bar, that says what to resume.
 	let userPaused: boolean = $state(false);
 
 	let error: boolean = $state(false);
@@ -61,7 +75,6 @@
 	let errorMessage: string = $state('');
 	let assetsState: AssetsState = $state({
 		assets: [],
-		error: false,
 		loaded: false,
 		split: false,
 		hasBday: false
@@ -71,8 +84,6 @@
 		Promise<[string, api.AssetResponseDto, api.AssetFaceResponseDto[], api.AlbumResponseDto[]]>
 	> = {};
 
-	let unsubscribeRestart: () => void;
-	let unsubscribeStop: () => void;
 	let refreshInterval: number;
 
 	let cursorVisible = $state(true);
@@ -92,9 +103,19 @@
 
 	async function provideClose() {
 		infoVisible = false;
-		userPaused = false;
-		await assetComponent?.play?.();
-		await progressBar.play();
+		await setPaused(false);
+	}
+
+	/** Pauses the slide on screen for the user - its video, and its timer - or resumes it. */
+	async function setPaused(paused: boolean) {
+		userPaused = paused;
+		if (paused) {
+			await assetComponent?.pause?.();
+			await progressBar.pause();
+		} else {
+			await assetComponent?.play?.();
+			await progressBar.play();
+		}
 	}
 
 	const showCursor = () => {
@@ -103,8 +124,9 @@
 		timeoutId = window.setTimeout(hideCursor, CURSOR_HIDE_MS);
 	};
 
-	async function updateAssetPromises() {
-		for (let asset of displayingAssets) {
+	/** Starts loading the slide about to go up and the next few after it, and lets go of the rest. */
+	async function updateAssetPromises(upcoming: api.AssetResponseDto[]) {
+		for (let asset of upcoming) {
 			if (!(asset.id in assetPromisesDict)) {
 				assetPromisesDict[asset.id] = loadAsset(asset);
 			}
@@ -120,8 +142,7 @@
 		// Collect keys to remove first to avoid modifying dict during async iteration
 		const keysToRemove = Object.keys(assetPromisesDict).filter(
 			(key) =>
-				!displayingAssets.find((item) => item.id === key) &&
-				!assetBacklog.find((item) => item.id === key)
+				!upcoming.find((item) => item.id === key) && !assetBacklog.find((item) => item.id === key)
 		);
 
 		keysToRemove.forEach((key) => {
@@ -133,12 +154,15 @@
 		});
 	}
 
-	async function loadAssets() {
+	async function loadAssets(epoch: number) {
 		try {
 			let assetRequest = await api.getAssets({
 				clientIdentifier: $clientIdentifierStore,
 				profile: $profileStore
 			});
+
+			// The watchdog has given up on this step and started another, which the slideshow is now.
+			if (epoch !== transitionEpoch) return;
 
 			if (assetRequest.status != 200) {
 				if (assetRequest.status == 401) {
@@ -153,7 +177,7 @@
 				(asset) => isImageAsset(asset) || isVideoAsset(asset)
 			);
 		} catch {
-			error = true;
+			if (epoch === transitionEpoch) error = true;
 		}
 	}
 
@@ -161,12 +185,27 @@
 	let transitionEpoch = 0;
 	let pendingTransition: { previous: boolean; instant: boolean } | null = $state(null);
 
+	/**
+	 * Steps the slideshow on, or back with `previous` - or queues the step behind the one under way.
+	 * Whether it went anywhere, or is to: Back at the start of history has nowhere to go, and is a
+	 * no-op. getPreviousAssets says so before anything has been touched, so that the slide on screen
+	 * is left as it was - its timer, a pause, a stalled video's skip - and this returns false.
+	 */
 	const handleDone = async (previous: boolean = false, instant: boolean = false) => {
 		if (isHandlingAssetTransition) {
 			pendingTransition = { previous, instant };
-			return;
+			return true;
 		}
 
+		const previousAssets = previous ? getPreviousAssets() : null;
+		if (previous && !previousAssets) return false;
+
+		await runTransition(previousAssets, instant);
+		return true;
+	};
+
+	/** The step itself: to `assets` - where Back leads - or else on to the next slide. */
+	async function runTransition(assets: api.AssetResponseDto[] | null, instant: boolean) {
 		const currentEpoch = ++transitionEpoch;
 		isHandlingAssetTransition = true;
 
@@ -181,8 +220,7 @@
 				// Bump the epoch so the original (still-awaiting) transition becomes a no-op
 				// when/if it eventually resolves, and force a fresh advance.
 				transitionEpoch++;
-				const next = pendingTransition ?? { previous: false, instant: true };
-				pendingTransition = null;
+				const next = recoveryStep();
 				handleDone(next.previous, next.instant).catch((err) => {
 					console.error('handleDone failed:', err);
 					isHandlingAssetTransition = false;
@@ -191,18 +229,28 @@
 		}, TRANSITION_WATCHDOG_MS);
 
 		try {
-			userPaused = false;
 			progressBar.restart(false);
 			$instantTransition = instant;
-			if (previous) await getPreviousAssets();
-			else await getNextAssets();
-			await tick();
 
+			const group = assets ?? (await getNextAssets(currentEpoch));
+			if (!group) return;
+
+			const shown = await showAssets(group, currentEpoch);
+			if (currentEpoch !== transitionEpoch) return;
+			if (!shown) {
+				// None of it loaded: skipped, and counted, as onAssetError skips and counts a slide
+				// that will not draw.
+				if (!giveUpAfterFailure()) pendingTransition = recoveryStep();
+				return;
+			}
+
+			await tick();
 			if (currentEpoch !== transitionEpoch) return;
 
+			userPaused = false;
 			await assetComponent?.play?.();
+			if (currentEpoch !== transitionEpoch) return;
 			progressBar.play();
-			consecutiveErrorSkips = 0;
 		} finally {
 			if (currentEpoch === transitionEpoch) {
 				isHandlingAssetTransition = false;
@@ -218,75 +266,96 @@
 				}
 			}
 		}
-	};
+	}
 
-	async function getNextAssets() {
+	/**
+	 * The step to take when the slideshow has to move on by itself - the step under way hung, or put
+	 * nothing up - with the slide timer stopped: the step asked for meanwhile, if any, or else the
+	 * next slide. Back at the start of history would be a no-op, and would leave the timer stopped for
+	 * good, so then it is the next slide as well.
+	 */
+	function recoveryStep(): { previous: boolean; instant: boolean } {
+		const asked = pendingTransition;
+		pendingTransition = null;
+		if (asked && (!asked.previous || assetHistory.length)) return asked;
+		return { previous: false, instant: true };
+	}
+
+	/**
+	 * Counts a slide that failed - it would not load, or would not draw - and once too many have in a
+	 * row, stops skipping them: the error goes up instead, and a step asked for meanwhile, which would
+	 * only go on trying, is dropped. Whether it gave up.
+	 */
+	function giveUpAfterFailure(): boolean {
+		if (!failureStreak.recordFailure()) return false;
+
+		error = true;
+		errorMessage =
+			'Too many consecutive asset load failures. Please check your network or server connection.';
+		pendingTransition = null;
+		return true;
+	}
+
+	/**
+	 * Steps forward to the next slide off the backlog, fetching more once it has run out - or returns
+	 * null when there are none to be had, or the watchdog has given up on this step.
+	 */
+	async function getNextAssets(epoch: number): Promise<api.AssetResponseDto[] | null> {
 		if (!assetBacklog.length) {
-			await loadAssets();
+			await loadAssets(epoch);
+			if (epoch !== transitionEpoch) return null;
 		}
 
-		if (!error && !assetBacklog.length) {
-			error = true;
-			errorMessage = 'No assets were found! Check your configuration.';
-			return;
+		if (!assetBacklog.length) {
+			if (!error) {
+				error = true;
+				errorMessage = 'No assets were found! Check your configuration.';
+			}
+			return null;
 		}
 
-		const useSplit = shouldUseSplitView(assetBacklog);
-		const next = assetBacklog.splice(0, useSplit ? 2 : 1);
-
-		if (displayingAssets.length) {
-			assetHistory.push(...displayingAssets);
-		}
-
-		if (assetHistory.length > 250) {
-			assetHistory = assetHistory.slice(-250);
-		}
-
-		displayingAssets = next;
-		await updateAssetPromises();
-		assetsState = await pickAssets(next);
+		const next = takeNext(assetBacklog, $configStore.layout);
+		assetBacklog = next.backlog;
+		if (displayingAssets.length) assetHistory = recordShown(assetHistory, displayingAssets);
+		displayingAssets = [];
+		return next.group;
 	}
 
-	async function getPreviousAssets() {
-		if (!assetHistory.length) {
-			return;
-		}
+	/**
+	 * Steps back to the slide before the one on screen, as it went up - or, at the start of history,
+	 * returns null, having changed nothing.
+	 */
+	function getPreviousAssets(): api.AssetResponseDto[] | null {
+		const previous = takePrevious(assetHistory);
+		if (!previous) return null;
 
-		const useSplit = shouldUseSplitView(assetHistory.slice(-2));
-		const next = assetHistory.splice(useSplit ? -2 : -1);
-
-		if (displayingAssets.length) {
-			assetBacklog.unshift(...displayingAssets);
-		}
-
-		displayingAssets = next;
-		await updateAssetPromises();
-		assetsState = await pickAssets(next);
+		assetHistory = previous.history;
+		assetBacklog.unshift(...displayingAssets);
+		displayingAssets = [];
+		return previous.group;
 	}
 
-	function isPortrait(asset: api.AssetResponseDto) {
-		if (isVideoAsset(asset)) {
-			return false;
-		}
+	/**
+	 * Loads a slide and puts up what of it loaded: a pair whose one half would not load goes up as the
+	 * other half alone. Whether anything went up - nothing does when none of it loaded, nor once the
+	 * watchdog has given up on the step: by then a blob URL of the slide may have been revoked, or the
+	 * slideshow have moved on, and it would replace whatever is up now.
+	 */
+	async function showAssets(assets: api.AssetResponseDto[], epoch: number): Promise<boolean> {
+		await updateAssetPromises(assets);
+		const loaded = await whatLoaded(assets, (asset) => assetPromisesDict[asset.id]);
+		if (epoch !== transitionEpoch || !loaded.length) return false;
 
-		const isFlipped = (orientation: number) => [5, 6, 7, 8].includes(orientation);
-		let assetHeight = asset.exifInfo?.exifImageHeight ?? 0;
-		let assetWidth = asset.exifInfo?.exifImageWidth ?? 0;
-		if (isFlipped(Number(asset.exifInfo?.orientation ?? 0))) {
-			[assetHeight, assetWidth] = [assetWidth, assetHeight];
-		}
-		return assetHeight > assetWidth;
-	}
-
-	function shouldUseSplitView(assets: api.AssetResponseDto[]): boolean {
-		return (
-			$configStore.layout?.trim().toLowerCase() === 'splitview' &&
-			assets.length > 1 &&
-			isImageAsset(assets[0]) &&
-			isImageAsset(assets[1]) &&
-			isPortrait(assets[0]) &&
-			isPortrait(assets[1])
-		);
+		const shown = loaded.map(([, asset]) => asset);
+		displayingAssets = shown;
+		currentDuration = slideDuration(shown, $configStore.interval);
+		assetsState = {
+			assets: loaded,
+			loaded: true,
+			split: shown.length == 2 && shown.every(isImageAsset),
+			hasBday: hasBirthday(shown)
+		};
+		return true;
 	}
 
 	function hasBirthday(assets: api.AssetResponseDto[]) {
@@ -304,57 +373,6 @@
 		}
 
 		return hasBday;
-	}
-
-	function updateCurrentDuration(assets: api.AssetResponseDto[]) {
-		const durations = assets
-			.map((asset) => getAssetDurationSeconds(asset))
-			.filter((value) => value > 0);
-		const fallback = $configStore.interval ?? 20;
-		currentDuration = durations.length ? Math.max(...durations) : fallback;
-	}
-
-	function getAssetDurationSeconds(asset: api.AssetResponseDto) {
-		if (isVideoAsset(asset)) {
-			const parsed = parseAssetDuration(asset.duration);
-			const fallback = $configStore.interval ?? 20;
-			return parsed > 0 ? parsed : fallback;
-		}
-		return $configStore.interval ?? 20;
-	}
-
-	function parseAssetDuration(duration?: number | null) {
-		if (!duration || duration <= 0) {
-			return 0;
-		}
-		return duration / 1000; // milliseconds → seconds
-	}
-
-	async function pickAssets(assets: api.AssetResponseDto[]) {
-		let newAssets = [];
-		try {
-			updateCurrentDuration(assets);
-			for (let asset of assets) {
-				let img = await assetPromisesDict[asset.id];
-				newAssets.push(img);
-			}
-			return {
-				assets: newAssets,
-				error: false,
-				loaded: true,
-				split: assets.length == 2 && assets.every(isImageAsset),
-				hasBday: hasBirthday(assets)
-			};
-		} catch {
-			updateCurrentDuration([]);
-			return {
-				assets: [],
-				error: true,
-				loaded: false,
-				split: false,
-				hasBday: false
-			};
-		}
 	}
 
 	async function loadAsset(assetResponse: api.AssetResponseDto) {
@@ -452,21 +470,9 @@
 			if (error) window.location.reload();
 		}, RELOAD_ON_ERROR_MS);
 
-		unsubscribeRestart = restartProgress.subscribe((value) => {
-			if (value) {
-				progressBar.restart(value);
-				assetComponent?.play?.();
-			}
-		});
-
-		unsubscribeStop = stopProgress.subscribe((value) => {
-			if (value) {
-				progressBar.restart(false);
-				assetComponent?.pause?.();
-			}
-		});
-
-		getNextAssets();
+		// The first slide goes up as every other does: under the lock, so that a key pressed or the
+		// progress bar running out meanwhile waits its turn, and with its timer started once it is up.
+		handleDone(false, true);
 
 		return () => {
 			window.removeEventListener('mousemove', showCursor);
@@ -479,14 +485,6 @@
 	});
 
 	onDestroy(async () => {
-		if (unsubscribeRestart) {
-			unsubscribeRestart();
-		}
-
-		if (unsubscribeStop) {
-			unsubscribeStop();
-		}
-
 		const revokes = Object.values(assetPromisesDict).map(async (p) => {
 			try {
 				const [url] = await p;
@@ -503,7 +501,7 @@
 <section class="fixed grid h-dvh-safe w-screen bg-black" class:cursor-none={!cursorVisible}>
 	{#if error}
 		<ErrorElement {authError} message={errorMessage} />
-	{:else if displayingAssets}
+	{:else}
 		<div class="absolute h-screen w-screen">
 			<AssetComponent
 				showLocation={$configStore.showImageLocation}
@@ -521,41 +519,36 @@
 				bind:showInfo={infoVisible}
 				playAudio={$configStore.playAudio}
 				onVideoWaiting={async () => {
-					await progressBar.pause();
+					// Armed before the bar is paused, not after: the pause takes until the next frame, and
+					// a `playing` meanwhile found no timer yet to clear, so the one armed after it skipped
+					// a video that was playing.
 					clearTimeout(videoStallTimeout);
-					if (userPaused) return;
-
-					videoStallTimeout = window.setTimeout(
-						() => {
-							if (!userPaused) {
-								console.warn('Video stalled, skipping...');
-								handleDone(false, true);
-							}
-						},
-						Math.max(5000, Math.min(VIDEO_STALL_MS, currentDuration * 1000))
-					);
+					if (!userPaused) {
+						videoStallTimeout = window.setTimeout(
+							() => {
+								if (!userPaused) {
+									console.warn('Video stalled, skipping...');
+									handleDone(false, true);
+								}
+							},
+							Math.max(5000, Math.min(VIDEO_STALL_MS, currentDuration * 1000))
+						);
+					}
+					await progressBar.pause();
 				}}
 				onVideoPlaying={async () => {
-					consecutiveErrorSkips = 0;
+					failureStreak.recordSuccess();
 					clearTimeout(videoStallTimeout);
 					if (!userPaused) {
 						await progressBar.play();
 					}
 				}}
+				onAssetLoaded={() => failureStreak.recordSuccess()}
 				onAssetError={async () => {
 					if (errorSkipScheduled) return;
 					errorSkipScheduled = true;
 
-					consecutiveErrorSkips++;
-					if (consecutiveErrorSkips > 10) {
-						error = true;
-						errorMessage =
-							'Too many consecutive asset load failures. Please check your network or server connection.';
-						errorSkipScheduled = false;
-						return;
-					}
-
-					await handleDone(false, true);
+					if (!giveUpAfterFailure()) await handleDone(false, true);
 					errorSkipScheduled = false;
 				}}
 			/>
@@ -573,35 +566,18 @@
 				infoVisible = false;
 			}}
 			back={async () => {
-				await handleDone(true, true);
-				infoVisible = false;
+				// Back at the start of history is a no-op, and leaves the info up as well.
+				if (await handleDone(true, true)) infoVisible = false;
 			}}
 			pause={async () => {
 				infoVisible = false;
-				if (progressBarStatus == ProgressBarStatus.Paused) {
-					userPaused = false;
-					await assetComponent?.play?.();
-					await progressBar.play();
-				} else {
-					userPaused = true;
-					await assetComponent?.pause?.();
-					await progressBar.pause();
-				}
+				await setPaused(!userPaused);
 			}}
 			showInfo={async () => {
-				if (infoVisible) {
-					infoVisible = false;
-					userPaused = false;
-					await assetComponent?.play?.();
-					await progressBar.play();
-				} else {
-					infoVisible = true;
-					userPaused = true;
-					await assetComponent?.pause?.();
-					await progressBar.pause();
-				}
+				infoVisible = !infoVisible;
+				await setPaused(infoVisible);
 			}}
-			bind:status={progressBarStatus}
+			status={userPaused ? ProgressBarStatus.Paused : ProgressBarStatus.Playing}
 			bind:infoVisible
 			overlayVisible={cursorVisible}
 		/>
@@ -612,10 +588,10 @@
 			hidden={!$configStore.showProgressBar}
 			location={ProgressBarLocation.Bottom}
 			bind:this={progressBar}
-			bind:status={progressBarStatus}
-			onDone={handleDone}
+			onDone={async () => {
+				// Not handleDone itself: what it returns is for the Back button, and onDone returns nothing.
+				await handleDone();
+			}}
 		/>
-	{:else}
-		<LoadingElement />
 	{/if}
 </section>
