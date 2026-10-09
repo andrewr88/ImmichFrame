@@ -69,6 +69,30 @@ public class TagAssetsPoolTests
             Assert.That(result.Any(a => a.Id == FixtureHelpers.GuidFor("t1_p2_29")));
             Assert.That(result.Any(a => a.Id == FixtureHelpers.GuidFor("t2_19")));
         });
+
+        // Tag2 is paged from its own first page, not from the third that Tag1's two pages left the count at
+        _api.Verify(a => a.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.Is<MetadataSearchDto>(d => d.TagIds.Contains(tag2) && d.Page == 1), default), Times.Once);
+    }
+
+    [Test]
+    public async Task LoadAssets_TagListAlreadyCached_IsNotFetchedAgain()
+    {
+        var tagId = Guid.NewGuid();
+        ICollection<TagResponseDto> allTags = [new TagResponseDto { Id = tagId, Value = "Tag" }];
+        _settings.SetupGet(s => s.Tags).Returns(new List<string> { "Tag" });
+
+        // The cache already holds the server's tags, so it answers without running the load it is
+        // handed - though Immich would answer with the same tags, were it asked again
+        _cache.Setup(c => c.GetOrAddAsync(It.IsAny<string>(), It.IsAny<Func<Task<ICollection<TagResponseDto>>>>()))
+            .ReturnsAsync(allTags);
+        _api.Setup(a => a.GetAllTagsAsync(default)).ReturnsAsync(allTags);
+        _api.Setup(a => a.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<MetadataSearchDto>(), default))
+            .ReturnsAsync(SearchResult([Asset("1")]));
+
+        var result = (await _pool.LoadAssetsPublic()).ToList();
+
+        Assert.That(result, Has.Count.EqualTo(1));
+        _api.Verify(a => a.GetAllTagsAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Test]
@@ -250,6 +274,48 @@ public class TagAssetsPoolTests
         Assert.That(result, Has.Count.EqualTo(5));
         _api.Verify(a => a.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.Is<MetadataSearchDto>(d => d.TagIds.Contains(lower)), default), Times.Once);
         _api.Verify(a => a.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.Is<MetadataSearchDto>(d => d.TagIds.Contains(upper)), default), Times.Never);
+    }
+
+    [Test]
+    public async Task LoadAssets_TagConfiguredTwice_IsSearchedAndAttachedOnce()
+    {
+        var tagId = Guid.NewGuid();
+        _settings.SetupGet(s => s.Tags).Returns(new List<string> { "Tag", "Tag" });
+
+        _api.Setup(a => a.GetAllTagsAsync(default))
+            .ReturnsAsync([new TagResponseDto { Id = tagId, Name = "Tag", Value = "Tag" }]);
+        _api.Setup(a => a.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<MetadataSearchDto>(), default))
+            .ReturnsAsync(SearchResult([Asset("1")]));
+
+        var result = (await _pool.LoadAssetsPublic()).ToList();
+
+        // Searched once for each time it was listed, the tag was attached to the asset twice, and
+        // the frame, which lists every tag an asset carries, showed it as "Tag, Tag"
+        Assert.That(result, Has.Count.EqualTo(1));
+        Assert.That(result[0].Tags, Has.Count.EqualTo(1));
+        _api.Verify(a => a.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<MetadataSearchDto>(), default), Times.Once);
+    }
+
+    [Test]
+    public async Task LoadAssets_TagsDifferingOnlyInCase_AreBothSearched()
+    {
+        var lower = Guid.NewGuid();
+        var upper = Guid.NewGuid();
+        _settings.SetupGet(s => s.Tags).Returns(new List<string> { "people", "People" });
+
+        _api.Setup(a => a.GetAllTagsAsync(default))
+            .ReturnsAsync([
+                new TagResponseDto { Id = lower, Value = "people" },
+                new TagResponseDto { Id = upper, Value = "People" }
+            ]);
+        _api.Setup(a => a.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<MetadataSearchDto>(), default))
+            .ReturnsAsync(SearchResult([]));
+
+        await _pool.LoadAssetsPublic();
+
+        // Matched case-sensitively, these are two different tags rather than one listed twice
+        _api.Verify(a => a.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.Is<MetadataSearchDto>(d => d.TagIds.Contains(lower)), default), Times.Once);
+        _api.Verify(a => a.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.Is<MetadataSearchDto>(d => d.TagIds.Contains(upper)), default), Times.Once);
     }
 
     [Test]

@@ -18,9 +18,11 @@ public class TagAssetsPool(IApiCache apiCache, ImmichApi immichApi, IAccountSett
             () => Api.GetAllTagsAsync(ct));
         var tagValueToTag = allTags.ToDictionary(t => t.Value);
 
-        // Find the tags for the configured tag values
+        // Find the tags for the configured tag values, each value once: a tag listed twice was
+        // searched twice and attached to each of its assets twice. Compared as the lookup compares
+        // them, so values differing only in case are still two different tags.
         var tags = new List<TagResponseDto>();
-        foreach (var tagValue in AccountSettings.Tags)
+        foreach (var tagValue in AccountSettings.Tags.Distinct(tagValueToTag.Comparer))
         {
             if (tagValueToTag.TryGetValue(tagValue, out var tag))
             {

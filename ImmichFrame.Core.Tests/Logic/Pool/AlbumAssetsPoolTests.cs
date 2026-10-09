@@ -38,6 +38,13 @@ public class AlbumAssetsPoolTests
     private SearchResponseDto CreateSearchResult(List<AssetResponseDto> assets) =>
         new SearchResponseDto { Assets = new SearchAssetResponseDto { Items = assets } };
 
+    // The page of the album's assets a search asks for, as Immich answers it
+    private SearchResponseDto PageOf(List<AssetResponseDto> albumAssets, MetadataSearchDto search)
+    {
+        var size = search.Size!.Value;
+        return CreateSearchResult(albumAssets.Skip((int)(search.Page!.Value - 1) * size).Take(size).ToList());
+    }
+
     [Test]
     public async Task LoadAssets_ReturnsAssetsPresentIIncludedNotExcludedAlbums()
     {
@@ -107,6 +114,31 @@ public class AlbumAssetsPoolTests
                 dto.WithPeople == true &&
                 dto.Page == 2 && dto.Size == batchSize),
             It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Test]
+    public async Task LoadAssets_SeveralAlbums_PagesEachFromItsFirstPage()
+    {
+        // Arrange - a first album that runs to a second page, and a second that fits in one
+        var firstAlbumId = Guid.NewGuid();
+        var secondAlbumId = Guid.NewGuid();
+        var firstAlbumAssets = Enumerable.Range(0, 1005).Select(i => CreateAsset($"first_{i}")).ToList();
+        var secondAlbumAssets = Enumerable.Range(0, 3).Select(i => CreateAsset($"second_{i}")).ToList();
+        _mockAccountSettings.SetupGet(s => s.Albums).Returns(new List<Guid> { firstAlbumId, secondAlbumId });
+
+        _mockImmichApi.Setup(api => api.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.Is<MetadataSearchDto>(d => d.AlbumIds.Contains(firstAlbumId)), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string _, string _, MetadataSearchDto search, CancellationToken _) => PageOf(firstAlbumAssets, search));
+        _mockImmichApi.Setup(api => api.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.Is<MetadataSearchDto>(d => d.AlbumIds.Contains(secondAlbumId)), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string _, string _, MetadataSearchDto search, CancellationToken _) => PageOf(secondAlbumAssets, search));
+
+        // Act
+        var result = await _albumAssetsPool.GetAssets(firstAlbumAssets.Count + secondAlbumAssets.Count);
+
+        // Assert - had the page count carried on from the first album, the second would have been
+        // asked for its third page, come back empty, and none of its assets would be shown
+        Assert.That(result.Select(a => a.Id), Is.EquivalentTo(firstAlbumAssets.Concat(secondAlbumAssets).Select(a => a.Id)));
+        _mockImmichApi.Verify(api => api.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(),
+            It.Is<MetadataSearchDto>(d => d.AlbumIds.Contains(secondAlbumId) && d.Page == 1), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Test]

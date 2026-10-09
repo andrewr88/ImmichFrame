@@ -22,6 +22,10 @@ public class QueuingAssetPoolTests
     private const int ReloadBatchSize = 50; // Matches const in QueuingAssetPool
     private const int ReloadThreshold = 10; // Matches const in QueuingAssetPool
 
+    // Turns a hang into a failure rather than a stalled run: a read waiting on a queue that nothing
+    // fills is cancelled after this long, and comes back with no asset, rather than waiting forever.
+    private static readonly TimeSpan WaitLimit = TimeSpan.FromSeconds(5);
+
     [SetUp]
     public void Setup()
     {
@@ -70,7 +74,8 @@ public class QueuingAssetPoolTests
             .Verifiable();
 
         // Act
-        var result = await _queuingAssetPool.GetNextAssetForTesting(CancellationToken.None);
+        using var waited = new CancellationTokenSource(WaitLimit);
+        var result = await _queuingAssetPool.GetNextAssetForTesting(waited.Token);
 
         // Assert
         Assert.That(result, Is.Not.Null);
@@ -93,7 +98,8 @@ public class QueuingAssetPoolTests
             .ReturnsAsync(new List<AssetResponseDto>()); // Should not be called
 
         // Act
-        var result = await _queuingAssetPool.GetNextAssetForTesting(CancellationToken.None);
+        using var waited = new CancellationTokenSource(WaitLimit);
+        var result = await _queuingAssetPool.GetNextAssetForTesting(waited.Token);
 
         // Assert
         Assert.That(result, Is.Not.Null);
@@ -119,12 +125,14 @@ public class QueuingAssetPoolTests
             .Verifiable(); // This should be called
 
         // Act & Assert
+        using var waited = new CancellationTokenSource(WaitLimit);
+
         // Read one asset, queue count becomes ReloadThreshold. No reload yet.
-        await _queuingAssetPool.GetNextAssetForTesting(CancellationToken.None);
+        await _queuingAssetPool.GetNextAssetForTesting(waited.Token);
         _mockDelegatePool.Verify(dp => dp.GetAssets(ReloadBatchSize, It.IsAny<CancellationToken>()), Times.Never, "Reload should not happen when count is AT threshold.");
 
         // Read another asset, queue count becomes ReloadThreshold - 1. Reload should be triggered.
-        await _queuingAssetPool.GetNextAssetForTesting(CancellationToken.None);
+        await _queuingAssetPool.GetNextAssetForTesting(waited.Token);
         _mockDelegatePool.Verify(dp => dp.GetAssets(ReloadBatchSize, It.IsAny<CancellationToken>()), Times.Once, "Reload should happen when count is BELOW threshold.");
     }
 
@@ -149,8 +157,9 @@ public class QueuingAssetPoolTests
 
         // Call GetNextAsset twice. The first will trigger reload.
         // The second, if called while the first is "running", should see the semaphore locked.
-        var task1 = _queuingAssetPool.GetAssets(1, CancellationToken.None);
-        var task2 = _queuingAssetPool.GetAssets(1, CancellationToken.None);
+        using var waited = new CancellationTokenSource(WaitLimit);
+        var task1 = _queuingAssetPool.GetAssets(1, waited.Token);
+        var task2 = _queuingAssetPool.GetAssets(1, waited.Token);
 
         await Task.WhenAll(task1, task2);
 
@@ -185,7 +194,8 @@ public class QueuingAssetPoolTests
 
         // Act
         // Trigger reload by reading from empty queue
-        await _queuingAssetPool.GetNextAssetForTesting(CancellationToken.None);
+        using var waited = new CancellationTokenSource(WaitLimit);
+        await _queuingAssetPool.GetNextAssetForTesting(waited.Token);
 
         // Wait for the fire-and-forget ReloadAssetsAsync to potentially complete
         // This is tricky. A small delay might work for testing but isn't robust.
