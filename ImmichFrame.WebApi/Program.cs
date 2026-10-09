@@ -14,6 +14,7 @@ using ImmichFrame.WebApi.Services;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using System.Text.Json;
@@ -96,8 +97,14 @@ builder.Services.AddSingleton(new ConfigLocation(configPath));
 // Settings live in a SQLite database in the configuration directory. An existing Settings.json or
 // Settings.yml is imported into it once, on first run; after that the database is the source of
 // truth and the file is ignored. ConfigLoader stays the reader for that one import.
+//
+// The path goes in through the builder, which quotes it, rather than spliced into the string: a ';'
+// in it would end the Data Source there and leave the rest of the path to be read as keywords.
 builder.Services.AddDbContextFactory<SettingsDbContext>((srv, options) =>
-    options.UseSqlite($"Data Source={Path.Combine(srv.GetRequiredService<ConfigLocation>().Directory, "immichframe.db")}"));
+    options.UseSqlite(new SqliteConnectionStringBuilder
+    {
+        DataSource = Path.Combine(srv.GetRequiredService<ConfigLocation>().Directory, "immichframe.db")
+    }.ToString()));
 builder.Services.AddSingleton<SettingsService>();
 
 // Everything injects IConfigCatalog and gets the forwarding catalog, so the configuration behind it

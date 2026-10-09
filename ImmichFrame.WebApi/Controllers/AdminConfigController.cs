@@ -3,6 +3,7 @@ using ImmichFrame.Core.Helpers;
 using ImmichFrame.WebApi.Helpers.Admin;
 using ImmichFrame.WebApi.Helpers.Config;
 using ImmichFrame.WebApi.Models;
+using ImmichFrame.WebApi.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -64,12 +65,15 @@ public class AdminConfigController(ILogger<AdminConfigController> _logger, Admin
     /// <summary>
     /// Writes the configuration back and applies it without a restart.
     /// <para>
-    /// 409 for a stale version token - another save landed after the editor read the configuration,
-    /// in this process or in another one sharing the database - and 400 for a configuration that
-    /// simply does not load. In either case the stored settings are not changed. Environment
-    /// variables and v1 files are no longer refused here: both are dealt with once, on import. Nor
-    /// is a configuration directory that cannot be written, which stops ImmichFrame from starting
-    /// at all.
+    /// 409 when the save meets another writer - a stale version token, because another save landed
+    /// after the editor read the configuration, in this process or in another one sharing the
+    /// database, or another process writing to the database at the same moment - and 400 for a
+    /// configuration that simply does not load. 503 for a settings database that cannot be written:
+    /// startup writes nothing to a database that is already there and up to date, so ImmichFrame
+    /// starts on one it cannot write - a database file left read-only to the user it runs as, say -
+    /// and this is where that surfaces. In every case the stored settings are not changed.
+    /// Environment variables and v1 files are no longer refused here: both are dealt with once, on
+    /// import.
     /// </para>
     /// </summary>
     [HttpPut(Name = "SaveAdminConfig")]
@@ -95,9 +99,16 @@ public class AdminConfigController(ILogger<AdminConfigController> _logger, Admin
 
             return Problem(ex.Message, statusCode: StatusCodes.Status400BadRequest);
         }
+        catch (ConfigPathNotWritableException ex)
+        {
+            // Not the request's fault, and not one the editor can fix: the message names the
+            // directory to fix on the host, and how. The store has already logged it, with SQLite's
+            // own error.
+            return Problem(ex.Message, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
         catch (ImmichFrameException ex)
         {
-            // Last, after its two subclasses. What reaches it is ConfigLoader.CreateDocument
+            // Last, after its subclasses above. What reaches it is ConfigLoader.CreateDocument
             // refusing a stored format that is neither JSON nor YAML - which nothing in ImmichFrame
             // writes, so this is defensive. The stored document cannot be read, so there is nothing
             // to save against: not the request's fault, hence 409 rather than 400.

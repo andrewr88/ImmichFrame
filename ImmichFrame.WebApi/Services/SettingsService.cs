@@ -23,6 +23,19 @@ namespace ImmichFrame.WebApi.Services;
 public sealed record StoredSettings(string Text, ConfigFormat Format, long Version);
 
 /// <summary>
+/// The settings database cannot be opened or written, for want of permission: the configuration
+/// directory, or the database file in it, is read-only to the user ImmichFrame runs as. The message
+/// names the directory and says how to fix it.
+/// <para>
+/// Thrown at startup, where it stops ImmichFrame from starting, and by a save, which the admin editor
+/// answers with a 503: the fault is the installation's rather than the request's, and nothing was
+/// written.
+/// </para>
+/// </summary>
+public sealed class ConfigPathNotWritableException(string message, Exception innerException)
+    : ImmichFrameException(message, innerException);
+
+/// <summary>
 /// Owns the stored configuration. The SQLite database in the configuration directory is the source
 /// of truth; an existing <c>Settings.json</c>/<c>Settings.yml</c> is imported into it once, on the
 /// first run that finds no row, and ignored from then on.
@@ -39,8 +52,26 @@ public class SettingsService(
     ConfigLocation _location,
     ILogger<SettingsService> _logger)
 {
+    // The SQLite result codes the store answers for itself. Primary codes: SqliteException reports
+    // the extended one separately, in SqliteExtendedErrorCode.
+
+    /// <summary>SQLITE_BUSY: another connection - another process, here - holds the lock this one needs.</summary>
+    private const int SqliteBusy = 5;
+
+    /// <summary>SQLITE_LOCKED: a lock conflict within one connection or shared cache, retried like SQLITE_BUSY.</summary>
+    private const int SqliteLocked = 6;
+
+    /// <summary>
+    /// SQLITE_READONLY: the database cannot be written - its file is read-only, or the write-ahead log
+    /// opening it needs cannot be created in a read-only directory (SQLITE_READONLY_DIRECTORY).
+    /// </summary>
+    private const int SqliteReadOnly = 8;
+
     /// <summary>SQLITE_CANTOPEN: the database file could not be opened, almost always a permission problem.</summary>
     private const int SqliteCantOpen = 14;
+
+    /// <summary>SQLITE_CONSTRAINT: in this table, only ever the document row's key, inserted twice.</summary>
+    private const int SqliteConstraint = 19;
 
     /// <summary>The row the settings document lives in. There is exactly one.</summary>
     private const int DocumentId = 1;
@@ -73,8 +104,11 @@ public class SettingsService(
         {
             await db.Database.MigrateAsync();
         }
-        catch (SqliteException ex) when (ex.SqliteErrorCode == SqliteCantOpen)
+        catch (SqliteException ex) when (ex.SqliteErrorCode is SqliteCantOpen or SqliteReadOnly)
         {
+            // CANTOPEN where no database exists yet and none can be created. READONLY where one does:
+            // it is in write-ahead-log mode, and opening it creates the log beside it, which a
+            // read-only directory refuses.
             throw ConfigPathNotWritable(ex);
         }
 
@@ -220,32 +254,42 @@ public class SettingsService(
     /// read; a mismatch means somebody else saved in between and the write is refused rather than
     /// silently overwriting them.
     /// </summary>
-    /// <exception cref="ConfigSaveRefusedException">The stored document has moved on.</exception>
+    /// <exception cref="ConfigSaveRefusedException">
+    /// Nothing was written: the stored document has moved on, or another process sharing the database
+    /// was writing to it.
+    /// </exception>
+    /// <exception cref="ConfigPathNotWritableException">Nothing was written: the database cannot be.</exception>
     public long Save(string text, ConfigFormat format, long expectedVersion)
     {
         using var db = _dbFactory.CreateDbContext();
-        var row = db.SettingsDocuments.Find(DocumentId);
-
-        if ((row?.Version ?? 0) != expectedVersion)
-        {
-            throw new ConfigSaveRefusedException(
-                "The settings have changed since they were loaded into the editor. Reload the configuration and apply your changes again.");
-        }
-
-        if (row is null)
-        {
-            row = new SettingsDocument { Id = DocumentId };
-            db.SettingsDocuments.Add(row);
-        }
-
-        row.Json = text;
-        row.Format = FormatName(format);
-        row.UpdatedAtUtc = DateTime.UtcNow;
-        row.Version++;
+        var inserting = false;
 
         try
         {
+            var row = db.SettingsDocuments.Find(DocumentId);
+
+            if ((row?.Version ?? 0) != expectedVersion)
+            {
+                throw new ConfigSaveRefusedException(
+                    "The settings have changed since they were loaded into the editor. Reload the configuration and apply your changes again.");
+            }
+
+            if (row is null)
+            {
+                inserting = true;
+                row = new SettingsDocument { Id = DocumentId };
+                db.SettingsDocuments.Add(row);
+            }
+
+            row.Json = text;
+            row.Format = FormatName(format);
+            row.UpdatedAtUtc = DateTime.UtcNow;
+            row.Version++;
+
             db.SaveChanges();
+
+            IsUnconfigured = false;
+            return row.Version;
         }
         catch (DbUpdateConcurrencyException ex)
         {
@@ -255,10 +299,44 @@ public class SettingsService(
                 "The settings were changed by another process while this save was in flight. Reload the configuration and apply your changes again.",
                 ex);
         }
-
-        IsUnconfigured = false;
-        return row.Version;
+        catch (DbUpdateException ex) when (inserting && SqliteErrorOf(ex) == SqliteConstraint)
+        {
+            // The same writer, on a database that held no document yet: it inserted the row between
+            // this save's read and its write. A row this save never read has no version for the
+            // token to check, so it is the row's key that refuses the second insert.
+            throw new ConfigSaveRefusedException(
+                "The settings were changed by another process while this save was in flight. Reload the configuration and apply your changes again.",
+                ex);
+        }
+        catch (Exception ex) when (SqliteErrorOf(ex) is SqliteBusy or SqliteLocked)
+        {
+            // Another process held the database for longer than a command waits for it - writing,
+            // most likely a save of its own. Answered as one, because what to do about it is the
+            // same: reload, and apply the change again.
+            throw new ConfigSaveRefusedException(
+                "Another process was writing to the settings database, so this save could not be made. Reload the configuration and apply your changes again.",
+                ex);
+        }
+        catch (Exception ex) when (SqliteErrorOf(ex) is SqliteReadOnly or SqliteCantOpen)
+        {
+            // A database ImmichFrame can read but not write - a file left read-only to the user it
+            // runs as, in a directory that is not - gets through startup, which writes nothing to a
+            // database that is already there and up to date. The first save is where it shows.
+            throw SettingsNotWritable(ex);
+        }
     }
+
+    /// <summary>
+    /// The SQLite result code behind <paramref name="exception"/>, where SQLite is what failed: thrown
+    /// as it is by a read, or by opening or committing a transaction, and wrapped by EF when writing a
+    /// change fails.
+    /// </summary>
+    private static int? SqliteErrorOf(Exception exception) => exception switch
+    {
+        SqliteException sqlite => sqlite.SqliteErrorCode,
+        DbUpdateException { InnerException: SqliteException sqlite } => sqlite.SqliteErrorCode,
+        _ => null
+    };
 
     private async Task ImportOrBootstrap(SettingsDbContext db)
     {
@@ -307,7 +385,22 @@ public class SettingsService(
             ImportedFrom = Path.GetFileName(source.Path),
             Version = 1
         });
-        await db.SaveChangesAsync();
+
+        try
+        {
+            await db.SaveChangesAsync();
+        }
+        catch (DbUpdateException ex) when (SqliteErrorOf(ex) == SqliteConstraint)
+        {
+            // Another process sharing this database - a second container started on the same
+            // configuration directory - found no row either, and stored one first: its own import of
+            // this file, or a save made since. Either way the database holds the settings now and is
+            // the source of truth, exactly as if this process had imported them itself.
+            _logger.LogInformation(
+                "Another process sharing the settings database stored settings first, so '{path}' was not imported again.",
+                source.Path);
+            return;
+        }
 
         _logger.LogInformation(
             "Imported '{path}' into the settings database. The database is now the source of truth; further changes to that file are ignored.",
@@ -402,14 +495,29 @@ public class SettingsService(
         }
     }
 
-    private ImmichFrameException ConfigPathNotWritable(Exception inner)
+    private ConfigPathNotWritableException ConfigPathNotWritable(Exception inner)
     {
         var message = $"Cannot open the settings database in '{_location.Directory}'. " +
             "The configuration directory has to exist and be writable by the user ImmichFrame runs as " +
             "(uid 1000 in the official Docker image). For a bind mount, fix it on the host with " +
             "'chown -R 1000:1000 /path/to/config'; a read-only mount does not work.";
         _logger.LogError(inner, "{message}", message);
-        return new ImmichFrameException(message, inner);
+        return new ConfigPathNotWritableException(message, inner);
+    }
+
+    /// <summary>
+    /// A save the settings database refused, for want of permission - worded for a database
+    /// ImmichFrame has been running on, where <see cref="ConfigPathNotWritable"/> is worded for one
+    /// it could not open at startup.
+    /// </summary>
+    private ConfigPathNotWritableException SettingsNotWritable(Exception inner)
+    {
+        var message = $"Cannot save the settings: the settings database in '{_location.Directory}' is not writable. " +
+            "The configuration directory and the database in it have to be writable by the user ImmichFrame runs as " +
+            "(uid 1000 in the official Docker image). For a bind mount, fix it on the host with " +
+            "'chown -R 1000:1000 /path/to/config'; a read-only mount does not work.";
+        _logger.LogError(inner, "{message}", message);
+        return new ConfigPathNotWritableException(message, inner);
     }
 
     private void LogIgnoredFileConfig()

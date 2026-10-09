@@ -16,6 +16,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;
@@ -1554,6 +1555,158 @@ public class AdminConfigControllerTests
             "the operator has to be told which directory to fix");
     }
 
+    /// <summary>
+    /// The same read-only directory, around a database an earlier run created - a directory left
+    /// unwritable after a first start, or by an earlier image that ran as root. The database is in
+    /// write-ahead-log mode, and the log is created beside it when the database is opened, so SQLite
+    /// refuses with SQLITE_READONLY rather than SQLITE_CANTOPEN. Only the latter was recognised:
+    /// this case stopped startup with SQLite's own "attempt to write a readonly database", and no
+    /// word of which directory to fix.
+    /// </summary>
+    [Test]
+    [Platform("Unix")]
+    public void ReadOnlyConfigurationDirectoryAroundAnExistingDatabase_FailsToStartAndNamesTheDirectory()
+    {
+        Assume.That(Environment.IsPrivilegedProcess, Is.False, "running as root, whom a directory's mode does not stop");
+
+        // Arrange - a first run that created the database, then every connection to it closed, which
+        // is when SQLite removes the log from the directory
+        WriteSettings("Settings.json", SettingsJson);
+        using (var firstRun = CreateFactory())
+        {
+            firstRun.CreateClient();
+        }
+
+        SqliteConnection.ClearAllPools();
+        Assume.That(File.Exists(SettingsPath("immichframe.db-wal")), Is.False,
+            "with the log still there, opening the database creates nothing in the directory");
+
+        SetMode(_directory, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        using var factory = CreateFactory();
+
+        // Act
+        var failure = Assert.Catch(() => factory.CreateClient());
+
+        // Assert
+        Assert.That(Unwrap(failure), Does.Contain($"Cannot open the settings database in '{_directory}'"),
+            "the operator has to be told which directory to fix");
+    }
+
+    /// <summary>
+    /// A configuration directory that does not exist, under a parent that cannot be written. Creating
+    /// the directory is the first thing startup does, so this is refused before SQLite is asked
+    /// anything - and has to be refused in the same words as a directory SQLite cannot write in, not
+    /// in the operating system's.
+    /// </summary>
+    [Test]
+    [Platform("Unix")]
+    public void ConfigurationDirectoryThatCannotBeCreated_FailsToStartAndNamesTheDirectory()
+    {
+        Assume.That(Environment.IsPrivilegedProcess, Is.False, "running as root, whom a directory's mode does not stop");
+
+        // Arrange
+        var directory = Path.Combine(_directory, "config");
+        SetMode(_directory, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+
+        using var factory = CreateFactory(configDirectory: directory);
+
+        // Act
+        var failure = Assert.Catch(() => factory.CreateClient());
+
+        // Assert
+        Assert.That(Unwrap(failure), Does.Contain($"Cannot open the settings database in '{directory}'"),
+            "the operator has to be told which directory to fix");
+    }
+
+    /// <summary>
+    /// A settings database ImmichFrame can read but not write, in a directory it can - what an earlier
+    /// image that ran as root leaves behind. Startup writes nothing to a database that is already there
+    /// and up to date, so ImmichFrame starts, and the first save is where the write fails. That was an
+    /// empty 500; it has to reach the editor as a refusal naming the directory to fix, with nothing
+    /// stored or applied.
+    /// </summary>
+    [Test]
+    [Platform("Unix")]
+    public async Task SaveConfig_SettingsDatabaseThatCannotBeWritten_Is503NamingTheDirectoryWithNothingSaved()
+    {
+        Assume.That(Environment.IsPrivilegedProcess, Is.False, "running as root, whom a file's mode does not stop");
+
+        // Arrange - a database a first run created, closed, and then made read-only. Closed first: a
+        // connection already open for writing would go on writing whatever the file's mode says.
+        WriteSettings("Settings.json", SettingsJson);
+        using (var firstRun = CreateFactory())
+        {
+            firstRun.CreateClient();
+        }
+
+        SqliteConnection.ClearAllPools();
+        Assume.That(File.Exists(SettingsPath("immichframe.db-wal")), Is.False,
+            "SQLite removes the log once the last connection closes, so it is still open");
+
+        var database = SettingsPath("immichframe.db");
+        SetMode(database, UnixFileMode.UserRead);
+
+        try
+        {
+            using var factory = CreateFactory();
+            var client = factory.CreateClient();
+
+            var before = StoredText(factory);
+            var config = await GetConfig(client);
+            config.Default.General.Interval = 46;
+
+            // Act
+            var response = await Put(client, config);
+
+            // Assert - the status first: anything else is not a problem document to read a detail off
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.ServiceUnavailable));
+
+            var detail = (string?)JsonNode.Parse(await response.Content.ReadAsStringAsync())?["detail"];
+            var running = await FrameInterval(client, "/api/Config");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(detail, Does.Contain($"'{_directory}'").And.Contain("not writable"),
+                    "the operator has to be told which directory to fix");
+                Assert.That(StoredText(factory), Is.EqualTo(before), "nothing was stored");
+                Assert.That(running, Is.EqualTo(45), "and nothing was applied either");
+            });
+        }
+        finally
+        {
+            SetMode(database, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
+
+    /// <summary>
+    /// A configuration directory whose name holds a semicolon, which is what separates one keyword of
+    /// a connection string from the next. Spliced into the connection string as it stood, the path
+    /// ended at the semicolon, the rest of it was parsed as a malformed keyword, and ImmichFrame did
+    /// not start.
+    /// </summary>
+    [Test]
+    public async Task Config_ConfigurationDirectoryNamedWithASemicolon_StartsWithTheDatabaseInIt()
+    {
+        // Arrange
+        var directory = Path.Combine(_directory, "frame;config");
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(Path.Combine(directory, "Settings.json"), SettingsJson);
+
+        // Act
+        using var factory = CreateFactory(configDirectory: directory);
+        var client = factory.CreateClient();
+        var read = await Send(client, HttpMethod.Get, ConfigUrl);
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(read.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(StoredText(factory), Is.EqualTo(SettingsJson), "the settings file there was imported");
+            Assert.That(File.Exists(Path.Combine(directory, "immichframe.db")), Is.True,
+                "into a database in that directory, not one named after part of its path");
+        });
+    }
+
     /// <summary>The innermost message, since the host wraps a startup failure more than once.</summary>
     private static string Unwrap(Exception? exception)
     {
@@ -2549,6 +2702,12 @@ public class AdminConfigControllerTests
             Assert.That(read.StatusCode, Is.EqualTo(HttpStatusCode.OK), "the editor still answers");
             Assert.That(config.Source.Editable, Is.True, "and can be used to configure the instance");
             Assert.That(config.Default.Accounts, Is.Empty, "nothing was imported from the broken file");
+
+            // The flag the editor and the catalog both read the store by: set, they take an empty
+            // store for an instance to configure from the defaults rather than for an empty stored
+            // document.
+            Assert.That(factory.Services.GetRequiredService<SettingsService>().IsUnconfigured, Is.True,
+                "nothing has configured this instance yet");
         });
     }
 
@@ -3243,6 +3402,61 @@ public class AdminConfigControllerTests
     }
 
     /// <summary>
+    /// The first save on an instance nothing had configured. Until it, the editor is shown a view
+    /// built from the running defaults, with no profiles, because no document is stored; from it on,
+    /// the stored document is what the editor has to read. Were it still read the first way, the
+    /// profile that save created would be missing from the editor - and saving what the editor then
+    /// showed would delete it, since a save replaces the profiles wholesale.
+    /// </summary>
+    [Test]
+    public async Task SaveConfig_FirstSaveOfAnUnconfiguredInstance_IsWhatTheEditorReadsAndSavesFromThen()
+    {
+        // Arrange - nothing to import, so the instance starts unconfigured
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+        var unconfigured = await GetConfig(client);
+
+        var configured = unconfigured with
+        {
+            Default = unconfigured.Default with
+            {
+                Accounts =
+                [
+                    new AdminAccountSettingsDto
+                    {
+                        ImmichServerUrl = "http://mock-immich-server.com",
+                        ApiKey = "typed-in-the-editor"
+                    }
+                ]
+            },
+            Profiles =
+            [
+                new AdminConfigEntryDto("kitchen", ["General.Interval"],
+                    new AdminGeneralSettingsDto { Interval = 7 }, [])
+            ]
+        };
+
+        // Act - the first save, then an unedited save of what the editor reads back
+        var first = await Put(client, configured);
+        var read = await GetConfig(client);
+        var second = await Put(client, read);
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(factory.Services.GetRequiredService<SettingsService>().IsUnconfigured, Is.False,
+                "the instance is configured now");
+            Assert.That(read.Profiles.Select(profile => profile.Name), Is.EqualTo(new[] { "kitchen" }),
+                "the editor reads the profile the first save stored");
+
+            Assert.That(second.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(StoredDocument(factory)?["Profiles"]?.AsObject().Select(pair => pair.Key),
+                Is.EqualTo(new[] { "kitchen" }), "and saving what it read keeps it");
+        });
+    }
+
+    /// <summary>
     /// A legacy environment setup is recognised by its variables being set, not by their values
     /// parsing: nothing reads the values any more. A boolean spelled "yes" used to make the loader
     /// give up on the environment altogether, so the administrator was told there was no
@@ -3414,11 +3628,15 @@ public class AdminConfigControllerTests
     /// that never asks the frame for a photo needs.
     /// </param>
     /// <param name="logs">Where the host's log entries are kept, for a test that asserts on them.</param>
+    /// <param name="configDirectory">
+    /// The configuration directory, for a test that needs one other than the fixture's own. Put it
+    /// inside <see cref="_directory"/>, which is what the teardown removes.
+    /// </param>
     private WebApplicationFactory<Program> CreateFactory(
-        Mock<HttpMessageHandler>? immich = null, LogSink? logs = null)
+        Mock<HttpMessageHandler>? immich = null, LogSink? logs = null, string? configDirectory = null)
     {
         var immichHandler = immich ?? new Mock<HttpMessageHandler>().WithServerVersion();
-        var directory = _directory;
+        var directory = configDirectory ?? _directory;
 
         return new WebApplicationFactory<Program>()
             .WithWebHostBuilder(builder =>
