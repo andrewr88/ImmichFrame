@@ -1,10 +1,16 @@
 using System.Globalization;
+using System.Text.Json;
 using AwesomeAssertions;
 using ImmichFrame.Core.Exceptions;
 using ImmichFrame.Core.Interfaces;
+using ImmichFrame.WebApi.Database;
 using ImmichFrame.WebApi.Helpers.Config;
 using ImmichFrame.WebApi.Models;
+using ImmichFrame.WebApi.Services;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using NUnit.Framework;
 
@@ -264,18 +270,98 @@ public class ConfigCatalogTest
         profile.Verify(settings => settings.Validate(), Times.Once);
     }
 
+    /// <summary>
+    /// Every configuration that fails is reported in the one exception, each by name - the default
+    /// configuration's failure included, which used to end validation there, in its own words and
+    /// naming nothing. The first failure stays where a single one would be: down the inner chain.
+    /// </summary>
+    [Test]
+    public void ValidateReportsEveryConfigurationThatFailsByName()
+    {
+        var first = new SettingsNotValidException("ImagesFromDays is out of range.");
+        var second = new SettingsNotValidException("ApiKey is missing.");
+
+        var @default = new Mock<IServerSettings>();
+        @default.Setup(settings => settings.Validate()).Throws(first);
+        var kitchen = new Mock<IServerSettings>();
+        kitchen.Setup(settings => settings.Validate()).Throws(second);
+        var hallway = new Mock<IServerSettings>();
+
+        var catalog = new ConfigCatalog(@default.Object,
+            [KeyValuePair.Create("kitchen", kitchen.Object), KeyValuePair.Create("hallway", hallway.Object)]);
+
+        var failure = catalog.Invoking(c => c.Validate()).Should().Throw<SettingsNotValidException>().Which;
+
+        failure.Message.Should().Match("*default configuration*ImagesFromDays is out of range.*'kitchen'*ApiKey is missing.*");
+        Chain(failure).Should().Contain(first).And.NotContain(second);
+        hallway.Verify(settings => settings.Validate(), Times.Once);
+    }
+
+    /// <summary>
+    /// The reason validation goes on past an account that fails it. Validating an account is also what
+    /// reads its ApiKeyFile into its key, and stored settings that fail validation are run regardless,
+    /// so stopping at the first failure left every account after it - in its own configuration and in
+    /// every configuration validated after that one - running with an empty key.
+    /// </summary>
+    [Test]
+    public void ValidateReadsEveryKeyFilePastAnAccountThatFails()
+    {
+        InTemporaryDirectory(directory =>
+        {
+            var secondKey = Path.Combine(directory, "second-key");
+            var kitchenKey = Path.Combine(directory, "kitchen-key");
+            File.WriteAllText(secondKey, "second-key\n");
+            File.WriteAllText(kitchenKey, "kitchen-key\n");
+
+            var catalog = ConfigLoader.BuildCatalog(ConfigLoader.CreateDocument(ConfigFormat.Json, $$"""
+                {
+                  "Accounts": [
+                    { "ImmichServerUrl": "https://first.example.com", "ApiKey": "first-key", "ImagesFromDays": 99999 },
+                    { "ImmichServerUrl": "https://second.example.com", "ApiKeyFile": {{JsonSerializer.Serialize(secondKey)}} }
+                  ],
+                  "Profiles": {
+                    "kitchen": {
+                      "Accounts": [{ "ImmichServerUrl": "https://kitchen.example.com", "ApiKeyFile": {{JsonSerializer.Serialize(kitchenKey)}} }]
+                    }
+                  }
+                }
+                """));
+
+            catalog.Invoking(c => c.Validate()).Should().Throw<SettingsNotValidException>()
+                .WithMessage("*default configuration*ImagesFromDays*");
+
+            catalog.Default.Accounts.Select(account => account.ApiKey).Should().Equal("first-key", "second-key");
+            catalog.Get("kitchen").Accounts.Single().ApiKey.Should().Be("kitchen-key");
+        });
+    }
+
+    private static IEnumerable<Exception> Chain(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            yield return current;
+        }
+    }
+
     [Test]
     public void ProfilesLoadAndValidateFromAConfigDirectory()
     {
         InConfigDirectory("Settings.json", File.ReadAllText(ResourcePath(JsonProfiles)), directory =>
         {
-            var catalog = _configLoader.LoadCatalog(directory);
+            var log = new CriticalLog();
+            var catalog = Served(directory, log);
 
             catalog.ProfileNames.Should().BeEquivalentTo("kitchen", "living-room", "empty");
             catalog.Get("kitchen").GeneralSettings.Interval.Should().Be(10);
+            log.Lines.Should().BeEmpty("every configuration in the file validates");
         });
     }
 
+    /// <summary>
+    /// Stored settings that fail validation are served anyway, because the editor that fixes them is
+    /// served by the same process - so the Critical line they are reported in is where the profile at
+    /// fault has to be named.
+    /// </summary>
     [Test]
     public void ProfileThatFailsValidationIsReportedByName()
     {
@@ -289,8 +375,14 @@ public class ConfigCatalogTest
                                 """;
 
         InConfigDirectory("Settings.json", settings, directory =>
-            _configLoader.Invoking(loader => loader.LoadCatalog(directory))
-                .Should().Throw<SettingsNotValidException>().WithMessage("*'kitchen'*"));
+        {
+            var log = new CriticalLog();
+            var catalog = Served(directory, log);
+
+            log.Lines.Should().ContainSingle().Which.Should().Contain("'kitchen'");
+            catalog.Get("kitchen").Accounts.Single().ImmichServerUrl.Should().Be("https://kitchen.example.com");
+            catalog.Default.Accounts.Single().ApiKey.Should().Be("base-key");
+        });
     }
 
     /// <summary>
@@ -304,7 +396,7 @@ public class ConfigCatalogTest
 
         InConfigDirectory("Settings.json", settings, directory =>
         {
-            var catalog = _configLoader.LoadCatalog(directory);
+            var catalog = Served(directory);
 
             catalog.ProfileNames.Should().BeEmpty();
             catalog.Default.Accounts.Select(account => account.ImmichServerUrl).Should().Equal("https://v1.example.com");
@@ -342,7 +434,7 @@ public class ConfigCatalogTest
     {
         InConfigDirectory(fileName, settings, directory =>
         {
-            var catalog = _configLoader.LoadCatalog(directory);
+            var catalog = Served(directory);
             var account = catalog.Default.Accounts.Single();
 
             catalog.Default.GeneralSettings.Webcalendars.Should().NotBeNull().And.BeEmpty();
@@ -410,7 +502,7 @@ public class ConfigCatalogTest
 
         InConfigDirectory("Settings.json", settings, directory =>
         {
-            var catalog = _configLoader.LoadCatalog(directory);
+            var catalog = Served(directory);
 
             catalog.Default.GeneralSettings.Webcalendars.Should().Equal("https://calendar.example.com/c.ics");
             catalog.Default.Accounts.Single().Tags.Should().Equal("Travel");
@@ -429,6 +521,32 @@ public class ConfigCatalogTest
     public void YamlProfilesSpelledAsNullDeclareNoProfiles(string value)
     {
         new YamlConfigDocument($"General:\n  Interval: 45\nProfiles: {value}\n").ProfileNames.Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// The JSON spellings of the same thing: null, and the empty string YAML's <c>Profiles: ''</c> was
+    /// always read as. Refusing <c>""</c> sent a current-schema file down the loader's v1 fallback,
+    /// as refusing <c>Profiles: ~</c> once did for YAML.
+    /// </summary>
+    [TestCase("null")]
+    [TestCase("\"\"")]
+    public void JsonProfilesSpelledAsNullOrEmptyDeclareNoProfiles(string value)
+    {
+        var document = new JsonConfigDocument($$"""{ "General": { "Interval": 45 }, "Profiles": {{value}} }""");
+
+        document.ProfileNames.Should().BeEmpty();
+        ConfigLoader.BuildCatalog(document).ProfileNames.Should().BeEmpty();
+    }
+
+    /// <summary>Any other string is not an object of profiles, and is still refused.</summary>
+    [TestCase("\" \"")]
+    [TestCase("\"kitchen\"")]
+    public void JsonProfilesSpelledAsAnyOtherStringAreRejected(string value)
+    {
+        var document = new JsonConfigDocument($$"""{ "General": { "Interval": 45 }, "Profiles": {{value}} }""");
+
+        document.Invoking(d => d.ProfileNames).Should().Throw<SettingsNotValidException>()
+            .WithMessage("*must be an object*");
     }
 
     /// <summary>Quoted, the same characters are a string - which is not a mapping of profiles either.</summary>
@@ -462,7 +580,7 @@ public class ConfigCatalogTest
 
         InConfigDirectory("Settings.yml", settings, directory =>
         {
-            var catalog = _configLoader.LoadCatalog(directory);
+            var catalog = Served(directory);
 
             catalog.Default.Accounts.Select(account => account.ImmichServerUrl).Should().Equal("https://base.example.com");
             catalog.Default.GeneralSettings.Interval.Should().Be(12);
@@ -485,35 +603,76 @@ public class ConfigCatalogTest
     {
         InConfigDirectory("Settings.json", settings, directory =>
         {
-            var catalog = _configLoader.Invoking(loader => loader.LoadCatalog(directory))
-                .Should().NotThrow().Subject;
+            var log = new CriticalLog();
+            var catalog = Served(directory, log);
 
+            log.Lines.Should().BeEmpty("a configuration with nothing to show still validates");
             catalog.Default.Accounts.Should().NotBeNull().And.BeEmpty();
         });
     }
 
     /// <summary>
-    /// A profile's own <c>Accounts:</c> with nothing after it. The merge replaces the inherited list
-    /// with that null outright, as it replaces any list, so the profile has to bind to an empty list
-    /// rather than a null one - everything downstream of the binder enumerates it.
+    /// A profile's own <c>Accounts:</c> with nothing after it, or JSON's <c>"Accounts": null</c>. The
+    /// merge replaces the inherited list with that null outright, as it replaces any list, so the
+    /// profile has to bind to an empty list rather than a null one - everything downstream of the
+    /// binder enumerates it.
     /// </summary>
-    [Test]
-    public void YamlProfileWithAnEmptyAccountsKeyBindsToAnEmptyAccountList()
+    [TestCase(ConfigFormat.Yaml, """
+                                 General:
+                                   Interval: 45
+                                 Accounts:
+                                 - ImmichServerUrl: https://base.example.com
+                                   ApiKey: base-key
+                                 Profiles:
+                                   kitchen:
+                                     Accounts:
+                                 """, TestName = "YamlProfileWithAnEmptyAccountsKeyBindsToAnEmptyAccountList")]
+    [TestCase(ConfigFormat.Json, """
+                                 {
+                                   "General": { "Interval": 45 },
+                                   "Accounts": [{ "ImmichServerUrl": "https://base.example.com", "ApiKey": "base-key" }],
+                                   "Profiles": { "kitchen": { "Accounts": null } }
+                                 }
+                                 """, TestName = "JsonProfileWithNullAccountsBindsToAnEmptyAccountList")]
+    public void ProfileWithAccountsSpelledAsNullBindsToAnEmptyAccountList(ConfigFormat format, string settings)
     {
-        const string settings = """
-                                General:
-                                  Interval: 45
-                                Accounts:
-                                - ImmichServerUrl: https://base.example.com
-                                  ApiKey: base-key
-                                Profiles:
-                                  kitchen:
-                                    Accounts:
-                                """;
-
-        var kitchen = ConfigLoader.BuildCatalog(new YamlConfigDocument(settings)).Get("kitchen");
+        var kitchen = ConfigLoader.BuildCatalog(ConfigLoader.CreateDocument(format, settings)).Get("kitchen");
 
         kitchen.Accounts.Should().NotBeNull().And.BeEmpty();
+    }
+
+    /// <summary>
+    /// The other side of that rule: a <c>General</c> section that is there but empty - YAML's
+    /// <c>General:</c> with the only setting under it commented out, or JSON's <c>"General": null</c> -
+    /// is a profile naming no general setting, so it inherits every one of them. It used to replace
+    /// the default configuration's whole section with nothing: the profile lost each value it
+    /// inherited, the frame's secret among them, and served without authentication.
+    /// </summary>
+    [TestCase(ConfigFormat.Json, """
+                                 {
+                                   "General": { "Interval": 12, "AuthenticationSecret": "frame-secret" },
+                                   "Accounts": [{ "ImmichServerUrl": "https://base.example.com", "ApiKey": "base-key" }],
+                                   "Profiles": { "kitchen": { "General": null } }
+                                 }
+                                 """, TestName = "JsonProfileWithANullGeneralSectionInheritsTheDefaultOne")]
+    [TestCase(ConfigFormat.Yaml, """
+                                 General:
+                                   Interval: 12
+                                   AuthenticationSecret: frame-secret
+                                 Accounts:
+                                 - ImmichServerUrl: https://base.example.com
+                                   ApiKey: base-key
+                                 Profiles:
+                                   kitchen:
+                                     General:
+                                       # AuthenticationSecret: null
+                                 """, TestName = "YamlProfileWithItsOnlyGeneralSettingCommentedOutInheritsTheDefaultOne")]
+    public void ProfileWithAnEmptyGeneralSectionInheritsTheDefaultOne(ConfigFormat format, string settings)
+    {
+        var kitchen = ConfigLoader.BuildCatalog(ConfigLoader.CreateDocument(format, settings)).Get("kitchen").GeneralSettings;
+
+        kitchen.AuthenticationSecret.Should().Be("frame-secret");
+        kitchen.Interval.Should().Be(12);
     }
 
     /// <summary>
@@ -535,18 +694,18 @@ public class ConfigCatalogTest
     public void ApiKeyWithATrailingNewlineLoadsTrimmed(string fileName, string settings)
     {
         InConfigDirectory(fileName, settings, directory =>
-            _configLoader.LoadCatalog(directory).Default.Accounts.Single().ApiKey.Should().Be("abc123"));
+            Served(directory).Default.Accounts.Single().ApiKey.Should().Be("abc123"));
     }
 
     /// <summary>
     /// A line break inside the key, which trimming cannot help, is refused while the settings are
     /// validated. Accepted, it failed only once the account's services were built - inside a Lazy that
     /// caches the exception, so every request for the profile failed until the configuration was
-    /// replaced or the process restarted. The refusal is logged and shown in the editor, so it must not
-    /// quote the key.
+    /// replaced or the process restarted. Stored settings are reported in the log rather than thrown,
+    /// and the editor shows its own refusal of a save, so neither may quote the key.
     /// </summary>
     [Test]
-    public void SettingsFileApiKeyWithALineBreakInsideIsRefusedWithoutQuotingIt()
+    public void SettingsFileApiKeyWithALineBreakInsideIsReportedWithoutQuotingIt()
     {
         const string settings = """
                                 {
@@ -555,9 +714,13 @@ public class ConfigCatalogTest
                                 """;
 
         InConfigDirectory("Settings.json", settings, directory =>
-            _configLoader.Invoking(loader => loader.LoadCatalog(directory))
-                .Should().Throw<SettingsNotValidException>()
-                .Which.Message.Should().Contain("API key").And.NotContain("abc").And.NotContain("123"));
+        {
+            var log = new CriticalLog();
+            Served(directory, log);
+
+            log.Lines.Should().ContainSingle()
+                .Which.Should().Contain("API key").And.NotContain("abc").And.NotContain("123");
+        });
     }
 
     /// <summary>
@@ -609,14 +772,64 @@ public class ConfigCatalogTest
     private static string ResourcePath(string resource)
         => Path.Combine(TestContext.CurrentContext.TestDirectory, "Resources", resource);
 
-    private static void InConfigDirectory(string fileName, string contents, Action<string> test)
+    /// <summary>
+    /// What ImmichFrame serves out of a configuration directory: the settings file imported into a
+    /// settings database there, as a first run does, and the stored document then bound, validated and
+    /// served by <see cref="SettingsService.LoadCatalog"/> - the seed of the catalog everything else
+    /// injects, and the only path a settings file takes into a running ImmichFrame.
+    /// </summary>
+    private IConfigCatalog Served(string directory, ILogger<SettingsService>? logger = null)
+    {
+        // Unpooled, so that no connection outlives the call and holds the database file open.
+        using var services = new ServiceCollection()
+            .AddDbContextFactory<SettingsDbContext>(options =>
+                options.UseSqlite($"Data Source={Path.Combine(directory, "immichframe.db")};Pooling=False"))
+            .BuildServiceProvider();
+
+        var store = new SettingsService(
+            services.GetRequiredService<IDbContextFactory<SettingsDbContext>>(),
+            _configLoader,
+            new ConfigLocation(directory),
+            logger ?? NullLogger<SettingsService>.Instance);
+
+        store.InitializeAsync().GetAwaiter().GetResult();
+
+        return store.LoadCatalog();
+    }
+
+    /// <summary>
+    /// The Critical lines a <see cref="SettingsService"/> logs, which is where stored settings that do
+    /// not validate are reported: they are served regardless rather than thrown.
+    /// </summary>
+    private sealed class CriticalLog : ILogger<SettingsService>
+    {
+        public List<string> Lines { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Critical) Lines.Add(formatter(state, exception));
+        }
+    }
+
+    private static void InConfigDirectory(string fileName, string contents, Action<string> test) =>
+        InTemporaryDirectory(directory =>
+        {
+            File.WriteAllText(Path.Combine(directory, fileName), contents);
+            test(directory);
+        });
+
+    private static void InTemporaryDirectory(Action<string> test)
     {
         var directory = Path.Combine(Path.GetTempPath(), $"immichframe-{Guid.NewGuid():N}");
         Directory.CreateDirectory(directory);
 
         try
         {
-            File.WriteAllText(Path.Combine(directory, fileName), contents);
             test(directory);
         }
         finally

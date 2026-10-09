@@ -32,10 +32,6 @@ public sealed class AdminConfigService(
     SwappableConfigCatalog _catalog,
     ILogger<AdminConfigService> _logger)
 {
-    private const string GeneralKey = "General";
-    private const string AccountsKey = "Accounts";
-    private const string ProfilesKey = "Profiles";
-
     /// <summary>The settings each of the two settings classes accepts, keyed the way a file spells them.</summary>
     private static readonly IReadOnlyDictionary<string, PropertyInfo> GeneralProperties =
         WritableProperties(typeof(GeneralSettings));
@@ -53,18 +49,6 @@ public sealed class AdminConfigService(
         nameof(GeneralSettings.WeatherApiKey),
         nameof(GeneralSettings.Webhook),
         nameof(GeneralSettings.AuthenticationSecret)
-    };
-
-
-    /// <summary>
-    /// The relaxed encoder, because this file is meant to be hand-editable. The default escapes
-    /// everything outside ASCII, so one save through the editor would turn non-English album names
-    /// and tags into runs of \uXXXX - readable to the parser, and to nobody else.
-    /// </summary>
-    private static readonly JsonSerializerOptions JsonOutput = new()
-    {
-        WriteIndented = true,
-        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
 
     private readonly object _saveLock = new();
@@ -151,10 +135,13 @@ public sealed class AdminConfigService(
 
             return catalog;
         }
-        catch (Exception ex) when (UnreadableFile(ex) is { } failure)
+        catch (Exception ex) when (UnreadableFiles(ex) is { Count: > 0 } failures)
         {
-            _logger.LogWarning("An API key file could not be read while validating a configuration save: {reason}",
-                failure.Message);
+            foreach (var failure in failures)
+            {
+                _logger.LogWarning("An API key file could not be read while validating a configuration save: {reason}",
+                    failure.Message);
+            }
 
             throw new SettingsNotValidException(
                 "An API key file in this configuration could not be read. Check that the file still exists on the " +
@@ -172,18 +159,39 @@ public sealed class AdminConfigService(
     }
 
     /// <summary>
-    /// The file-system failure behind <paramref name="exception"/>, if that is what it is. Reading an
-    /// ApiKeyFile is the only thing validation does on disk, and a profile's failure arrives wrapped
-    /// in <see cref="ConfigCatalog.Validate"/>'s own exception, so the whole chain is searched.
+    /// The file-system failures behind <paramref name="exception"/>, if there are any. Reading an
+    /// ApiKeyFile is the only thing validation does on disk, and its failure arrives wrapped - in the
+    /// name of the configuration it belongs to, and alongside every other failure validation met, in
+    /// an <see cref="AggregateSettingsNotValidException"/>. So the whole chain is searched, and every
+    /// failure an aggregate on it holds: its inner exception is only the first of them, and a key file
+    /// that was the second thing wrong would otherwise pass its message, path and all, to the editor.
     /// </summary>
-    private static Exception? UnreadableFile(Exception exception)
+    private static List<Exception> UnreadableFiles(Exception exception)
     {
-        for (var current = exception; current is not null; current = current.InnerException)
-        {
-            if (current is IOException or UnauthorizedAccessException) return current;
-        }
+        var found = new List<Exception>();
 
-        return null;
+        Search(exception);
+
+        return found;
+
+        void Search(Exception? current)
+        {
+            for (; current is not null; current = current.InnerException)
+            {
+                if (current is IOException or UnauthorizedAccessException)
+                {
+                    found.Add(current);
+                    return;
+                }
+
+                if (current is AggregateSettingsNotValidException aggregate)
+                {
+                    // Its inner exception is its first failure, so this covers the rest of the chain.
+                    foreach (var failure in aggregate.Failures) Search(failure);
+                    return;
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -289,7 +297,7 @@ public sealed class AdminConfigService(
         {
             // An entry declaring no account list of its own contributes none: the accounts it shows
             // are another entry's, and they are already indexed under that entry's handles.
-            if (declared[AccountsKey] is not JsonArray stored) continue;
+            if (declared[ConfigKeys.Accounts] is not JsonArray stored) continue;
 
             // Positions are counted over the accounts alone, as Entry counts them. An empty entry
             // binds to no account, so the read shows every account after it one place earlier than
@@ -331,7 +339,7 @@ public sealed class AdminConfigService(
 
         return new AdminConfigDto(
             version,
-            new AdminConfigSourceDto(FormatName(settings.Format), null, false, true, null),
+            new AdminConfigSourceDto(Services.SettingsService.FormatName(settings.Format), null, false, true, null),
             Entry(version, ConfigCatalog.DefaultProfileName,
                 document.Bind<ServerSettings>(null), document.DeclaredOverrides(null)),
             profiles);
@@ -361,13 +369,13 @@ public sealed class AdminConfigService(
 
         var entry = new AdminConfigEntryDto(
             ConfigCatalog.DefaultProfileName,
-            [.. GeneralProperties.Values.Select(property => $"{GeneralKey}.{property.Name}"), AccountsKey],
+            [.. GeneralProperties.Values.Select(property => $"{ConfigKeys.General}.{property.Name}"), ConfigKeys.Accounts],
             new AdminGeneralSettingsDto(settings.GeneralSettings),
             accounts);
 
         return new AdminConfigDto(
             version,
-            new AdminConfigSourceDto(FormatName(format), null, false, true, null),
+            new AdminConfigSourceDto(Services.SettingsService.FormatName(format), null, false, true, null),
             entry,
             []);
     }
@@ -379,7 +387,7 @@ public sealed class AdminConfigService(
         // binds to no account, so only the entries that are accounts are counted. Where it is not, the
         // accounts shown are inherited and get no handle: there is no stored key of this
         // configuration's own for a later save to put back.
-        var declaredAccounts = (declared[AccountsKey] as JsonArray)?.Count(node => node is JsonObject) ?? 0;
+        var declaredAccounts = (declared[ConfigKeys.Accounts] as JsonArray)?.Count(node => node is JsonObject) ?? 0;
 
         // AccountsImpl rather than Accounts: the label is not on IAccountSettings and must not be
         // put there, and this is the one path that already knows the concrete type.
@@ -431,17 +439,20 @@ public sealed class AdminConfigService(
 
         foreach (var (key, value) in declared)
         {
-            if (string.Equals(key, GeneralKey, StringComparison.OrdinalIgnoreCase) && value is JsonObject general)
+            // A General that is null - YAML's 'General:' with everything under it commented out -
+            // declares nothing, as the merge reads it too: the configuration inherits every general
+            // setting, and a save writes no General for it.
+            if (string.Equals(key, ConfigKeys.General, StringComparison.OrdinalIgnoreCase) && value is JsonObject general)
             {
                 keys.AddRange(general
                     .Where(setting => GeneralProperties.ContainsKey(setting.Key))
                     // Spelled as the settings class spells it, so a differently-cased file still
                     // hands the editor keys it can send back.
-                    .Select(setting => $"{GeneralKey}.{GeneralProperties[setting.Key].Name}"));
+                    .Select(setting => $"{ConfigKeys.General}.{GeneralProperties[setting.Key].Name}"));
             }
-            else if (string.Equals(key, AccountsKey, StringComparison.OrdinalIgnoreCase))
+            else if (string.Equals(key, ConfigKeys.Accounts, StringComparison.OrdinalIgnoreCase))
             {
-                keys.Add(AccountsKey);
+                keys.Add(ConfigKeys.Accounts);
             }
         }
 
@@ -458,7 +469,7 @@ public sealed class AdminConfigService(
         // cannot show a single photo. Refused by name here because nothing later refuses it: no
         // accounts is a state ImmichFrame can run in - an instance nothing has configured yet starts
         // in it - so the settings bind and validate without one, and this save would go through.
-        if (root.GetValueOrDefault(AccountsKey) is not List<Dictionary<string, object?>> { Count: > 0 })
+        if (root.GetValueOrDefault(ConfigKeys.Accounts) is not List<Dictionary<string, object?>> { Count: > 0 })
         {
             throw new SettingsNotValidException(
                 "The default configuration must declare at least one Immich account. It is what every " +
@@ -486,7 +497,7 @@ public sealed class AdminConfigService(
 
         if (profiles.Count > 0)
         {
-            root[ProfilesKey] = profiles;
+            root[ConfigKeys.Profiles] = profiles;
         }
 
         return root;
@@ -500,23 +511,23 @@ public sealed class AdminConfigService(
         AdminConfigEntryDto entry, JsonObject? declared,
         IReadOnlyDictionary<string, StoredAccount> storedById, string? profileName)
     {
-        var storedGeneral = declared?[GeneralKey] as JsonObject;
+        var storedGeneral = declared?[ConfigKeys.General] as JsonObject;
 
         Dictionary<string, object?>? general = null;
         List<Dictionary<string, object?>>? accounts = null;
 
         foreach (var key in entry.DeclaredKeys ?? [])
         {
-            if (key.StartsWith($"{GeneralKey}.", StringComparison.OrdinalIgnoreCase))
+            if (key.StartsWith($"{ConfigKeys.General}.", StringComparison.OrdinalIgnoreCase))
             {
-                var name = key[(GeneralKey.Length + 1)..];
+                var name = key[(ConfigKeys.General.Length + 1)..];
 
                 if (!GeneralProperties.TryGetValue(name, out var property))
                 {
                     throw new SettingsNotValidException($"'{key}' is not a setting ImmichFrame knows about.");
                 }
 
-                var value = GeneralValue(property.Name, entry.General, storedGeneral);
+                var value = GeneralValue(property.Name, entry.General, storedGeneral, profileName);
 
                 if (GeneralSecrets.Contains(property.Name) && string.IsNullOrWhiteSpace(value as string))
                 {
@@ -539,7 +550,7 @@ public sealed class AdminConfigService(
                 general ??= [];
                 general[property.Name] = value;
             }
-            else if (string.Equals(key, AccountsKey, StringComparison.OrdinalIgnoreCase))
+            else if (string.Equals(key, ConfigKeys.Accounts, StringComparison.OrdinalIgnoreCase))
             {
                 accounts = Accounts(entry.Accounts, storedById, profileName);
             }
@@ -552,21 +563,43 @@ public sealed class AdminConfigService(
         // Assembled in the order the settings files use rather than the order the keys arrived in,
         // so a save cannot shuffle the file about.
         var result = new Dictionary<string, object?>();
-        if (general is not null) result[GeneralKey] = general;
-        if (accounts is not null) result[AccountsKey] = accounts;
+        if (general is not null) result[ConfigKeys.General] = general;
+        if (accounts is not null) result[ConfigKeys.Accounts] = accounts;
 
         return result;
     }
 
-    private static object? GeneralValue(string name, AdminGeneralSettingsDto? general, JsonObject? stored)
+    private static object? GeneralValue(
+        string name, AdminGeneralSettingsDto? general, JsonObject? stored, string? profileName)
     {
         var value = ReadProperty(general, name);
 
-        if (!GeneralSecrets.Contains(name)) return value;
+        if (!GeneralSecrets.Contains(name) || !AdminSecret.KeepsStored(value as string)) return value;
 
         // Kept only when this configuration already declares it. Falling back to the merged value
         // would write an inherited secret into a profile as an override of its own.
-        return AdminSecret.KeepsStored(value as string) ? stored?[name]?.GetValue<string>() : value;
+        //
+        // And refused on a profile that declares nothing under that key, because there is nothing
+        // to keep. Read back as null instead, the keep was written as the explicit null that
+        // overrides an inherited secret with none - so a request asking to keep a profile's
+        // authentication secret turned that profile's authentication off. Only an absent key is
+        // refused: one stored as null is the profile's own "no secret here", and keeping it keeps
+        // that. Looked up exactly as the value below is, so a key the file spells in another case -
+        // which the binder ignores, and the declared view does not - is refused too, rather than
+        // read as a null nobody wrote.
+        //
+        // The default configuration is deliberately left out of the refusal. The same null is
+        // written there as no key at all, which is exactly what it had, since nothing is above it to
+        // inherit from - and an instance nothing has configured depends on it: its read declares
+        // every key, the three secrets included, with nothing stored behind any of them.
+        if (profileName is not null && (stored is null || !stored.ContainsKey(name)))
+        {
+            throw new SettingsNotValidException(
+                $"Nothing is stored for {name} in configuration profile '{profileName}' to keep: the profile " +
+                $"does not set one of its own. Send an empty value for no {name} on this profile, or a new value.");
+        }
+
+        return stored?[name]?.GetValue<string>();
     }
 
     /// <summary>
@@ -787,7 +820,12 @@ public sealed class AdminConfigService(
         declared is not null &&
         declared.Any(setting => string.Equals(setting.Key, name, StringComparison.OrdinalIgnoreCase));
 
-    private static bool IsDefault(object defaults, PropertyInfo property, object value)
+    /// <summary>
+    /// Whether <paramref name="value"/> is what <paramref name="property"/> holds on
+    /// <paramref name="defaults"/>. Shared with the conversion of a v1 file on import, so that a save
+    /// and an import agree on which settings are left to their built-in defaults.
+    /// </summary>
+    internal static bool IsDefault(object defaults, PropertyInfo property, object value)
     {
         var fallback = property.GetValue(defaults);
 
@@ -820,7 +858,7 @@ public sealed class AdminConfigService(
     /// </summary>
     private static string Render(ConfigFormat format, Dictionary<string, object?> root) => format switch
     {
-        ConfigFormat.Json => JsonSerializer.Serialize(root, JsonOutput),
+        ConfigFormat.Json => JsonSerializer.Serialize(root, Services.SettingsService.JsonOutput),
         ConfigFormat.Yaml => new SerializerBuilder().WithQuotingNecessaryStrings().Build().Serialize(root),
         _ => throw new ConfigSaveRefusedException($"There is no settings document to write for {format}.")
     };
@@ -840,8 +878,6 @@ public sealed class AdminConfigService(
     /// </summary>
     private static string VersionOf(Services.StoredSettings settings) =>
         settings.Version.ToString(CultureInfo.InvariantCulture);
-
-    private static string FormatName(ConfigFormat format) => format.ToString().ToLowerInvariant();
 
     private static Dictionary<string, PropertyInfo> WritableProperties(Type type) =>
         type.GetProperties(BindingFlags.Public | BindingFlags.Instance)

@@ -7,8 +7,6 @@ namespace ImmichFrame.WebApi.Helpers.Config;
 /// <inheritdoc cref="IConfigDocument"/>
 internal sealed class JsonConfigDocument(string _json) : IConfigDocument
 {
-    internal const string ProfilesKey = "Profiles";
-
     public IReadOnlyCollection<string> ProfileNames =>
         ProfilesOf(Parse())?.Select(profile => profile.Key).ToList() ?? [];
 
@@ -25,7 +23,7 @@ internal sealed class JsonConfigDocument(string _json) : IConfigDocument
         {
             if (!TryFindProfile(root, profileName, out var declared))
             {
-                throw new ProfileNotFoundException($"No configuration profile named '{profileName}' is configured.");
+                throw ConfigCatalog.ProfileNotFound(profileName);
             }
 
             // Detached from the 'Profiles' node, which is about to be dropped - a JsonNode may only
@@ -33,7 +31,7 @@ internal sealed class JsonConfigDocument(string _json) : IConfigDocument
             overrides = declared?.DeepClone();
         }
 
-        root.Remove(ProfilesKey);
+        root.Remove(ConfigKeys.Profiles);
 
         if (overrides is JsonObject overrideObject)
         {
@@ -58,13 +56,13 @@ internal sealed class JsonConfigDocument(string _json) : IConfigDocument
 
         if (string.IsNullOrEmpty(profileName))
         {
-            root.Remove(ProfilesKey);
+            root.Remove(ConfigKeys.Profiles);
             return root;
         }
 
         if (!TryFindProfile(root, profileName, out var declared))
         {
-            throw new ProfileNotFoundException($"No configuration profile named '{profileName}' is configured.");
+            throw ConfigCatalog.ProfileNotFound(profileName);
         }
 
         // 'empty: null' is a declared profile that overrides nothing, not a missing one.
@@ -89,10 +87,15 @@ internal sealed class JsonConfigDocument(string _json) : IConfigDocument
 
     private static JsonObject? ProfilesOf(JsonObject root)
     {
-        if (!root.TryGetPropertyValue(ProfilesKey, out var profiles) || profiles is null) return null;
+        if (!root.TryGetPropertyValue(ConfigKeys.Profiles, out var profiles) || profiles is null) return null;
+
+        // The empty string names no profiles either - YAML's 'Profiles: ''' has always been read that
+        // way. Refusing it sent the whole file down the loader's v1 fallback, which binds a
+        // current-schema file to a single account with no server and no key.
+        if (profiles is JsonValue value && value.TryGetValue<string>(out var text) && text.Length == 0) return null;
 
         return profiles as JsonObject
-               ?? throw new SettingsNotValidException($"'{ProfilesKey}' must be an object mapping profile names to their settings.");
+               ?? throw new SettingsNotValidException($"'{ConfigKeys.Profiles}' must be an object mapping profile names to their settings.");
     }
 
     private static bool TryFindProfile(JsonObject root, string profileName, out JsonNode? overrides)
@@ -117,18 +120,28 @@ internal sealed class JsonConfigDocument(string _json) : IConfigDocument
     {
         foreach (var (key, value) in overrides)
         {
-            if (target.TryGetPropertyValue(key, out var existing)
-                && existing is JsonObject existingObject
-                && value is JsonObject overrideObject)
+            if (target.TryGetPropertyValue(key, out var existing) && existing is JsonObject existingObject)
             {
                 // Both sides are objects - 'General', say - so merge key by key and let the profile
                 // name only the settings it actually changes.
-                Merge(existingObject, overrideObject);
-                continue;
+                if (value is JsonObject overrideObject)
+                {
+                    Merge(existingObject, overrideObject);
+                    continue;
+                }
+
+                // A null over an object names none of its settings, so it changes none of them -
+                // '"General": null' is the profile saying nothing about General, not a General with
+                // nothing in it. Replacing the base section with it dropped every value the profile
+                // inherited, the frame's AuthenticationSecret among them, so the profile served
+                // without one; an explicit '"AuthenticationSecret": null' inside the section is how a
+                // profile asks for that, and that is a value, merged as one.
+                if (value is null) continue;
             }
 
             // Everything else replaces the base value outright, lists such as 'Accounts' included:
-            // there is no unambiguous way to merge two lists.
+            // there is no unambiguous way to merge two lists, so a null over a list is a profile
+            // declaring an empty one.
             target[key] = value?.DeepClone();
         }
     }

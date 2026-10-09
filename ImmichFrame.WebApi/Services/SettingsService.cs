@@ -91,6 +91,13 @@ public class SettingsService(
     /// <summary>
     /// The stored configuration, bound and validated into the catalog everything else injects. This
     /// is the seed <see cref="SwappableConfigCatalog"/> runs on first use.
+    /// <para>
+    /// Nothing the stored document says makes this throw. Settings that do not validate are run as
+    /// they are, and settings that cannot even be bound are run as no configuration at all, each with
+    /// a Critical line: a seed that throws fails every request it is run for, the admin editor's own
+    /// included. What still throws is the database failing to answer, which may pass - and the
+    /// catalog runs the seed again on the next access.
+    /// </para>
     /// </summary>
     public IConfigCatalog LoadCatalog()
     {
@@ -99,17 +106,31 @@ public class SettingsService(
         // An unconfigured instance has no document to bind. An empty catalog rather than a throw:
         // the slideshow reports that nothing is configured and the admin editor is reachable to fix
         // it, which is the whole point of starting without a configuration.
-        if (IsUnconfigured)
-        {
-            return new ConfigCatalog(new Models.ServerSettings
-            {
-                GeneralSettingsImpl = new Models.GeneralSettings(),
-                AccountsImpl = []
-            });
-        }
+        if (IsUnconfigured) return Unconfigured();
 
-        var document = ConfigLoader.CreateDocument(stored.Format, stored.Text);
-        var catalog = ConfigLoader.BuildCatalog(document);
+        IConfigDocument document;
+        ConfigCatalog catalog;
+
+        try
+        {
+            document = ConfigLoader.CreateDocument(stored.Format, stored.Text);
+            catalog = ConfigLoader.BuildCatalog(document);
+        }
+        catch (Exception ex)
+        {
+            // Stored settings that no longer bind - a profile named after a path a later version
+            // reserved, say - hold no configuration that could run even in part, unlike settings
+            // that only fail validation. So they are served as an instance nothing has configured:
+            // no account, so no photo, and no calendar, weather key or webhook either - which is
+            // also why the AuthenticationSecret they lose guards nothing. Thrown, the failure was
+            // the same on every request, since the same document fails the same way however often
+            // it is read.
+            _logger.LogCritical(
+                "Stored settings could not be loaded ({message}). ImmichFrame is running as if nothing were configured - correct them in the admin editor at /admin.",
+                ex.Message);
+
+            return Unconfigured();
+        }
 
         WarnAboutEmptyAccountEntries(document);
 
@@ -129,16 +150,21 @@ public class SettingsService(
         return catalog;
     }
 
+    /// <summary>The catalog of an instance nothing has configured: the defaults, and no account.</summary>
+    private static ConfigCatalog Unconfigured() => new(new Models.ServerSettings
+    {
+        GeneralSettingsImpl = new Models.GeneralSettings(),
+        AccountsImpl = []
+    });
+
     /// <summary>
     /// Warns about every empty entry - a null in JSON, a bare <c>-</c> in YAML - in an account list the
     /// stored document declares. <c>ServerSettings</c> drops each one, so the frame runs on the
     /// accounts around it; this is what keeps that from happening silently.
     /// <para>
-    /// A warning rather than a validation failure. <see cref="ConfigCatalog.Validate"/> validates the
-    /// default configuration first and stops at the first configuration that throws, so refusing an
-    /// empty entry there would skip <c>ValidateAndInitialize</c> for every profile after it - their
-    /// ApiKeyFiles never read, their accounts left with no key - and would put an entry that is
-    /// already ignored in the Critical line in place of whatever is actually wrong.
+    /// A warning rather than a validation failure, because the entry is already ignored: the frame
+    /// runs on the accounts either side of it exactly as it would without it, so holding one does not
+    /// make the stored settings invalid, and the Critical line stays for whatever actually does.
     /// </para>
     /// <para>
     /// Read off what each configuration declares rather than off the bound settings, because a
@@ -164,7 +190,7 @@ public class SettingsService(
                 continue;
             }
 
-            if (declared["Accounts"] is not JsonArray accounts) continue;
+            if (declared[ConfigKeys.Accounts] is not JsonArray accounts) continue;
 
             for (var index = 0; index < accounts.Count; index++)
             {
@@ -300,13 +326,22 @@ public class SettingsService(
     /// document that binds back to defaults. The interface property names are the schema, and the
     /// current settings classes implement the same interfaces, so a name match is the mapping.
     /// </para>
+    /// <para>
+    /// Written as sparsely as the admin editor writes an account: a setting is stored only where it
+    /// differs from today's built-in default. Storing every one recorded each default as a choice the
+    /// file had made - the empty weather key among them - so no later change to a default could reach
+    /// an installation that started from a v1 file. The frame runs on the same values either way,
+    /// since a setting left out binds to the very default it was equal to.
+    /// </para>
     /// </summary>
     private static string ConvertLegacy(string text, ConfigFormat format)
     {
-        var v1 = format == ConfigFormat.Yaml
-            ? new DeserializerBuilder().IgnoreUnmatchedProperties().Build().Deserialize<ServerSettingsV1>(text)
-            : JsonSerializer.Deserialize<ServerSettingsV1>(text)
-              ?? throw new SettingsNotValidException("The settings file contained no settings.");
+        // Either reader answers a document holding nothing - an empty YAML file, JSON's bare null -
+        // with null, and the adapter below dereferences it.
+        var v1 = (format == ConfigFormat.Yaml
+                     ? new DeserializerBuilder().IgnoreUnmatchedProperties().Build().Deserialize<ServerSettingsV1>(text)
+                     : JsonSerializer.Deserialize<ServerSettingsV1>(text))
+                 ?? throw new SettingsNotValidException("The settings file contained no settings.");
 
         var legacy = new ServerSettingsV1Adapter(v1);
 
@@ -317,16 +352,42 @@ public class SettingsService(
         {
             var target = new Models.ServerAccountSettings();
             CopyMatching(account, target);
-            return target;
+            return NotDefault(target, new Models.ServerAccountSettings());
         }).ToList();
 
         return JsonSerializer.Serialize(
-            new Models.ServerSettings { GeneralSettingsImpl = general, AccountsImpl = accounts },
-            new JsonSerializerOptions
+            new Dictionary<string, object?>
             {
-                WriteIndented = true,
-                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
-            });
+                [ConfigKeys.General] = NotDefault(general, new Models.GeneralSettings()),
+                [ConfigKeys.Accounts] = accounts
+            },
+            JsonOutput);
+    }
+
+    /// <summary>
+    /// The settings on <paramref name="settings"/> that differ from <paramref name="defaults"/>, by
+    /// name - compared as <see cref="AdminConfigService.IsDefault"/> compares them for a save, so an
+    /// import and a save agree on what is left to a default.
+    /// </summary>
+    private static Dictionary<string, object?> NotDefault(object settings, object defaults)
+    {
+        var differing = new Dictionary<string, object?>();
+
+        foreach (var property in settings.GetType().GetProperties().Where(p => p.CanRead && p.CanWrite))
+        {
+            var value = property.GetValue(settings);
+
+            // A null is a default only where the default is null as well. A v1 file's explicit
+            // "ClockFormat": null left out would bind to "hh:mm" instead, so it is stored as the
+            // null it is.
+            var isDefault = value is null
+                ? property.GetValue(defaults) is null
+                : AdminConfigService.IsDefault(defaults, property, value);
+
+            if (!isDefault) differing[property.Name] = value;
+        }
+
+        return differing;
     }
 
     /// <summary>Copies every readable property of <paramref name="from"/> onto the same-named writable property of <paramref name="to"/>.</summary>
@@ -366,6 +427,19 @@ public class SettingsService(
     }
 
     internal static string FormatName(ConfigFormat format) => format.ToString().ToLowerInvariant();
+
+    /// <summary>
+    /// How every JSON settings document is written - converted from a v1 file here, or saved by the
+    /// admin editor. The relaxed encoder, because the document is meant to stay readable to a person:
+    /// the default escapes everything outside ASCII, so one save through the editor would turn
+    /// non-English album names and tags into runs of \uXXXX - readable to the parser, and to nobody
+    /// else.
+    /// </summary>
+    internal static readonly JsonSerializerOptions JsonOutput = new()
+    {
+        WriteIndented = true,
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
 
     private static ConfigFormat ParseFormat(string? stored) =>
         Enum.TryParse<ConfigFormat>(stored, ignoreCase: true, out var format) ? format : ConfigFormat.Json;

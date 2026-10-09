@@ -10,7 +10,8 @@ namespace ImmichFrame.WebApi.Helpers.Config;
 /// <para>
 /// The seed is only run the first time a catalog is actually needed, so registering this never
 /// touches the settings file on its own - a test that supplies its own catalog still starts without
-/// reading from disk.
+/// reading from disk. A seed that throws is run again the next time instead of being kept, failure
+/// and all; see <see cref="Current"/>.
 /// </para>
 /// <para>
 /// One type rather than a holder plus a separate swapper: replacing the catalog without dropping
@@ -24,7 +25,38 @@ public sealed class SwappableConfigCatalog(Func<IConfigCatalog> _seed, Func<Prof
 {
     private Lazy<IConfigCatalog> _current = new(_seed, LazyThreadSafetyMode.ExecutionAndPublication);
 
-    private IConfigCatalog Current => Volatile.Read(ref _current).Value;
+    /// <summary>
+    /// The catalog in force, seeding it on first use.
+    /// <para>
+    /// A <c>Lazy</c> in this mode caches the exception its factory threw and rethrows it on every
+    /// access after, so a seed that failed once - the settings database locked, or unreadable for a
+    /// moment - failed every request for the life of the process, the editor's own among them, until
+    /// a save replaced the catalog. A faulted one is therefore swapped for a fresh one, and the next
+    /// access runs the seed again; the access that met the failure still reports it. Swapped only if
+    /// it is still the one in force, so a <see cref="Swap"/> landing in between is never undone. Not
+    /// <see cref="LazyThreadSafetyMode.PublicationOnly"/>, which would also stop caching failures, but
+    /// at the price of running the seed once per concurrent first request - each reading the
+    /// database, reading every key file and logging what it found.
+    /// </para>
+    /// </summary>
+    private IConfigCatalog Current
+    {
+        get
+        {
+            var current = Volatile.Read(ref _current);
+
+            try
+            {
+                return current.Value;
+            }
+            catch
+            {
+                Interlocked.CompareExchange(
+                    ref _current, new Lazy<IConfigCatalog>(_seed, LazyThreadSafetyMode.ExecutionAndPublication), current);
+                throw;
+            }
+        }
+    }
 
     /// <summary>
     /// Serves <paramref name="replacement"/> from here on: every consumer of

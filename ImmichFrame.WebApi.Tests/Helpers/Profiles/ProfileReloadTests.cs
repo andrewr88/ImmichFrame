@@ -86,6 +86,31 @@ public class ProfileReloadTests
     }
 
     /// <summary>
+    /// A seed that fails is run again on the next access, rather than having its failure kept for the
+    /// life of the process. A <c>Lazy</c> caches the exception its factory threw, so a settings
+    /// database that could not be read once failed every request after it - the editor's own among
+    /// them, since they resolve the catalog too - until a save replaced it, or a restart.
+    /// </summary>
+    [Test]
+    public void SeedThatFailsIsRunAgainOnTheNextAccess()
+    {
+        var attempts = 0;
+        var catalog = new SwappableConfigCatalog(() =>
+        {
+            if (attempts++ == 0) throw new InvalidOperationException("The settings database is locked.");
+
+            return Catalog(BeforeInterval, withKitchen: true);
+        }, () => _registry);
+
+        Assert.That(() => catalog.Default, Throws.InvalidOperationException, "the access the failure happened on sees it");
+        Assert.That(catalog.Default.GeneralSettings.Interval, Is.EqualTo(BeforeInterval), "the next one runs the seed again");
+
+        _ = catalog.ProfileNames;
+
+        Assert.That(attempts, Is.EqualTo(2), "and the catalog that seed built is kept, like any other");
+    }
+
+    /// <summary>
     /// The other half of the same promise, which held only on paper: <c>Program.cs</c> migrates the
     /// settings database at startup unless a host has a catalog of its own, and it asked whether a
     /// <see cref="SwappableConfigCatalog"/> was registered - which one always is, under whatever the

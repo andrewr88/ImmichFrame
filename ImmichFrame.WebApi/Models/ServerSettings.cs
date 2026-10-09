@@ -2,6 +2,7 @@
 using ImmichFrame.Core.Exceptions;
 using ImmichFrame.Core.Interfaces;
 using ImmichFrame.WebApi.Helpers;
+using ImmichFrame.WebApi.Helpers.Config;
 using YamlDotNet.Serialization;
 
 namespace ImmichFrame.WebApi.Models;
@@ -51,13 +52,35 @@ public class ServerSettings : IServerSettings, IConfigSettable
     [YamlIgnore]
     public IEnumerable<IAccountSettings> Accounts => AccountsImpl;
 
+    /// <summary>
+    /// Validates the general settings and every account, each whatever the ones before it threw -
+    /// validating an account is also what reads its ApiKeyFile into its key, so one that failed used
+    /// to leave every account after it with none. Every failure is then thrown at once, in an
+    /// <see cref="AggregateSettingsNotValidException"/>.
+    /// </summary>
     public void Validate()
     {
-        GeneralSettings.Validate();
+        var failures = new List<Exception>();
+
+        Collect(GeneralSettings.Validate);
 
         foreach (var account in Accounts)
         {
-            account.ValidateAndInitialize();
+            Collect(account.ValidateAndInitialize);
+        }
+
+        if (failures.Count > 0) throw new AggregateSettingsNotValidException(failures);
+
+        void Collect(Action validate)
+        {
+            try
+            {
+                validate();
+            }
+            catch (Exception ex)
+            {
+                failures.Add(ex);
+            }
         }
     }
 }

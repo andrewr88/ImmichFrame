@@ -5,6 +5,8 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using AwesomeAssertions;
+using ImmichFrame.WebApi.Helpers;
 using ImmichFrame.WebApi.Helpers.Admin;
 using ImmichFrame.WebApi.Helpers.Config;
 using ImmichFrame.WebApi.Services;
@@ -18,6 +20,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;
 using NUnit.Framework;
+using YamlDotNet.Serialization;
 
 namespace ImmichFrame.WebApi.Tests.Controllers;
 
@@ -67,6 +70,32 @@ public class AdminConfigControllerTests
         }
         """;
 
+    /// <summary>
+    /// <see cref="SettingsJson"/> written as YAML, key for key, for the tests that run against both
+    /// formats. Not <see cref="SettingsYaml"/>, which is a smaller fixture of its own: the YAML-only
+    /// tests need a frame with no secret.
+    /// </summary>
+    private const string SettingsAsYaml = """
+        General:
+          Interval: 45
+          ShowClock: true
+          PrimaryColor: '#base'
+          AuthenticationSecret: frame-secret
+          WeatherApiKey: weather-key
+          Webhook: https://hook.example.com/base
+        Accounts:
+        - ImmichServerUrl: http://mock-immich-server.com
+          ApiKey: base-api-key
+        Profiles:
+          kitchen:
+            General:
+              Interval: 10
+              ShowClock: false
+          living-room:
+            General:
+              PrimaryColor: '#living'
+        """;
+
     private const string SettingsYaml = """
         General:
           Interval: 45
@@ -97,6 +126,18 @@ public class AdminConfigControllerTests
             }
           ]
         }
+        """;
+
+    /// <summary><see cref="TwoAccountsJson"/> written as YAML, key for key.</summary>
+    private const string TwoAccountsAsYaml = """
+        General:
+          Interval: 45
+        Accounts:
+        - ImmichServerUrl: http://server-x.example.com
+          ApiKey: key-x
+          ShowVideos: true
+        - ImmichServerUrl: http://server-y.example.com
+          ApiKey: key-y
         """;
 
     /// <summary>
@@ -138,6 +179,28 @@ public class AdminConfigControllerTests
             }
           }
         }
+        """;
+
+    /// <summary>
+    /// <see cref="SharedAccountsJson"/> written as YAML, key for key - the two settings spelled out at
+    /// their built-in defaults included, since they are what makes "this entry declared it" visible.
+    /// </summary>
+    private const string SharedAccountsAsYaml = """
+        General:
+          Interval: 45
+        Accounts:
+        - ImmichServerUrl: http://server-x.example.com
+          ApiKey: key-x
+          ShowFavorites: false
+        Profiles:
+          kitchen:
+            General:
+              Interval: 10
+          studio:
+            Accounts:
+            - ImmichServerUrl: http://server-z.example.com
+              ApiKey: key-z
+              ShowArchived: false
         """;
 
     /// <summary>
@@ -320,10 +383,11 @@ public class AdminConfigControllerTests
     /// The read half of the sparse-override problem: a profile's own keys have to be
     /// distinguishable from the ones it inherits, or the editor cannot show which is which.
     /// </summary>
-    [Test]
-    public async Task GetConfig_SeparatesWhatAProfileDeclaresFromWhatItInherits()
+    [TestCase("Settings.json", SettingsJson, TestName = "{m}({0})")]
+    [TestCase("Settings.yml", SettingsAsYaml, TestName = "{m}({0})")]
+    public async Task GetConfig_SeparatesWhatAProfileDeclaresFromWhatItInherits(string fileName, string settings)
     {
-        WriteSettings("Settings.json", SettingsJson);
+        WriteSettings(fileName, settings);
         using var factory = CreateFactory();
 
         var config = await GetConfig(factory.CreateClient());
@@ -382,10 +446,11 @@ public class AdminConfigControllerTests
         });
     }
 
-    [Test]
-    public async Task SaveConfig_OmittedSecretsAreKeptAndSuppliedOnesReplaceThem()
+    [TestCase("Settings.json", SettingsJson, TestName = "{m}({0})")]
+    [TestCase("Settings.yml", SettingsAsYaml, TestName = "{m}({0})")]
+    public async Task SaveConfig_OmittedSecretsAreKeptAndSuppliedOnesReplaceThem(string fileName, string settings)
     {
-        WriteSettings("Settings.json", SettingsJson);
+        WriteSettings(fileName, settings);
         using var factory = CreateFactory();
         var client = factory.CreateClient();
 
@@ -397,7 +462,7 @@ public class AdminConfigControllerTests
         config.Default.General.AuthenticationSecret = AdminSecret.Placeholder;
 
         var response = await Put(client, config);
-        var saved = JsonNode.Parse(StoredText(factory));
+        var saved = StoredDocument(factory);
 
         Assert.Multiple(() =>
         {
@@ -531,6 +596,160 @@ public class AdminConfigControllerTests
             Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
             Assert.That(general.ContainsKey(nameof(GeneralSettings.AuthenticationSecret)), Is.True);
             Assert.That(general[nameof(GeneralSettings.AuthenticationSecret)], Is.Null);
+        });
+    }
+
+    /// <summary>
+    /// "Keep what is stored" on a profile that stores nothing. The editor only sends the masking
+    /// placeholder for a secret the profile already declares, but the endpoint can be sent it - or
+    /// nothing at all - for a secret the profile inherits. That was resolved against the profile's own
+    /// settings, found nothing, and written as the explicit null that overrides an inherited secret
+    /// with none: a request asking to keep the frame's secret turned its authentication off. There is
+    /// nothing to keep, so it is refused, with the stored settings and the running profile untouched.
+    /// </summary>
+    [TestCase(AdminSecret.Placeholder, TestName = "SaveConfig_ProfileKeepingAnInheritedSecretWithThePlaceholder_IsRefused")]
+    [TestCase(null, TestName = "SaveConfig_ProfileKeepingAnInheritedSecretByLeavingItOut_IsRefused")]
+    public async Task SaveConfig_ProfileKeepingASecretItDoesNotStore_IsRefused(string? sent)
+    {
+        // Arrange
+        WriteSettings("Settings.json", SettingsJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var before = StoredText(factory);
+        var config = await GetConfig(client);
+        var kitchen = config.Profiles.Single(profile => profile.Name == "kitchen");
+
+        Assume.That(kitchen.DeclaredKeys, Does.Not.Contain("General.AuthenticationSecret"),
+            "the profile has to start out inheriting the secret, or there is a stored one to keep");
+
+        kitchen.General.AuthenticationSecret = sent;
+        config = config with
+        {
+            Profiles =
+            [
+                .. config.Profiles.Select(profile => profile == kitchen
+                    ? kitchen with { DeclaredKeys = [.. kitchen.DeclaredKeys, "General.AuthenticationSecret"] }
+                    : profile)
+            ]
+        };
+
+        // Act
+        var response = await Put(client, config);
+        var problem = await response.Content.ReadAsStringAsync();
+        var frame = await client.GetAsync("/api/Calendar?profile=kitchen");
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+            Assert.That(problem, Does.Contain("Nothing is stored for AuthenticationSecret").And.Contain("'kitchen'"),
+                "the message has to name the secret and the profile");
+            Assert.That(StoredText(factory), Is.EqualTo(before), "a refused save must never reach the store");
+            Assert.That(frame.StatusCode, Is.EqualTo(HttpStatusCode.Unauthorized),
+                "and the running profile still asks for the secret it inherits");
+        });
+    }
+
+    /// <summary>
+    /// The keep that has something to keep goes on working: a secret the profile declares itself,
+    /// sent back masked or left out, is written back exactly as it was stored.
+    /// </summary>
+    [TestCase(AdminSecret.Placeholder, TestName = "SaveConfig_ProfileKeepingItsOwnSecretWithThePlaceholder_KeepsIt")]
+    [TestCase(null, TestName = "SaveConfig_ProfileKeepingItsOwnSecretByLeavingItOut_KeepsIt")]
+    public async Task SaveConfig_ProfileKeepingTheSecretItStores_KeepsIt(string? sent)
+    {
+        // Arrange
+        WriteSettings("Settings.json",
+            SettingsJson.Replace("\"Interval\": 10,", "\"Interval\": 10,\n            \"AuthenticationSecret\": \"kitchen-secret\","));
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var config = await GetConfig(client);
+        var kitchen = config.Profiles.Single(profile => profile.Name == "kitchen");
+
+        Assume.That(kitchen.DeclaredKeys, Does.Contain("General.AuthenticationSecret"),
+            "the fixture has to start out declaring it");
+
+        kitchen.General.AuthenticationSecret = sent;
+
+        // Act
+        var response = await Put(client, config);
+        var body = await response.Content.ReadAsStringAsync();
+
+        using var withTheProfilesSecret = new HttpRequestMessage(HttpMethod.Get, "/api/Calendar?profile=kitchen");
+        withTheProfilesSecret.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "kitchen-secret");
+        var frame = await client.SendAsync(withTheProfilesSecret);
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK), body);
+            Assert.That(KitchenGeneral(factory)[nameof(GeneralSettings.AuthenticationSecret)]?.GetValue<string>(),
+                Is.EqualTo("kitchen-secret"));
+            Assert.That(frame.StatusCode, Is.EqualTo(HttpStatusCode.OK), "the profile still takes its own secret");
+            Assert.That(body, Does.Not.Contain("kitchen-secret"), "and the secret itself never travels");
+        });
+    }
+
+    /// <summary>
+    /// A profile whose <c>General</c> section is there but empty - YAML's <c>General:</c> with its only
+    /// setting commented out, JSON's <c>"General": null</c> - names no general setting, so it runs on
+    /// the default configuration's, the frame's secret included. It used to run on none of them, and
+    /// served without authentication. The editor has to agree on both counts: the read declares
+    /// nothing under <c>General</c> for it, and saving that read unedited changes nothing the frame
+    /// serves.
+    /// </summary>
+    [TestCase("Settings.json", """
+        {
+          "General": { "Interval": 12, "AuthenticationSecret": "frame-secret" },
+          "Accounts": [{ "ImmichServerUrl": "http://mock-immich-server.com", "ApiKey": "base-api-key" }],
+          "Profiles": { "kitchen": { "General": null } }
+        }
+        """, TestName = "Config_JsonProfileWithANullGeneralSection_InheritsTheDefaultsThroughAnUneditedSave")]
+    [TestCase("Settings.yml", """
+        General:
+          Interval: 12
+          AuthenticationSecret: frame-secret
+        Accounts:
+        - ImmichServerUrl: http://mock-immich-server.com
+          ApiKey: base-api-key
+        Profiles:
+          kitchen:
+            General:
+              # AuthenticationSecret: null
+        """, TestName = "Config_YamlProfileWithItsGeneralSectionCommentedOut_InheritsTheDefaultsThroughAnUneditedSave")]
+    public async Task Config_ProfileWithAnEmptyGeneralSection_InheritsTheDefaultsThroughAnUneditedSave(
+        string fileName, string settings)
+    {
+        // Arrange
+        WriteSettings(fileName, settings);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var frameBefore = await client.GetAsync("/api/Calendar?profile=kitchen");
+        var config = await GetConfig(client);
+        var kitchen = config.Profiles.Single(profile => profile.Name == "kitchen");
+
+        // Act
+        var response = await Put(client, config);
+        var body = await response.Content.ReadAsStringAsync();
+        var frameAfter = await client.GetAsync("/api/Calendar?profile=kitchen");
+        var running = factory.Services.GetRequiredService<IConfigCatalog>().Get("kitchen").GeneralSettings;
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(frameBefore.StatusCode, Is.EqualTo(HttpStatusCode.Unauthorized),
+                "the profile inherits the frame's secret");
+            Assert.That(kitchen.DeclaredKeys, Is.Empty, "an empty section declares nothing");
+            Assert.That(kitchen.General.Interval, Is.EqualTo(12), "so the editor shows what the profile inherits");
+            Assert.That(kitchen.General.HasAuthenticationSecret, Is.True);
+
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK), body);
+            Assert.That(frameAfter.StatusCode, Is.EqualTo(HttpStatusCode.Unauthorized),
+                "and an unedited save keeps it asking");
+            Assert.That(running.Interval, Is.EqualTo(12));
         });
     }
 
@@ -946,6 +1165,55 @@ public class AdminConfigControllerTests
         });
     }
 
+    /// <summary>
+    /// A v1 file is converted on import as sparsely as the editor writes: only what differs from the
+    /// built-in defaults is stored. Converted in full, every default was stored as if it had been
+    /// chosen - an empty weather key among them - so a later change to a default could never reach an
+    /// installation that started from a v1 file. A null where the default is not still has to be
+    /// stored, as the null it is: left out, it would bind to the default instead. Either way the frame
+    /// runs on exactly what the v1 file said.
+    /// </summary>
+    [Test]
+    public void FirstRun_LegacySchemaFile_IsStoredWithOnlyWhatDiffersFromTheDefaults()
+    {
+        // Arrange - next to what differs from the defaults: a setting, and a list, spelled out at theirs
+        const string legacy = """
+            {
+              "ImmichServerUrl": "http://mock-immich-server.com",
+              "ApiKey": "base-api-key",
+              "Interval": 12,
+              "ShowClock": false,
+              "ClockFormat": null,
+              "Language": "en",
+              "ShowFavorites": false,
+              "Albums": ["5b3c7d26-1d6c-4c3e-9a3b-6f1d2e8c9a01"],
+              "Tags": []
+            }
+            """;
+        WriteSettings("Settings.json", legacy);
+
+        // Act
+        using var factory = CreateFactory();
+        var stored = JsonNode.Parse(StoredText(factory));
+        var served = factory.Services.GetRequiredService<IConfigCatalog>().Default;
+        var meant = new ServerSettingsV1Adapter(JsonSerializer.Deserialize<ServerSettingsV1>(legacy)!);
+
+        // Assert
+        served.GeneralSettings.Should().BeEquivalentTo(meant.GeneralSettings,
+            "the frame runs on what the v1 file said, defaults and all");
+        served.Accounts.Single().Should().BeEquivalentTo(meant.Accounts.Single());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stored?["General"]?.AsObject().Select(pair => pair.Key),
+                Is.EquivalentTo(new[] { "Interval", "ShowClock", "ClockFormat" }));
+            Assert.That(stored?["General"]?.AsObject().ContainsKey("ClockFormat"), Is.True);
+            Assert.That(stored?["General"]?["ClockFormat"], Is.Null, "the null is stored as one");
+            Assert.That(stored?["Accounts"]?[0]?.AsObject().Select(pair => pair.Key),
+                Is.EquivalentTo(new[] { "ImmichServerUrl", "ApiKey", "Albums" }));
+        });
+    }
+
     [Test]
     public void ReadOnlyConfigurationDirectory_FailsToStartAndNamesTheDirectory()
     {
@@ -1227,16 +1495,55 @@ public class AdminConfigControllerTests
     }
 
     /// <summary>
+    /// Validation goes on past its first failure, so an unreadable key file can now be the second thing
+    /// wrong with a save rather than the first - and it still must not reach the editor in the
+    /// operating system's words. An exception's inner chain only reaches the first failure, so
+    /// searching that alone would pass this one's message, path and all, straight through.
+    /// </summary>
+    [Test]
+    public async Task SaveConfig_UnreadableApiKeyFileBehindAnotherFailure_IsStillRefusedWithoutTheOperatingSystemsMessage()
+    {
+        // Arrange
+        var keyPath = Path.Combine(_directory, "api-key");
+        File.WriteAllText(keyPath, "key-from-a-file\n");
+        WriteSettings("Settings.json",
+            TwoAccountsJson.Replace("\"ApiKey\": \"key-y\"", $"\"ApiKeyFile\": {JsonSerializer.Serialize(keyPath)}"));
+
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var before = StoredText(factory);
+        var config = await GetConfig(client);
+        config.Default.Accounts[0].ImagesFromDays = int.MaxValue;
+        File.Delete(keyPath);
+
+        // Act
+        var response = await Put(client, config);
+        var problem = await response.Content.ReadAsStringAsync();
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+            Assert.That(problem, Does.Contain("could not be read"));
+            Assert.That(problem, Does.Not.Contain("Could not find"));
+            Assert.That(problem, Does.Not.Contain(keyPath));
+            Assert.That(StoredText(factory), Is.EqualTo(before));
+        });
+    }
+
+    /// <summary>
     /// The one that would leak a credential. Delete the first of two accounts and save the survivor
     /// with its key still masked: matching the stored key by position would read slot 0 - the deleted
     /// account's key - and write it under the surviving account's server URL, so ImmichFrame would
     /// start sending server X's API key to server Y. It validates, it swaps in, and the version token
     /// refreshes, so nothing about the save looks wrong.
     /// </summary>
-    [Test]
-    public async Task SaveConfig_DeletingTheFirstAccount_LeavesTheSurvivorWithItsOwnKey()
+    [TestCase("Settings.json", TwoAccountsJson, TestName = "{m}({0})")]
+    [TestCase("Settings.yml", TwoAccountsAsYaml, TestName = "{m}({0})")]
+    public async Task SaveConfig_DeletingTheFirstAccount_LeavesTheSurvivorWithItsOwnKey(string fileName, string settings)
     {
-        WriteSettings("Settings.json", TwoAccountsJson);
+        WriteSettings(fileName, settings);
         using var factory = CreateFactory();
         var client = factory.CreateClient();
 
@@ -1246,7 +1553,7 @@ public class AdminConfigControllerTests
         config = config with { Default = config.Default with { Accounts = [survivor] } };
 
         var response = await Put(client, config);
-        var saved = JsonNode.Parse(StoredText(factory));
+        var saved = StoredDocument(factory);
 
         Assert.Multiple(() =>
         {
@@ -1263,10 +1570,11 @@ public class AdminConfigControllerTests
     /// Reordering is the other half of the same problem, and the handles have to carry the keys with
     /// the accounts rather than with the positions.
     /// </summary>
-    [Test]
-    public async Task SaveConfig_ReorderingAccounts_MovesEachKeyWithItsAccount()
+    [TestCase("Settings.json", TwoAccountsJson, TestName = "{m}({0})")]
+    [TestCase("Settings.yml", TwoAccountsAsYaml, TestName = "{m}({0})")]
+    public async Task SaveConfig_ReorderingAccounts_MovesEachKeyWithItsAccount(string fileName, string settings)
     {
-        WriteSettings("Settings.json", TwoAccountsJson);
+        WriteSettings(fileName, settings);
         using var factory = CreateFactory();
         var client = factory.CreateClient();
 
@@ -1277,7 +1585,7 @@ public class AdminConfigControllerTests
         };
 
         var response = await Put(client, config);
-        var saved = JsonNode.Parse(StoredText(factory));
+        var saved = StoredDocument(factory);
 
         Assert.Multiple(() =>
         {
@@ -1647,11 +1955,13 @@ public class AdminConfigControllerTests
     /// token: the first save rewrites the file, so every handle the second read issues is computed
     /// from a version that did not exist when the first one was.
     /// </summary>
-    [Test]
-    public async Task SaveConfig_UneditedConfigurationSavedTwice_IsWrittenIdenticallyAndStaysSparse()
+    [TestCase("Settings.json", SharedAccountsJson, TestName = "{m}({0})")]
+    [TestCase("Settings.yml", SharedAccountsAsYaml, TestName = "{m}({0})")]
+    public async Task SaveConfig_UneditedConfigurationSavedTwice_IsWrittenIdenticallyAndStaysSparse(
+        string fileName, string settings)
     {
         // Arrange
-        WriteSettings("Settings.json", SharedAccountsJson);
+        WriteSettings(fileName, settings);
         using var factory = CreateFactory();
         var client = factory.CreateClient();
 
@@ -1662,7 +1972,7 @@ public class AdminConfigControllerTests
         var second = await Put(client, await GetConfig(client));
         var afterSecond = StoredText(factory);
 
-        var saved = JsonNode.Parse(afterSecond);
+        var saved = StoredDocument(factory);
 
         // Assert
         Assert.Multiple(() =>
@@ -2063,11 +2373,9 @@ public class AdminConfigControllerTests
     /// An empty entry is dropped rather than refused, so the startup log is where it shows: by
     /// position, against the configuration that declares it - a profile inheriting the default
     /// configuration's list is not blamed for that list's empty entry - and as a warning that leaves
-    /// validation to run on. Refusing it in validation would have stopped there: the configurations
-    /// are validated in turn and the first failure ends it, so every profile after the default
-    /// configuration would have gone unvalidated, its key file never read and its account left with
-    /// no key, and an entry that is already ignored would have taken the Critical line from whatever
-    /// is actually wrong.
+    /// validation to run on. An entry that is already ignored does not make the stored settings
+    /// invalid, so it has no place in the Critical line, and every profile is still validated - its
+    /// key file read - around it.
     /// </summary>
     [Test]
     public void Config_ImportedEmptyAccountEntries_AreEachNamedWithoutStoppingValidation()
@@ -2100,6 +2408,116 @@ public class AdminConfigControllerTests
                 "a profile validated after the empty entries still has its key file read");
             Assert.That(critical, Has.None.Contains("not valid"),
                 "an entry that is ignored does not make the stored settings invalid");
+        });
+    }
+
+    /// <summary>
+    /// Stored settings that do not validate are still run, because the editor that fixes them is
+    /// served by this very process: the failure is logged as Critical and the frame goes on serving.
+    /// The log has to name every configuration that fails rather than the first, and every account
+    /// has to have been validated - which is also what reads an ApiKeyFile into its key. Validation
+    /// used to stop at the first failure, so here every account after the default configuration's
+    /// first one ran with an empty key, the profiles' included.
+    /// </summary>
+    [Test]
+    public async Task Config_StoredSettingsThatDoNotValidate_AreLoggedAsCriticalAndServedAnyway()
+    {
+        // Arrange
+        var secondKey = Path.Combine(_directory, "second-key");
+        var kitchenKey = Path.Combine(_directory, "kitchen-key");
+        File.WriteAllText(secondKey, "key-from-the-second-file\n");
+        File.WriteAllText(kitchenKey, "key-from-the-kitchen-file\n");
+
+        WriteSettings("Settings.json", $$"""
+            {
+              "General": { "Interval": 45 },
+              "Accounts": [
+                { "ImmichServerUrl": "http://mock-immich-server.com", "ApiKey": "base-api-key", "ImagesFromDays": 99999 },
+                { "ImmichServerUrl": "http://mock-immich-server.com", "ApiKeyFile": {{JsonSerializer.Serialize(secondKey)}} }
+              ],
+              "Profiles": {
+                "kitchen": {
+                  "Accounts": [{ "ImmichServerUrl": "http://mock-immich-server.com", "ApiKeyFile": {{JsonSerializer.Serialize(kitchenKey)}} }]
+                },
+                "hallway": {
+                  "Accounts": [{ "ImmichServerUrl": "http://mock-immich-server.com" }]
+                }
+              }
+            }
+            """);
+
+        var logs = new LogSink();
+        using var factory = CreateFactory(logs: logs);
+        var client = factory.CreateClient();
+
+        // Act - the first request seeds the catalog from the stored settings, and validates them
+        var frame = await client.GetAsync("/api/Config");
+        var editor = await Send(client, HttpMethod.Get, ConfigUrl);
+        var catalog = factory.Services.GetRequiredService<IConfigCatalog>();
+
+        var critical = logs.Entries.Where(entry => entry.Level == LogLevel.Critical).Select(entry => entry.Message).ToList();
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(critical, Has.Exactly(1).Matches<string>(message =>
+                    message.Contains("default configuration") && message.Contains("ImagesFromDays") &&
+                    message.Contains("'hallway'") && message.Contains("Either ApiKey or ApiKeyFile")),
+                "one Critical line, naming both configurations that fail and what is wrong with each");
+            Assert.That(frame.StatusCode, Is.EqualTo(HttpStatusCode.OK), "the frame keeps running");
+            Assert.That(editor.StatusCode, Is.EqualTo(HttpStatusCode.OK), "and so does the editor that fixes it");
+
+            Assert.That(catalog.Default.Accounts.Select(account => account.ApiKey),
+                Is.EqualTo(new[] { "base-api-key", "key-from-the-second-file" }),
+                "an account after the one that fails still has its key file read");
+            Assert.That(catalog.Get("kitchen").Accounts.Single().ApiKey, Is.EqualTo("key-from-the-kitchen-file"),
+                "and so does a profile validated after the configuration that fails");
+        });
+    }
+
+    /// <summary>
+    /// Stored settings that cannot even be bound - here a profile named after a path a later version
+    /// reserved, which is what an upgrade can leave behind - hold no configuration that could run in
+    /// part, so they are served as an instance nothing has configured: one Critical line saying why,
+    /// and a frame with nothing to show. Nothing is behind the missing secret either - no account, no
+    /// calendar, no weather key. Thrown instead, from the catalog's seed, the failure took every
+    /// request with it, the editor's that could correct the name among them, and the same document
+    /// fails the same way however often it is read.
+    /// </summary>
+    [Test]
+    public async Task Config_StoredSettingsThatCannotBeBound_AreServedAsUnconfiguredWithACriticalLine()
+    {
+        // Arrange - stored past the checks a save makes, by a run before this one
+        WriteSettings("Settings.json", SettingsJson);
+
+        using (var earlier = CreateFactory())
+        {
+            var store = earlier.Services.GetRequiredService<SettingsService>();
+            store.Save(SettingsJson.Replace("\"living-room\"", "\"admin\""), ConfigFormat.Json, store.Read().Version);
+        }
+
+        var logs = new LogSink();
+        using var factory = CreateFactory(logs: logs);
+        var client = factory.CreateClient();
+
+        // Act - the first request seeds the catalog from the stored settings
+        var frame = await client.GetAsync("/api/Asset");
+        var editor = await Send(client, HttpMethod.Get, ConfigUrl);
+        var served = factory.Services.GetRequiredService<IConfigCatalog>();
+        var accounts = served.Default.Accounts.ToList();
+        var profiles = served.ProfileNames;
+
+        var critical = logs.Entries.Where(entry => entry.Level == LogLevel.Critical).Select(entry => entry.Message).ToList();
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(frame.StatusCode, Is.EqualTo(HttpStatusCode.OK), "a frame with nothing to show is not a failed one");
+            Assert.That(editor.StatusCode, Is.EqualTo(HttpStatusCode.OK), "and the editor that renames the profile answers");
+            Assert.That(accounts, Is.Empty);
+            Assert.That(profiles, Is.Empty);
+            Assert.That(critical, Has.Exactly(1).Matches<string>(message => message.Contains("'admin' is a reserved name")),
+                "the operator is told why nothing is configured");
         });
     }
 
@@ -2610,6 +3028,25 @@ public class AdminConfigControllerTests
     /// <summary>The format the stored document is written in - a YAML import stays YAML.</summary>
     private static ConfigFormat StoredFormat(WebApplicationFactory<Program> factory) =>
         factory.Services.GetRequiredService<SettingsService>().Read().Format;
+
+    /// <summary>
+    /// The stored document as a JSON tree whichever format it is written in, for the tests that run
+    /// against both. A YAML document's scalars all arrive as strings - YAML resolves no types until it
+    /// is bound - so read keys and strings off this, never numbers or booleans.
+    /// </summary>
+    private static JsonNode? StoredDocument(WebApplicationFactory<Program> factory) =>
+        StoredFormat(factory) == ConfigFormat.Yaml
+            ? FromYaml(new DeserializerBuilder().Build().Deserialize<object?>(StoredText(factory)))
+            : JsonNode.Parse(StoredText(factory));
+
+    private static JsonNode? FromYaml(object? node) => node switch
+    {
+        IDictionary<object, object?> mapping => new JsonObject(
+            mapping.Select(pair => KeyValuePair.Create((string)pair.Key, FromYaml(pair.Value)))),
+        IList<object?> sequence => new JsonArray(sequence.Select(FromYaml).ToArray()),
+        null => null,
+        _ => JsonValue.Create(node.ToString())
+    };
 
     private string SettingsPath(string name) => Path.Combine(_directory, name);
 

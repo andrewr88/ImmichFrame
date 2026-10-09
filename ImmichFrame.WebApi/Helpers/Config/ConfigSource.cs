@@ -9,8 +9,10 @@ public enum ConfigFormat
     Yaml,
 
     /// <summary>
-    /// Not a file at all: the flat environment-variable fallback. There is nothing to rewrite, so
-    /// the admin editor refuses to save rather than inventing a file the next restart would ignore.
+    /// Not a file at all: the flat environment-variable fallback, recognised by its variables' names
+    /// alone so that the first-run import can say configuring ImmichFrame that way is no longer
+    /// supported. Nothing is imported from it: the instance starts unconfigured, and the admin editor
+    /// sets it up from scratch.
     /// </summary>
     Environment
 }

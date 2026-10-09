@@ -21,18 +21,8 @@ public class ConfigLoader(ILogger<ConfigLoader> _logger)
     }
 
     /// <summary>
-    /// Loads every configuration ImmichFrame should serve: the default one, plus any profile
-    /// declared under <c>Profiles</c> in the settings file.
-    /// </summary>
-    public IConfigCatalog LoadCatalog(string configPath)
-    {
-        var (catalog, _) = LoadCatalogRaw(configPath);
-        catalog.Validate();
-        return catalog;
-    }
-
-    /// <summary>
-    /// Which file a restart would load out of <paramref name="configPath"/>, and in what shape.
+    /// Which file the first-run import would read out of <paramref name="configPath"/>, and in what
+    /// shape.
     /// <para>
     /// Answered by running the real load rather than by re-deriving the rules, because the answer is
     /// which of the fallbacks below actually fires: a <c>Settings.json</c> that only parses as v1 is
@@ -43,11 +33,11 @@ public class ConfigLoader(ILogger<ConfigLoader> _logger)
     {
         // A settings file that will not parse leaves LoadCatalogRaw in one of two places: the
         // environment branch, if two environment variables happen to match a v1 property name, or the
-        // bare failure at the end if they do not. LoadCatalog goes on starting the application from
-        // whichever it reaches - long-standing behaviour, and it stays - but the configuration editor
-        // must not repeat it. "This installation is configured from environment variables" is a lie
-        // that hides a trailing comma, and on an installation whose settings file is perfectly real it
-        // is a lie that hides the file.
+        // bare failure at the end if they do not. Neither may be reported as where this installation is
+        // configured from while that file is there: the import tells the operator what it found, and
+        // "this installation is configured from environment variables" is a lie that hides a trailing
+        // comma - and, on an installation whose settings file is perfectly real, a lie that hides the
+        // file.
         var present = FindExistingConfigFile(configPath);
 
         ConfigSource source;
@@ -184,9 +174,10 @@ public class ConfigLoader(ILogger<ConfigLoader> _logger)
         // A settings file from before 'General'/'Accounts' existed binds to an empty current-version
         // config rather than failing, so check the shape explicitly and let the caller fall back to
         // the V1 reader instead of starting up with no accounts at all.
-        if (!document.HasKey("General") && !document.HasKey("Accounts"))
+        if (!document.HasKey(ConfigKeys.General) && !document.HasKey(ConfigKeys.Accounts))
         {
-            throw new SettingsNotValidException("The settings file contains neither a 'General' nor an 'Accounts' section.");
+            throw new SettingsNotValidException(
+                $"The settings file contains neither a '{ConfigKeys.General}' nor an '{ConfigKeys.Accounts}' section.");
         }
 
         var profiles = document.ProfileNames

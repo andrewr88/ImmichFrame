@@ -51,3 +51,15 @@ internal interface IConfigDocument
     /// <exception cref="Core.Exceptions.ProfileNotFoundException">No profile of that name is declared.</exception>
     JsonObject DeclaredOverrides(string? profileName);
 }
+
+/// <summary>
+/// The top-level keys of a settings document, spelled once for everything that reads one as a
+/// document rather than binding it. <c>ServerSettings</c> binds the first two under the same names,
+/// in its own attributes; <c>Profiles</c> no settings class binds at all.
+/// </summary>
+internal static class ConfigKeys
+{
+    public const string General = "General";
+    public const string Accounts = "Accounts";
+    public const string Profiles = "Profiles";
+}

@@ -25,8 +25,9 @@ public static class AdminSecret
 /// editor reads it and as it sends it back.
 /// </summary>
 /// <param name="Version">
-/// A hash of the settings file as it was read. A <c>PUT</c> carrying a stale one is refused, so two
-/// administrators - or one administrator and a hand edit - cannot silently overwrite each other.
+/// The stored settings' version as it was read: a counter the store increments on every save. A
+/// <c>PUT</c> carrying a stale one is refused, so two administrators - or two processes sharing the
+/// settings database - cannot silently overwrite each other.
 /// </param>
 /// <param name="Source">Where the configuration lives, and whether it can be written at all.</param>
 /// <param name="Default">The default configuration, which every profile inherits from.</param>
@@ -182,7 +183,8 @@ public class AdminGeneralSettingsDto
     public string? UnitSystem { get; set; }
 
     /// <summary>Never populated on a read. On a save: absent or <see cref="AdminSecret.Placeholder"/>
-    /// keeps the stored key, the empty string clears it, anything else replaces it.</summary>
+    /// keeps the stored key, the empty string clears it, anything else replaces it. Keeping is refused
+    /// on a profile that stores no key of its own under this name, where there is nothing to keep.</summary>
     public string? WeatherApiKey { get; set; }
 
     /// <inheritdoc cref="WeatherApiKey"/>

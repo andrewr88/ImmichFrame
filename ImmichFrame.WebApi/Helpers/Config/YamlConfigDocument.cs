@@ -9,8 +9,6 @@ namespace ImmichFrame.WebApi.Helpers.Config;
 /// <inheritdoc cref="IConfigDocument"/>
 internal sealed class YamlConfigDocument(string _yaml) : IConfigDocument
 {
-    internal const string ProfilesKey = "Profiles";
-
     private static readonly IDeserializer Deserializer = new DeserializerBuilder()
         .IgnoreUnmatchedProperties()
         .Build();
@@ -31,11 +29,11 @@ internal sealed class YamlConfigDocument(string _yaml) : IConfigDocument
         {
             if (!TryFindProfile(root, profileName, out overrides))
             {
-                throw new ProfileNotFoundException($"No configuration profile named '{profileName}' is configured.");
+                throw ConfigCatalog.ProfileNotFound(profileName);
             }
         }
 
-        if (TryFindChild(root, ProfilesKey, StringComparison.Ordinal, out var profilesKey, out _))
+        if (TryFindChild(root, ConfigKeys.Profiles, StringComparison.Ordinal, out var profilesKey, out _))
         {
             root.Children.Remove(profilesKey!);
         }
@@ -64,7 +62,7 @@ internal sealed class YamlConfigDocument(string _yaml) : IConfigDocument
 
         if (string.IsNullOrEmpty(profileName))
         {
-            if (TryFindChild(root, ProfilesKey, StringComparison.Ordinal, out var profilesKey, out _))
+            if (TryFindChild(root, ConfigKeys.Profiles, StringComparison.Ordinal, out var profilesKey, out _))
             {
                 root.Children.Remove(profilesKey!);
             }
@@ -74,7 +72,7 @@ internal sealed class YamlConfigDocument(string _yaml) : IConfigDocument
 
         if (!TryFindProfile(root, profileName, out var overrides))
         {
-            throw new ProfileNotFoundException($"No configuration profile named '{profileName}' is configured.");
+            throw ConfigCatalog.ProfileNotFound(profileName);
         }
 
         // 'empty:' is a declared profile that overrides nothing, not a missing one.
@@ -195,7 +193,7 @@ internal sealed class YamlConfigDocument(string _yaml) : IConfigDocument
 
     private static YamlMappingNode? ProfilesOf(YamlMappingNode root)
     {
-        if (!TryFindChild(root, ProfilesKey, StringComparison.Ordinal, out _, out var profiles)) return null;
+        if (!TryFindChild(root, ConfigKeys.Profiles, StringComparison.Ordinal, out _, out var profiles)) return null;
 
         // Null, however it is spelled, declares no profiles - and so does a quoted empty string,
         // which was always read that way and names none either. Refusing any of them is worse than
@@ -204,7 +202,7 @@ internal sealed class YamlConfigDocument(string _yaml) : IConfigDocument
         if (IsNull(profiles) || profiles is YamlScalarNode { Value: "" }) return null;
 
         return profiles as YamlMappingNode
-               ?? throw new SettingsNotValidException($"'{ProfilesKey}' must be a mapping of profile names to their settings.");
+               ?? throw new SettingsNotValidException($"'{ConfigKeys.Profiles}' must be a mapping of profile names to their settings.");
     }
 
     private static bool TryFindProfile(YamlMappingNode root, string profileName, out YamlNode? overrides)
@@ -224,16 +222,28 @@ internal sealed class YamlConfigDocument(string _yaml) : IConfigDocument
 
             var found = TryFindChild(target, name, StringComparison.Ordinal, out var existingKey, out var existing);
 
-            if (found && existing is YamlMappingNode existingMapping && value is YamlMappingNode overrideMapping)
+            if (found && existing is YamlMappingNode existingMapping)
             {
                 // Both sides are mappings - 'General', say - so merge key by key and let the profile
                 // name only the settings it actually changes.
-                Merge(existingMapping, overrideMapping);
-                continue;
+                if (value is YamlMappingNode overrideMapping)
+                {
+                    Merge(existingMapping, overrideMapping);
+                    continue;
+                }
+
+                // A null over a mapping names none of its settings, so it changes none of them. This
+                // is what 'General:' is left as once the only setting under it is commented out, and
+                // replacing the base section with it dropped every value the profile inherited, the
+                // frame's AuthenticationSecret among them, so the profile served without one; an
+                // explicit 'AuthenticationSecret: null' inside the section is how a profile asks for
+                // that, and that is a value, merged as one.
+                if (IsNull(value)) continue;
             }
 
             // Everything else replaces the base value outright, sequences such as 'Accounts'
-            // included: there is no unambiguous way to merge two sequences.
+            // included: there is no unambiguous way to merge two sequences, so a null over a
+            // sequence is a profile declaring an empty one.
             if (found) target.Children.Remove(existingKey!);
             target.Children.Add(key, value);
         }

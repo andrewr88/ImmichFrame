@@ -65,27 +65,50 @@ public partial class ConfigCatalog : IConfigCatalog
     {
         if (TryGet(name, out var settings)) return settings;
 
-        throw new ProfileNotFoundException($"No configuration profile named '{name}' is configured.");
+        throw ProfileNotFound(name);
     }
+
+    /// <summary>
+    /// The refusal for a profile nothing declares, in the same words whether the catalog or a settings
+    /// document is the one asked for it.
+    /// </summary>
+    internal static ProfileNotFoundException ProfileNotFound(string? name) =>
+        new($"No configuration profile named '{name}' is configured.");
 
     /// <summary>
     /// Validates the default configuration and every profile, so that a broken profile is reported
     /// at startup rather than the first time a client asks for it.
+    /// <para>
+    /// Every one of them, whatever the ones before it threw, for the reason each configuration
+    /// validates every account: validating is also what reads an account's ApiKeyFile, and settings
+    /// that fail are run anyway. Each failure is named after the configuration it belongs to - the
+    /// default one included, so that a message joining several still says which is which - and all
+    /// of them are thrown at once in an <see cref="AggregateSettingsNotValidException"/>.
+    /// </para>
     /// </summary>
     public void Validate()
     {
-        Default.Validate();
+        var failures = new List<Exception>();
+
+        Validate("The default configuration", Default, failures);
 
         foreach (var (name, settings) in _profiles)
         {
-            try
-            {
-                settings.Validate();
-            }
-            catch (Exception ex)
-            {
-                throw new SettingsNotValidException($"Configuration profile '{name}' is not valid: {ex.Message}", ex);
-            }
+            Validate($"Configuration profile '{name}'", settings, failures);
+        }
+
+        if (failures.Count > 0) throw new AggregateSettingsNotValidException(failures);
+    }
+
+    private static void Validate(string configuration, IServerSettings settings, List<Exception> failures)
+    {
+        try
+        {
+            settings.Validate();
+        }
+        catch (Exception ex)
+        {
+            failures.Add(new SettingsNotValidException($"{configuration} is not valid: {ex.Message}", ex));
         }
     }
 
