@@ -1,13 +1,18 @@
 import { isSameDay } from 'date-fns';
 import * as api from '$lib/immichFrameApi';
 import type { ClientSettingsDto, IAppointment } from '$lib/immichFrameApi';
+import { resolveLocale } from '$lib/locale';
 import { safeFormat } from '$lib/safe-format';
 
 /** When an appointment is, as the appointments panel shows it: the times alone within one day. */
 export function formatDates(
 	startTime: string,
 	endTime: string,
-	{ clockFormat, clockDateFormat }: Pick<ClientSettingsDto, 'clockFormat' | 'clockDateFormat'>
+	{
+		clockFormat,
+		clockDateFormat,
+		language
+	}: Pick<ClientSettingsDto, 'clockFormat' | 'clockDateFormat' | 'language'>
 ) {
 	const startDate = new Date(startTime);
 	const endDate = new Date(endTime);
@@ -19,7 +24,10 @@ export function formatDates(
 
 	// The date and the time are formatted apart rather than as one pattern, so that a format
 	// date-fns refuses falls back on its own and the other keeps the administrator's format.
-	const full = (date: Date) => safeFormat(date, clockDateFormat, 'eee, MMM d') + ' ' + time(date);
+	// Each as the clock formats its own: the date in the frame's language, the time without one.
+	const locale = resolveLocale(language);
+	const full = (date: Date) =>
+		safeFormat(date, clockDateFormat, 'eee, MMM d', { locale }) + ' ' + time(date);
 
 	return full(startDate) + ' - ' + full(endDate);
 }

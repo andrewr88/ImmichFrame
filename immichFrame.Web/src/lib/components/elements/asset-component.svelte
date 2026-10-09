@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import type { AssetResponseDto } from '$lib/immichFrameApi';
 	import * as api from '$lib/index';
 	import ErrorElement from './error-element.svelte';
@@ -66,6 +67,43 @@
 	let primaryAssetComponent = $state<AssetComponent | undefined>(undefined);
 	let secondaryAssetComponent = $state<AssetComponent | undefined>(undefined);
 
+	// What every Asset below is given alike; each has its own asset, binding and showInfo besides.
+	// Spread ahead of those rather than after: Svelte looks a prop up from the last attribute back,
+	// so spread after them, every read of `asset` would read this object too, and Asset's teardown
+	// of its video would run again - unloading it - whenever any of these changed.
+	const assetProps = $derived({
+		interval,
+		showLocation,
+		showPhotoDate,
+		showImageDesc,
+		showPeopleDesc,
+		showTagsDesc,
+		showAlbumName,
+		imageFill,
+		imageZoom,
+		imagePan,
+		split,
+		playAudio,
+		onVideoWaiting,
+		onVideoPlaying,
+		onAssetError
+	});
+
+	// New assets mean the ones on screen start to fade out, and they are stood down here - see
+	// Asset's retire(). Not from the keyed block's `outrostart`: Svelte fires that a frame after the
+	// swap, once the fade is under way, and by then the bindings hold the incoming Assets, which
+	// would be stood down instead. This runs ahead of the block, while they still hold the outgoing
+	// ones - and only for a new list, as nothing else swaps the block, whatever else re-runs this.
+	let shownAssets: Props['assets'] | undefined;
+	$effect.pre(() => {
+		if (assets === shownAssets) return;
+		shownAssets = assets;
+		untrack(() => {
+			primaryAssetComponent?.retire();
+			secondaryAssetComponent?.retire();
+		});
+	});
+
 	export const pause = async () => {
 		await primaryAssetComponent?.pause?.();
 		await secondaryAssetComponent?.pause?.();
@@ -109,22 +147,8 @@
 						class="relative grid border-r-2 border-frame-primary h-dvh-safe"
 					>
 						<Asset
+							{...assetProps}
 							asset={assets[0]}
-							{interval}
-							{showLocation}
-							{showPhotoDate}
-							{showImageDesc}
-							{showPeopleDesc}
-							{showTagsDesc}
-							{showAlbumName}
-							{imageFill}
-							{imageZoom}
-							{imagePan}
-							{split}
-							{playAudio}
-							{onVideoWaiting}
-							{onVideoPlaying}
-							{onAssetError}
 							bind:this={primaryAssetComponent}
 							bind:showInfo
 						/>
@@ -134,22 +158,8 @@
 						class="relative grid border-l-2 border-frame-primary h-dvh-safe"
 					>
 						<Asset
+							{...assetProps}
 							asset={assets[1]}
-							{interval}
-							{showLocation}
-							{showPhotoDate}
-							{showImageDesc}
-							{showPeopleDesc}
-							{showTagsDesc}
-							{showAlbumName}
-							{imageFill}
-							{imageZoom}
-							{imagePan}
-							{split}
-							{playAudio}
-							{onVideoWaiting}
-							{onVideoPlaying}
-							{onAssetError}
 							bind:this={secondaryAssetComponent}
 							bind:showInfo
 						/>
@@ -158,22 +168,8 @@
 			{:else}
 				<div id="image_default" class="relative grid h-dvh-safe w-screen">
 					<Asset
+						{...assetProps}
 						asset={assets[0]}
-						{interval}
-						{showLocation}
-						{showPhotoDate}
-						{showImageDesc}
-						{showPeopleDesc}
-						{showTagsDesc}
-						{showAlbumName}
-						{imageFill}
-						{imageZoom}
-						{imagePan}
-						{split}
-						{playAudio}
-						{onVideoWaiting}
-						{onVideoPlaying}
-						{onAssetError}
 						bind:this={primaryAssetComponent}
 						bind:showInfo
 					/>

@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { type AlbumResponseDto, type AssetResponseDto } from '$lib/immichFrameApi';
-	import * as locale from 'date-fns/locale';
 	import { configStore } from '$lib/stores/config.store';
 	import { safeFormat } from '$lib/safe-format';
+	import { resolveLocale } from '$lib/locale';
 	import Icon from './icon.svelte';
 	import { mdiCalendar, mdiMapMarker, mdiAccount, mdiText, mdiImageAlbum, mdiTag } from '@mdi/js';
+	import { albumNames, namedPeople, namedTags } from './imageoverlay/image-overlay';
 
 	interface Props {
 		asset: AssetResponseDto;
@@ -49,10 +50,7 @@
 	let assetDate = $derived(asset.exifInfo?.dateTimeOriginal);
 	let desc = $derived(asset.exifInfo?.description ?? '');
 	let time = $derived(assetDate ? new Date(assetDate) : null);
-	const selectedLocale = $configStore.language;
-
-	const localeToUse =
-		(selectedLocale && locale[selectedLocale as keyof typeof locale]) || locale.enUS;
+	const localeToUse = resolveLocale($configStore.language);
 	let formattedDate = $derived(
 		time
 			? safeFormat(time, $configStore.photoDateFormat, 'dd.MM.yyyy', { locale: localeToUse })
@@ -66,8 +64,9 @@
 			asset.exifInfo?.country ?? ''
 		)
 	);
-	let availablePeople = $derived(asset.people?.filter((x) => x.name));
-	let availableTags = $derived(asset.tags?.filter((x) => x.name));
+	let availableAlbums = $derived(albumNames(albums));
+	let availablePeople = $derived(namedPeople(asset.people));
+	let availableTags = $derived(namedTags(asset.tags));
 </script>
 
 {#if showPhotoDate || showLocation || showImageDesc || showPeopleDesc || showTagsDesc || showAlbumName}
@@ -90,22 +89,22 @@
 				<span class="info-text" class:short-text={split}>{desc}</span>
 			</p>
 		{/if}
-		{#if showAlbumName && albums && albums.length > 0}
+		{#if showAlbumName && availableAlbums.length > 0}
 			<p id="imagealbums" class="info-item">
 				<Icon path={mdiImageAlbum} />
-				<span class="info-text" class:short-text={split}>{albums.map((x) => x.albumName).join(', ')}</span>
+				<span class="info-text" class:short-text={split}>{availableAlbums.join(', ')}</span>
 			</p>
 		{/if}
-		{#if showPeopleDesc && availablePeople && availablePeople.length > 0}
+		{#if showPeopleDesc && availablePeople.length > 0}
 			<p id="peopledescription" class="info-item">
 				<Icon path={mdiAccount} />
-				<span class="info-text" class:short-text={split}>{availablePeople.map((x) => x.name).join(', ')}</span>
+				<span class="info-text" class:short-text={split}>{availablePeople.join(', ')}</span>
 			</p>
 		{/if}
-		{#if showTagsDesc && availableTags && availableTags.length > 0}
+		{#if showTagsDesc && availableTags.length > 0}
 			<p id="tagsdescription" class="info-item">
 				<Icon path={mdiTag} />
-				<span class="info-text" class:short-text={split}>{availableTags.map((x) => x.name).join(', ')}</span>
+				<span class="info-text" class:short-text={split}>{availableTags.join(', ')}</span>
 			</p>
 		{/if}
 		{#if showLocation && location}

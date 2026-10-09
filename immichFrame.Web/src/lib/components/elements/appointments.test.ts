@@ -36,6 +36,24 @@ describe('formatDates', () => {
 		// Assert: the time falls back to its default on its own, and the date keeps its format.
 		expect([oneDay, twoDays]).toEqual(['09:00 - 10:30', '8 Oct 09:00 - 9 Oct 10:30']);
 	});
+
+	it.each([
+		{ language: 'de', shown: 'Fr., Okt. 9 10:00 - Sa., Okt. 10 11:30' },
+		// date-fns has no `en` - only `enUS`, `enGB` and the like - and English (US) is what the
+		// clock falls back on for it, for no language, and for one date-fns has never heard of.
+		{ language: 'en', shown: 'Fri, Oct 9 10:00 - Sat, Oct 10 11:30' },
+		{ language: '', shown: 'Fri, Oct 9 10:00 - Sat, Oct 10 11:30' },
+		{ language: 'tlh', shown: 'Fri, Oct 9 10:00 - Sat, Oct 10 11:30' }
+	])(
+		"an appointment over two days, in the language '$language', has its dates as the clock does",
+		({ language, shown }) => {
+			// Act
+			const formatted = formatDates('2026-10-09T10:00:00', '2026-10-10T11:30:00', { language });
+
+			// Assert: the dates were in English whatever the language, under a clock in German.
+			expect(formatted).toBe(shown);
+		}
+	);
 });
 
 const fetchMock = vi.fn<typeof fetch>();

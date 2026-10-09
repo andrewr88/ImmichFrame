@@ -18,7 +18,7 @@
 	import OverlayQr from './overlay-qr.svelte';
 	import Icon from '../icon.svelte';
 	import { getContext } from 'svelte';
-	import { fileDetails } from './image-overlay';
+	import { albumNames, fileDetails, namedPeople, namedTags } from './image-overlay';
 
 	interface Props {
 		asset: AssetResponseDto;
@@ -26,8 +26,9 @@
 	}
 	let { asset, albums }: Props = $props();
 
-	let availablePeople = $derived(asset.people?.filter((x) => x.name));
-	let availableTags = $derived(asset.tags?.filter((x) => x.name));
+	let availablePeople = $derived(namedPeople(asset.people));
+	let availableTags = $derived(namedTags(asset.tags));
+	let availableAlbums = $derived(albumNames(albums));
 	let exif: ExifResponseDto = $derived(asset.exifInfo ?? ({} as ExifResponseDto));
 
 	let close = getContext<() => void>('close');
@@ -67,22 +68,14 @@
 				{#if exif.rating}
 					<OverlayItem icon={mdiStar} header="Rating" items={[exif.rating.toString()]} />
 				{/if}
-				{#if availablePeople && availablePeople.length > 0}
-					<OverlayItem
-						icon={mdiAccount}
-						header="People"
-						items={availablePeople.map((x) => x.name)}
-					/>
+				{#if availablePeople.length > 0}
+					<OverlayItem icon={mdiAccount} header="People" items={availablePeople} />
 				{/if}
-				{#if availableTags && availableTags.length > 0}
-					<OverlayItem
-						icon={mdiTag}
-						header="Tags"
-						items={availableTags.map((x) => x.name)}
-					/>
+				{#if availableTags.length > 0}
+					<OverlayItem icon={mdiTag} header="Tags" items={availableTags} />
 				{/if}
-				{#if albums && albums.length > 0}
-					<OverlayItem icon={mdiImageAlbum} header="Album" items={albums.map((x) => x.albumName)} />
+				{#if availableAlbums.length > 0}
+					<OverlayItem icon={mdiImageAlbum} header="Album" items={availableAlbums} />
 				{/if}
 			</div>
 

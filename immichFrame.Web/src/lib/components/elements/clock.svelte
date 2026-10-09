@@ -1,19 +1,17 @@
 <script lang="ts">
 	import * as api from '$lib/index';
 	import { onMount } from 'svelte';
-	import * as locale from 'date-fns/locale';
 	import { configStore } from '$lib/stores/config.store';
 	import { clientIdentifierStore } from '$lib/stores/persist.store';
 	import { profileStore } from '$lib/stores/profile.store';
 	import { safeFormat } from '$lib/safe-format';
+	import { resolveLocale } from '$lib/locale';
 
 	api.init();
 
 	let weather = $state<api.IWeather | null>(null);
 
-	const localeToUse = $derived(
-		() => locale[$configStore.language as keyof typeof locale] ?? locale.enUS
-	);
+	const localeToUse = $derived(() => resolveLocale($configStore.language));
 
 	let now = $state(new Date());
 

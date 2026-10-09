@@ -1,4 +1,9 @@
-import type { ExifResponseDto } from '$lib/immichFrameApi';
+import type {
+	AlbumResponseDto,
+	ExifResponseDto,
+	PersonResponseDto,
+	TagResponseDto
+} from '$lib/immichFrameApi';
 
 /**
  * What the info overlay says beneath a file's name: its size and its dimensions, each only when the
@@ -26,4 +31,30 @@ export function fileDetails({
 	}
 
 	return details;
+}
+
+/**
+ * The names of the albums a photo is in, as both overlays list them: an album without one left out.
+ *
+ * An album need not have a name in Immich, and one without was listed all the same, as nothing -
+ * the corner read ", Holiday", and the info overlay had an empty entry. A name of spaces alone is
+ * no better, so it goes the same way.
+ */
+export function albumNames(albums: Pick<AlbumResponseDto, 'albumName'>[] | null | undefined) {
+	return named((albums ?? []).map((album) => album.albumName));
+}
+
+/** The names of the people in a photo, as both overlays list them: anybody without one left out. */
+export function namedPeople(people: Pick<PersonResponseDto, 'name'>[] | null | undefined) {
+	return named((people ?? []).map((person) => person.name));
+}
+
+/** The names of a photo's tags, as both overlays list them: a tag without one left out. */
+export function namedTags(tags: Pick<TagResponseDto, 'name'>[] | null | undefined) {
+	return named((tags ?? []).map((tag) => tag.name));
+}
+
+/** The names that would show as something: none missing, empty, or of spaces alone. */
+function named(names: (string | null | undefined)[]): string[] {
+	return names.filter((name): name is string => !!name?.trim());
 }

@@ -10,6 +10,7 @@
 	import { thumbHashToDataURL } from 'thumbhash';
 	import AssetInfo from '$lib/components/elements/asset-info.svelte';
 	import ImageOverlay from '$lib/components/elements/imageoverlay/image-overlay.svelte';
+	import { PAN_OFFSET, PAN_SCALE, ZOOM_PAN_SCALES, ZOOM_SCALES, zoomOrigin } from './asset';
 
 	interface Props {
 		asset: [
@@ -80,11 +81,15 @@
 		};
 	});
 
-	let hasPerson = $derived((asset[1].people?.filter((x) => x.name).length ?? 0) > 0);
 	let zoomIn = $derived(zoomEffect());
 	let panDirection = $derived(panEffect());
 	const enableZoom = $derived(imageZoom && !isVideo);
 	const enablePan = $derived(imagePan && !isVideo);
+	const origin = $derived(zoomOrigin(asset[2], enablePan));
+
+	// PAN_OFFSET either way, as the pan's keyframes take it.
+	const panPlus = `${PAN_OFFSET * 100}%`;
+	const panMinus = `${-PAN_OFFSET * 100}%`;
 
 	const thumbhashUrl = $derived(getThumbhashUrl());
 
@@ -96,54 +101,6 @@
 		} catch {
 			return '';
 		}
-	}
-
-	function GetFace(i: number) {
-		// loadAsset already sees to it that this is a list. Checked again all the same, as a throw
-		// from here halts the update that brings the photo in.
-		const faces: AssetFaceResponseDto[] = Array.isArray(asset[2]) ? asset[2] : [];
-		const namedFaces = faces.filter((x) => x.person?.name);
-		return namedFaces[i] ?? null;
-	}
-
-	function getFaceMetric(
-		i: number,
-		prop: 'x1' | 'x2' | 'y1' | 'y2' | 'centerX' | 'centerY' | 'width' | 'height'
-	): number {
-		const face = GetFace(i);
-		if (!face) return 0;
-
-		const {
-			boundingBoxX1 = 0,
-			boundingBoxX2 = 0,
-			boundingBoxY1 = 0,
-			boundingBoxY2 = 0,
-			imageWidth = 1,
-			imageHeight = 1
-		} = face;
-
-		switch (prop) {
-			case 'x1':
-				return calcPercent(boundingBoxX1, imageWidth);
-			case 'x2':
-				return calcPercent(boundingBoxX2, imageWidth);
-			case 'y1':
-				return calcPercent(boundingBoxY1, imageHeight);
-			case 'y2':
-				return calcPercent(boundingBoxY2, imageHeight);
-			case 'width':
-				return calcPercent(boundingBoxX2 - boundingBoxX1, imageWidth);
-			case 'height':
-				return calcPercent(boundingBoxY2 - boundingBoxY1, imageHeight);
-			case 'centerX':
-				return calcPercent(boundingBoxX1 + (boundingBoxX2 - boundingBoxX1) / 2, imageWidth);
-			case 'centerY':
-				return calcPercent(boundingBoxY1 + (boundingBoxY2 - boundingBoxY1) / 2, imageHeight);
-		}
-	}
-
-	function calcPercent(number1: number, number2: number) {
-		return (number1 / number2) * 100;
 	}
 
 	function zoomEffect() {
@@ -158,21 +115,19 @@
 	function getScaleValues() {
 		if (imageZoom && imagePan) {
 			// When both zoom and pan are enabled make sure we have minimum zoom to cover pan offset
-			const minScale = 1.15;
-			const maxScale = 1.35;
 			return {
-				startScale: zoomIn ? minScale : maxScale,
-				endScale: zoomIn ? maxScale : minScale
+				startScale: zoomIn ? ZOOM_PAN_SCALES.min : ZOOM_PAN_SCALES.max,
+				endScale: zoomIn ? ZOOM_PAN_SCALES.max : ZOOM_PAN_SCALES.min
 			};
 		} else if (imageZoom) {
 			// Original zoom behavior when only zoom is enabled
 			return {
-				startScale: zoomIn ? 1 : 1.3,
-				endScale: zoomIn ? 1.3 : 1
+				startScale: zoomIn ? ZOOM_SCALES.min : ZOOM_SCALES.max,
+				endScale: zoomIn ? ZOOM_SCALES.max : ZOOM_SCALES.min
 			};
 		} else {
 			// No zoom but pan give pan slight scale to avoid edges
-			const panScale = imagePan ? 1.1 : 1;
+			const panScale = imagePan ? PAN_SCALE : 1;
 			return {
 				startScale: panScale,
 				endScale: panScale
@@ -199,6 +154,27 @@
 			}
 		}
 	};
+
+	// Whether this is still the slideshow's asset, rather than one fading out. See retire().
+	let live = true;
+
+	/**
+	 * Stands this asset down as the next one replaces it.
+	 *
+	 * An asset stays mounted for as long as it takes to fade out, and until then its video went on
+	 * playing and its events went on reaching the slideshow, which takes them for the new slide's:
+	 * with audio on the two were heard over each other, a `playing` from the old one cancelled the
+	 * new one's stall skip and reset the count of failures in a row, and a `waiting` or an error
+	 * could pause the new one's progress or skip it outright. So the video is stopped and muted, and
+	 * the events are no longer passed on.
+	 */
+	export const retire = () => {
+		live = false;
+		if (videoElement) {
+			videoElement.muted = true;
+			videoElement.pause();
+		}
+	};
 </script>
 
 {#if showInfo}
@@ -211,14 +187,14 @@
 		class="relative w-full h-full {enableZoom ? 'zoom' : ''} {enablePan ? 'pan' : ''}"
 		style="
 			--interval: {animationDuration + 2}s;
-			--originX: {hasPerson && !isVideo ? getFaceMetric(0, 'centerX') + '%' : 'center'};
-			--originY: {hasPerson && !isVideo ? getFaceMetric(0, 'centerY') + '%' : 'center'};
+			--originX: {origin ? origin.x + '%' : 'center'};
+			--originY: {origin ? origin.y + '%' : 'center'};
 			--start-scale: {scaleValues.startScale};
 			--end-scale: {scaleValues.endScale};
-			--pan-start-x: {panDirection === 'left' ? '5%' : panDirection === 'right' ? '-5%' : '0'};
-			--pan-end-x: {panDirection === 'left' ? '-5%' : panDirection === 'right' ? '5%' : '0'};
-			--pan-start-y: {panDirection === 'up' ? '5%' : panDirection === 'down' ? '-5%' : '0'};
-			--pan-end-y: {panDirection === 'up' ? '-5%' : panDirection === 'down' ? '5%' : '0'};"
+			--pan-start-x: {panDirection === 'left' ? panPlus : panDirection === 'right' ? panMinus : '0'};
+			--pan-end-x: {panDirection === 'left' ? panMinus : panDirection === 'right' ? panPlus : '0'};
+			--pan-start-y: {panDirection === 'up' ? panPlus : panDirection === 'down' ? panMinus : '0'};
+			--pan-end-y: {panDirection === 'up' ? panMinus : panDirection === 'down' ? panPlus : '0'};"
 	>
 		{#if isVideo}
 			<!-- Autoplay might be blocked by the browser when playAudio is enabled -->
@@ -245,11 +221,16 @@
 					}
 				}}
 				onerror={() => {
+					if (!live) return;
 					console.error('Video failed to load:', asset[0]);
 					onAssetError();
 				}}
-				onwaiting={onVideoWaiting}
-				onplaying={onVideoPlaying}
+				onwaiting={() => {
+					if (live) onVideoWaiting();
+				}}
+				onplaying={() => {
+					if (live) onVideoPlaying();
+				}}
 			></video>
 		{:else}
 			<img
@@ -259,6 +240,7 @@
 				src={asset[0]}
 				alt="data"
 				onerror={() => {
+					if (!live) return;
 					console.error('Image failed to load:', asset[0]);
 					onAssetError();
 				}}
