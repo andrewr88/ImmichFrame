@@ -348,6 +348,30 @@ public class AdminSessionControllerTests
         });
     }
 
+    /// <summary>
+    /// The answer names whoever the cookie on the request belongs to, and is a different answer for
+    /// every cookie. So no cache may keep a copy: the browser's could go on showing that person signed
+    /// in after they have signed out, and one between it and the server could hand them to whoever
+    /// asked next.
+    /// </summary>
+    [Test]
+    public async Task Session_IsNotStoredByAnyCache()
+    {
+        using var factory = CreateFactory(Enabled("admin@example.com"));
+        var client = factory.CreateClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/admin/session");
+        request.Headers.Add(TestAdminAuthHandler.EmailHeader, "admin@example.com");
+
+        var response = await client.SendAsync(request);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response.Headers.CacheControl?.NoStore, Is.True);
+        });
+    }
+
     [Test]
     public async Task Session_SignedInButNotOnAllowlist_SaysAuthenticatedButNotAdmin()
     {

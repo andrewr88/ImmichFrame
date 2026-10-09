@@ -48,8 +48,8 @@ public class MultiImmichFrameLogicDelegate : IImmichFrameLogic, IDisposable
         => _accountSelectionStrategy.ForAsset(assetId, logic => logic.GetAlbumInfoById(assetId));
 
 
-    public Task<AssetResponse> GetAsset(Guid assetId, AssetTypeEnum? assetType = null, string? rangeHeader = null)
-        => _accountSelectionStrategy.ForAsset(assetId, logic => logic.GetAsset(assetId, assetType, rangeHeader));
+    public Task<AssetResponse> GetAsset(Guid assetId, AssetTypeEnum? assetType = null, string? rangeHeader = null, CancellationToken ct = default)
+        => _accountSelectionStrategy.ForAsset(assetId, logic => logic.GetAsset(assetId, assetType, rangeHeader, ct), ct);
 
     public async Task<long> GetTotalAssets()
     {

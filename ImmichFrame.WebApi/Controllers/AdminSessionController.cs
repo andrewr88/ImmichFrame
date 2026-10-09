@@ -19,6 +19,10 @@ public record AdminSessionDto(bool Configured, bool Authenticated, bool IsAdmin,
 
 [ApiController]
 [Route("api/admin")]
+// Kept by no cache: the session's answer names whoever the cookie on the request belongs to, and is
+// a different answer for every cookie, and the other two are the way into a sign-in and the way out
+// of one. On the class, so that an action added here later is covered as well.
+[ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
 public class AdminSessionController(AdminOidcOptions _options) : ControllerBase
 {
     /// <summary>

@@ -27,6 +27,10 @@ namespace ImmichFrame.WebApi.Controllers;
 [ApiController]
 [Route("api/admin/config")]
 [Authorize(Policy = AdminAuthentication.AdminOnlyPolicy)]
+// Kept by no cache, the browser's included: not every secret this answers with is masked - a
+// calendar's URL is sent as it stands, and is often all that guards the calendar. On the class, so
+// that an action added here later is covered as well.
+[ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
 public class AdminConfigController(ILogger<AdminConfigController> _logger, AdminConfigService _config) : ControllerBase
 {
     /// <summary>

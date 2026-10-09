@@ -200,6 +200,40 @@ public class PooledImmichFrameLogicTests
     }
 
     /// <summary>
+    /// A frame that hangs up while Immich is still to answer - on a video it has already moved on
+    /// from, say - takes its request to Immich with it, rather than leaving that to run its course
+    /// for an answer nobody will read. Each request GetAsset can make: the image, the whole video, a
+    /// range of it, and the asset's info when its type is not given.
+    /// </summary>
+    [TestCase(AssetTypeEnum.IMAGE, null)]
+    [TestCase(AssetTypeEnum.VIDEO, null)]
+    [TestCase(AssetTypeEnum.VIDEO, "bytes=0-")]
+    [TestCase(null, null)]
+    public async Task GetAsset_CallerGivesUpWhileImmichIsAnswering_CancelsTheRequestToImmich(
+        AssetTypeEnum? assetType, string? range)
+    {
+        // Arrange - Immich answers nothing until the request to it is cancelled
+        var asked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _immich.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync", ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+            .Returns(async (HttpRequestMessage _, CancellationToken cancellationToken) =>
+            {
+                asked.TrySetResult();
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            });
+        using var caller = new CancellationTokenSource();
+
+        // Act
+        var asset = _sut.GetAsset(_assetId, assetType, range, caller.Token);
+        await asked.Task.WaitAsync(WaitLimit);
+        await caller.CancelAsync();
+
+        // Assert
+        Assert.That(async () => await asset.WaitAsync(WaitLimit), Throws.InstanceOf<OperationCanceledException>());
+    }
+
+    /// <summary>
     /// An image body as Immich streams it, which can drop its connection after
     /// <paramref name="failAfter"/> bytes and run <paramref name="onFirstRead"/> before it hands out
     /// any. Records whether it was disposed: until it is, the response it belongs to is not

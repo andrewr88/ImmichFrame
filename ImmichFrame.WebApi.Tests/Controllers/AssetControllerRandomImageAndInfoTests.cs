@@ -47,7 +47,7 @@ public class AssetControllerRandomImageAndInfoTests
 
         _logic = new Mock<IImmichFrameLogic>();
         _logic.Setup(logic => logic.GetNextAsset()).ReturnsAsync(_asset);
-        _logic.Setup(logic => logic.GetAsset(_asset.Id, AssetTypeEnum.IMAGE, It.IsAny<string?>()))
+        _logic.Setup(logic => logic.GetAsset(_asset.Id, AssetTypeEnum.IMAGE, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => Image(new MemoryStream(ImageBytes, writable: false)));
         _logic.Setup(logic => logic.SendWebhookNotification(It.IsAny<IWebhookNotification>()))
             .Returns(Task.CompletedTask);
@@ -66,7 +66,7 @@ public class AssetControllerRandomImageAndInfoTests
         // Arrange
         var stream = new TrackingStream(ImageBytes);
         var owner = new TrackingDisposable();
-        _logic.Setup(logic => logic.GetAsset(_asset.Id, AssetTypeEnum.IMAGE, It.IsAny<string?>()))
+        _logic.Setup(logic => logic.GetAsset(_asset.Id, AssetTypeEnum.IMAGE, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Image(stream, owner));
 
         // Act

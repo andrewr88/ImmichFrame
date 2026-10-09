@@ -380,6 +380,28 @@ public class AdminConfigControllerTests
     }
 
     /// <summary>
+    /// Not everything this answers with is masked: a calendar's URL is sent as it stands, and that URL
+    /// is often the only secret the calendar has. So no cache may keep a copy - not the browser's, for
+    /// the next person at that browser to be shown, and not one between it and the server, for whoever
+    /// asks next.
+    /// </summary>
+    [Test]
+    public async Task GetConfig_IsNotStoredByAnyCache()
+    {
+        WriteSettings("Settings.json", SettingsJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var response = await Send(client, HttpMethod.Get, ConfigUrl);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response.Headers.CacheControl?.NoStore, Is.True);
+        });
+    }
+
+    /// <summary>
     /// The read half of the sparse-override problem: a profile's own keys have to be
     /// distinguishable from the ones it inherits, or the editor cannot show which is which.
     /// </summary>

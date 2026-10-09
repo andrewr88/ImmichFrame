@@ -37,7 +37,7 @@ public class BloomFilterAssetAccountTracker(ILogger<BloomFilterAssetAccountTrack
         return FilterBuilder.Build(await account.GetTotalAssets());
     }
 
-    public async Task<T> ForAsset<T>(Guid assetId, Func<IAccountImmichFrameLogic, Task<T>> f)
+    public async Task<T> ForAsset<T>(Guid assetId, Func<IAccountImmichFrameLogic, Task<T>> f, CancellationToken ct = default)
     {
         foreach (var entry in logicToFilter)
         {
@@ -51,12 +51,15 @@ public class BloomFilterAssetAccountTracker(ILogger<BloomFilterAssetAccountTrack
                 // Task, so only awaiting it lets the lookup move on to the next account. A 416 is
                 // let through: that account does hold the asset and is saying the requested range
                 // lies outside it, which is no false positive - and AssetController.GetAsset
-                // answers exactly that exception with a 416 of its own.
+                // answers exactly that exception with a 416 of its own. So is the caller's own
+                // cancellation: once it has given up there is nobody left to look any further for,
+                // and AssetController.GetAsset answers that with nothing at all.
                 try
                 {
                     return await f(entry.Key);
                 }
-                catch (Exception e) when (e is not ApiException { StatusCode: 416 })
+                catch (Exception e) when (e is not ApiException { StatusCode: 416 }
+                    && !(e is OperationCanceledException && ct.IsCancellationRequested))
                 {
                     _logger.LogWarning(e, "Failed to locate asset {assetId} in {entry.Key}. Must be false positive, trying next account.", assetId, entry.Key);
                 }

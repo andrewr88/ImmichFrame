@@ -176,7 +176,7 @@ public class MultiImmichFrameLogicDelegateTests
         const string pastTheEnd = "bytes=999999999-";
         foreach (var account in _accounts)
         {
-            account.Setup(a => a.GetAsset(_assetId, AssetTypeEnum.VIDEO, pastTheEnd))
+            account.Setup(a => a.GetAsset(_assetId, AssetTypeEnum.VIDEO, pastTheEnd, It.IsAny<CancellationToken>()))
                 .ThrowsAsync(ImmichError(416));
         }
 
@@ -185,6 +185,30 @@ public class MultiImmichFrameLogicDelegateTests
 
         // Assert
         Assert.That(thrown!.StatusCode, Is.EqualTo(416));
+    }
+
+    [Test]
+    public void GetAsset_CallerGivesUp_ReachesCallerAsACancellationWithNoOtherAccountAsked()
+    {
+        // Arrange - the caller has hung up, and the account asked first says so as its request to
+        // Immich does, by throwing the cancellation. That is no false positive either: there is
+        // nobody left to find the asset for, so neither another account nor a 404 should follow.
+        using var caller = new CancellationTokenSource();
+        caller.Cancel();
+        foreach (var account in _accounts)
+        {
+            account.Setup(a => a.GetAsset(_assetId, AssetTypeEnum.VIDEO, null, caller.Token))
+                .ThrowsAsync(new TaskCanceledException(null, null, caller.Token));
+        }
+
+        // Act
+        Assert.That(async () => await _sut.GetAsset(_assetId, AssetTypeEnum.VIDEO, null, caller.Token),
+            Throws.InstanceOf<OperationCanceledException>());
+
+        // Assert
+        var asked = _accounts.Sum(account =>
+            account.Invocations.Count(invocation => invocation.Method.Name == nameof(IImmichFrameLogic.GetAsset)));
+        Assert.That(asked, Is.EqualTo(1));
     }
 
     [Test]

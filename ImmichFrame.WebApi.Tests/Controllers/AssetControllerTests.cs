@@ -198,8 +198,9 @@ namespace ImmichFrame.WebApi.Tests.Controllers
             };
         }
 
-        // The first bytes of an MP4's ftyp box. Content only has to survive the trip, not play.
-        private static readonly byte[] VideoBytes = [0x00, 0x00, 0x00, 0x20];
+        // The first bytes of an MP4's ftyp box, padded out to a kilobyte so that a range can begin well
+        // inside it. Content only has to survive the trip, not play.
+        private static readonly byte[] VideoBytes = [0x00, 0x00, 0x00, 0x20, .. new byte[1020]];
 
         /// <summary>
         /// A video asked for the way the web client's player asks for one: by id, with its type named
@@ -294,13 +295,23 @@ namespace ImmichFrame.WebApi.Tests.Controllers
         }
 
         /// <summary>
-        /// A player streams a video range after range, every one of them a request to this action, so
-        /// notifying the webhook for each would tell an automation the video was shown as many times as
-        /// a piece of it was asked for. A whole fetch notifies it once, and a ranged one never does.
-        /// Told apart by client identifier, since both name the same asset.
+        /// The webhook tells an automation an asset went up on a frame, so it is notified once each time
+        /// one does. A video goes up through a browser's &lt;video&gt;, which asks for a range from its
+        /// very first request - Chromium and Firefox for bytes=0-, and WebKit for bytes=0-1 to probe it
+        /// before asking for bytes=0-N - and then goes on asking range after range, every one of them a
+        /// request to this action. So the request that puts an asset up is one that asks for no range,
+        /// as an image is asked for, or for a single range from the first byte that is not that probe;
+        /// any other range is a player asking for more of a video already up, and notifying for each
+        /// would tell the automation the video was shown as many times as a piece of it was asked for.
+        /// Each request under test is followed by a whole fetch, and told apart from it by client
+        /// identifier, since both name the same asset.
         /// </summary>
-        [Test]
-        public async Task GetAsset_NotifiesTheWebhookOnceForAWholeFetchAndNeverForARange()
+        [TestCase(null, 1)]
+        [TestCase("bytes=0-", 1)]
+        [TestCase("bytes=0-999", 1)]
+        [TestCase("bytes=0-1", 0)]
+        [TestCase("bytes=500-", 0)]
+        public async Task GetAsset_NotifiesTheWebhookOncePerShowingAndNeverForTheRestOfAVideo(string? range, int notified)
         {
             // Arrange
             var notifications = ReceiveWebhookNotifications();
@@ -309,13 +320,14 @@ namespace ImmichFrame.WebApi.Tests.Controllers
             var client = _factory.CreateClient();
             await GetSlideshowContaining(client, videoAssetId);
 
-            using var ranged = new HttpRequestMessage(HttpMethod.Get,
-                $"/api/Asset/{videoAssetId}/Asset?assetType=video&clientIdentifier=Ranged");
-            ranged.Headers.Range = new RangeHeaderValue(0, 1);
+            using var tested = new HttpRequestMessage(HttpMethod.Get,
+                $"/api/Asset/{videoAssetId}/Asset?assetType=video&clientIdentifier=Tested");
+            if (range is not null)
+                tested.Headers.TryAddWithoutValidation("Range", range);
 
-            // Act - the range first, so that by the time the whole fetch's notification has arrived,
-            // one sent for the range would have been sent before it.
-            (await client.SendAsync(ranged)).EnsureSuccessStatusCode();
+            // Act - the request under test first, so that by the time the whole fetch's notification has
+            // arrived, one sent for the request under test would have been sent before it.
+            (await client.SendAsync(tested)).EnsureSuccessStatusCode();
             (await client.GetAsync($"/api/Asset/{videoAssetId}/Asset?assetType=video&clientIdentifier=Whole"))
                 .EnsureSuccessStatusCode();
 
@@ -327,7 +339,10 @@ namespace ImmichFrame.WebApi.Tests.Controllers
             }
 
             // Assert
-            Assert.That(notifications, Is.EqualTo(new[] { (ClientIdentifier: "Whole", AssetId: videoAssetId.ToString()) }));
+            var asset = videoAssetId.ToString();
+            Assert.That(notifications, Is.EqualTo(
+                Enumerable.Repeat((ClientIdentifier: "Tested", AssetId: asset), notified)
+                    .Append((ClientIdentifier: "Whole", AssetId: asset))));
         }
 
         /// <summary>
@@ -487,8 +502,9 @@ namespace ImmichFrame.WebApi.Tests.Controllers
         }
 
         /// <summary>
-        /// A video played back the way Immich plays one: whole, as the 206 it answers a range with, or
-        /// as a 416 for a range that starts past its end.
+        /// A video played back the way Immich plays one: whole, as the 206 it answers a range with - a
+        /// range left open, or running past the end, being the rest of the video - or as a 416 for a
+        /// range that starts past its end.
         /// </summary>
         private static HttpResponseMessage Playback(HttpRequestMessage request)
         {
@@ -502,8 +518,9 @@ namespace ImmichFrame.WebApi.Tests.Controllers
             }
 
             HttpResponseMessage response;
-            if (range is { From: { } from, To: { } to })
+            if (range is { From: { } from })
             {
+                var to = Math.Min(range.To ?? long.MaxValue, VideoBytes.Length - 1);
                 response = new HttpResponseMessage(HttpStatusCode.PartialContent)
                 {
                     Content = new ByteArrayContent(VideoBytes[(int)from..((int)to + 1)])

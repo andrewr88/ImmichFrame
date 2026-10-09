@@ -102,11 +102,11 @@ public class PooledImmichFrameLogic : IAccountImmichFrameLogic, IDisposable
 
     public async Task<long> GetTotalAssets() => await _pool.GetAssetCount();
 
-    public async Task<AssetResponse> GetAsset(Guid id, AssetTypeEnum? assetType = null, string? rangeHeader = null)
+    public async Task<AssetResponse> GetAsset(Guid id, AssetTypeEnum? assetType = null, string? rangeHeader = null, CancellationToken ct = default)
     {
         if (!assetType.HasValue)
         {
-            var assetInfo = await _immichApi.GetAssetInfoAsync(id, null, null);
+            var assetInfo = await _immichApi.GetAssetInfoAsync(id, null, null, ct);
             if (assetInfo == null)
                 throw new AssetNotFoundException($"Assetinfo for asset '{id}' was not found!");
             assetType = assetInfo.Type;
@@ -114,7 +114,7 @@ public class PooledImmichFrameLogic : IAccountImmichFrameLogic, IDisposable
 
         if (assetType == AssetTypeEnum.IMAGE)
         {
-            var (fileName, contentType, fileStream) = await GetImageAsset(id);
+            var (fileName, contentType, fileStream) = await GetImageAsset(id, ct);
             return new AssetResponse
             {
                 FileName = fileName,
@@ -129,19 +129,19 @@ public class PooledImmichFrameLogic : IAccountImmichFrameLogic, IDisposable
 
         if (assetType == AssetTypeEnum.VIDEO)
         {
-            return await GetVideoAsset(id, rangeHeader);
+            return await GetVideoAsset(id, rangeHeader, ct);
         }
 
         throw new AssetNotFoundException($"Asset {id} is not a supported media type ({assetType}).");
     }
-    private async Task<(string fileName, string ContentType, Stream fileStream)> GetImageAsset(Guid id)
+    private async Task<(string fileName, string ContentType, Stream fileStream)> GetImageAsset(Guid id, CancellationToken ct)
     {
         if (_generalSettings.DownloadImages && OpenCachedImage(id) is { } cached)
         {
             return cached;
         }
 
-        var data = await _immichApi.ViewAssetAsync(null, id, string.Empty, AssetMediaSize.Preview, null);
+        var data = await _immichApi.ViewAssetAsync(null, id, string.Empty, AssetMediaSize.Preview, null, ct);
 
         if (data == null)
             throw new AssetNotFoundException($"Asset {id} was not found!");
@@ -165,7 +165,7 @@ public class PooledImmichFrameLogic : IAccountImmichFrameLogic, IDisposable
             // finished or failed, and nothing else is in a position to dispose it.
             using (data)
             {
-                return (fileName, contentType, await DownloadToCache(data.Stream, fileName));
+                return (fileName, contentType, await DownloadToCache(data.Stream, fileName, ct));
             }
         }
 
@@ -216,7 +216,7 @@ public class PooledImmichFrameLogic : IAccountImmichFrameLogic, IDisposable
     /// once it is complete, so the cache never holds part of an image - not after a failed download,
     /// and not after a crash - and requests downloading the same image at once do not collide.
     /// </summary>
-    private async Task<Stream> DownloadToCache(Stream image, string fileName)
+    private async Task<Stream> DownloadToCache(Stream image, string fileName, CancellationToken ct)
     {
         Directory.CreateDirectory(DownloadLocation);
         var tempPath = Path.Combine(DownloadLocation, $"{fileName}.{Guid.NewGuid():N}.tmp");
@@ -226,7 +226,7 @@ public class PooledImmichFrameLogic : IAccountImmichFrameLogic, IDisposable
         {
             await using (var download = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write))
             {
-                await image.CopyToAsync(download);
+                await image.CopyToAsync(download, ct);
             }
 
             // Opened before the move rather than after it: once under the image's name, the file can
@@ -249,11 +249,11 @@ public class PooledImmichFrameLogic : IAccountImmichFrameLogic, IDisposable
     private static FileStream OpenCachedFile(string path) =>
         new(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
 
-    private async Task<AssetResponse> GetVideoAsset(Guid id, string? rangeHeader = null)
+    private async Task<AssetResponse> GetVideoAsset(Guid id, string? rangeHeader, CancellationToken cancellationToken)
     {
         var videoResponse = string.IsNullOrEmpty(rangeHeader)
-            ? await _immichApi.PlayAssetVideoAsync(id, null, null)
-            : await _immichApi.PlayAssetVideoWithRangeAsync(id, rangeHeader);
+            ? await _immichApi.PlayAssetVideoAsync(id, null, null, cancellationToken)
+            : await _immichApi.PlayAssetVideoWithRangeAsync(id, rangeHeader, cancellationToken);
 
         var contentType = videoResponse.Headers.TryGetValue("Content-Type", out var ct)
             ? ct.FirstOrDefault() ?? "video/mp4"

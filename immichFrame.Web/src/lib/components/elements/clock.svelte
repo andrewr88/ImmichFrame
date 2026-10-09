@@ -6,6 +6,7 @@
 	import { profileStore } from '$lib/stores/profile.store';
 	import { safeFormat } from '$lib/safe-format';
 	import { resolveLocale } from '$lib/locale';
+	import { weatherAfter } from './weather';
 
 	api.init();
 
@@ -49,10 +50,10 @@
 				clientIdentifier: $clientIdentifierStore,
 				profile: $profileStore
 			});
-			if (weatherRequest.status === 200) {
-				weather = weatherRequest.data;
-			} else {
-				console.warn('Unexpected weather status:', weatherRequest.status);
+			const next = weatherAfter(weatherRequest, weather);
+			weather = next.weather;
+			if (next.warning) {
+				console.warn(next.warning);
 			}
 		} catch (err) {
 			console.error('Error fetching weather:', err);

@@ -9,6 +9,7 @@ using ImmichFrame.WebApi.Helpers;
 using ImmichFrame.WebApi.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Net.Http.Headers;
 
 namespace ImmichFrame.WebApi.Controllers
 {
@@ -119,14 +120,19 @@ namespace ImmichFrame.WebApi.Controllers
             AssetResponse asset;
             try
             {
-                asset = await _logic.GetAsset(id, assetType, rangeHeader);
+                asset = await _logic.GetAsset(id, assetType, rangeHeader, HttpContext.RequestAborted);
             }
             catch (ApiException ex) when (ex.StatusCode == 416)
             {
                 return StatusCode(StatusCodes.Status416RangeNotSatisfiable);
             }
+            catch (OperationCanceledException) when (HttpContext.RequestAborted.IsCancellationRequested)
+            {
+                // The client hung up while Immich was still answering, and there is nobody to answer.
+                return new EmptyResult();
+            }
 
-            if (string.IsNullOrEmpty(rangeHeader))
+            if (StartsAShowing(rangeHeader))
             {
                 // Not the value logged above: the payload keeps the form existing automations match on.
                 var notification = new AssetRequestedNotification(id, clientIdentifier.ToLegacyWebhookClientIdentifier());
@@ -158,9 +164,21 @@ namespace ImmichFrame.WebApi.Controllers
                 else if (asset.ContentLength.HasValue)
                     Response.ContentLength = asset.ContentLength;
 
+                // With the request's token. Kestrel goes on accepting writes to a response whose client
+                // has hung up, throwing them away without an error, so without it the copy went on
+                // pulling the range from Immich for nobody - for a browser's bytes=0-, the rest of the
+                // video, every time a frame moved on before one had finished downloading. File() below
+                // stops the same way for a whole asset.
                 using (asset.Owner)
                 {
-                    await asset.FileStream.CopyToAsync(Response.Body);
+                    try
+                    {
+                        await asset.FileStream.CopyToAsync(Response.Body, HttpContext.RequestAborted);
+                    }
+                    catch (OperationCanceledException) when (HttpContext.RequestAborted.IsCancellationRequested)
+                    {
+                        // Nobody is left to answer, which is no error of this action's.
+                    }
                 }
                 return new EmptyResult();
             }
@@ -246,6 +264,32 @@ namespace ImmichFrame.WebApi.Controllers
                 PhotoDate = photoDate,
                 ImageLocation = imageLocation
             };
+        }
+
+        /// <summary>
+        /// Whether a request for an asset is the one that puts it up on a frame - the request the
+        /// webhook is notified for - rather than one more piece of a video already playing.
+        /// <para>
+        /// No Range at all is the whole asset, which is how an image is asked for. A video never is: a
+        /// browser's &lt;video&gt; asks for a range from its very first request - Chromium and Firefox
+        /// for bytes=0-, and WebKit for bytes=0-1 as a probe before bytes=0-N - and goes on from there
+        /// one range at a time. So a single range from the first byte puts a video up too, unless it
+        /// is that probe, which is never asked for alone; any other range is a seek, or the next
+        /// stretch of a video already up, and notifying for those would tell an automation the video
+        /// was shown as many times as a piece of it was asked for. A video shown again, or a frame
+        /// reloaded, starts from the first byte once more - a showing of its own, as it should be.
+        /// </para>
+        /// <para>
+        /// Compared as the parsed range rather than as text, which can spell one range more than one way.
+        /// </para>
+        /// </summary>
+        private static bool StartsAShowing(string? rangeHeader)
+        {
+            if (string.IsNullOrEmpty(rangeHeader)) return true;
+
+            return RangeHeaderValue.TryParse(rangeHeader, out var range)
+                && range.Ranges.Count == 1
+                && range.Ranges.Single() is { From: 0, To: not 1 };
         }
 
         /// <summary>

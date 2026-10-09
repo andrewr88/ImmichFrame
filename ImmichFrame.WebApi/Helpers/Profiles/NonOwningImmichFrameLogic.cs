@@ -40,8 +40,8 @@ public sealed class NonOwningImmichFrameLogic(IImmichFrameLogic _logic) : IImmic
 
     public Task<IEnumerable<AlbumResponseDto>> GetAlbumInfoById(Guid assetId) => _logic.GetAlbumInfoById(assetId);
 
-    public Task<AssetResponse> GetAsset(Guid id, AssetTypeEnum? assetType = null, string? rangeHeader = null)
-        => _logic.GetAsset(id, assetType, rangeHeader);
+    public Task<AssetResponse> GetAsset(Guid id, AssetTypeEnum? assetType = null, string? rangeHeader = null, CancellationToken ct = default)
+        => _logic.GetAsset(id, assetType, rangeHeader, ct);
 
     public Task<long> GetTotalAssets() => _logic.GetTotalAssets();
 
