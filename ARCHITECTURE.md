@@ -14,19 +14,20 @@ API serves as static files from `wwwroot`. Everything ships as one container ima
 | Backend | C# / .NET 8 (`net8.0`), nullable enabled, implicit usings | `Directory.Build.props`, every `*.csproj` |
 | Backend web | ASP.NET Core (`Microsoft.NET.Sdk.Web`), controllers + Swashbuckle | `ImmichFrame.WebApi/ImmichFrame.WebApi.csproj`, `ImmichFrame.WebApi/Program.cs` |
 | NuGet | Central Package Management (versions pinned in one file, `PackageReference` carries no version) | `Directory.Packages.props` |
-| Frontend | SvelteKit 2 / Svelte 5, TypeScript, Vite 7, Tailwind 3, `adapter-static` (SPA, `ssr = false`, `prerender = true`) | `immichFrame.Web/package.json`, `svelte.config.js`, `src/routes/+layout.ts` |
+| Settings store | EF Core 8 + SQLite: one settings document in `immichframe.db` in the configuration directory | `ImmichFrame.WebApi/Database/`, `Services/SettingsService.cs` |
+| Frontend | SvelteKit 2 / Svelte 5, TypeScript, Vite 7, Tailwind 4 (`@tailwindcss/postcss`), `adapter-static` (SPA, `ssr = false`, `prerender = true`) | `immichFrame.Web/package.json`, `svelte.config.js`, `src/routes/+layout.ts` |
 | Docs site | Docusaurus 3 + React 19 | `docs/package.json` |
 | Containers | Multi-stage `Dockerfile` (dotnet sdk → publish → node build → `aspnet:8.0-jammy` final, non-root UID 1000) | `/Dockerfile` |
 | Compose | Prod and dev compose files | `docker/docker-compose.yml`, `docker/docker-compose.dev.yml` |
 | CI | GitHub Actions: tests on every push/PR, CodeQL, multi-arch image publish on `v*` tags, GH Pages docs deploy | `.github/workflows/*` |
-| Test stack | NUnit 4 + NUnit.Analyzers + Moq; `AwesomeAssertions` and `Microsoft.AspNetCore.Mvc.Testing` in the WebApi tests only | test `*.csproj` files |
+| Test stack | NUnit 4 + NUnit.Analyzers + Moq; `AwesomeAssertions` and `Microsoft.AspNetCore.Mvc.Testing` in the WebApi tests only. Frontend: Vitest 5, colocated `src/**/*.test.ts` over plain TS modules in a node environment (no DOM) | test `*.csproj` files, `immichFrame.Web/vitest.config.ts` |
 
 ### Solution layout
 
 ```
 ImmichFrame.sln
 ├─ ImmichFrame.Core          class library — Immich API client, asset pools, settings interfaces, services
-├─ ImmichFrame.WebApi        ASP.NET Core host — controllers, config loading, profiles, auth
+├─ ImmichFrame.WebApi        ASP.NET Core host — controllers, settings DB, profiles, auth, admin surface
 ├─ ImmichFrame.Core.Tests    NUnit + Moq unit tests (pools, account selection)
 └─ ImmichFrame.WebApi.Tests  NUnit + WebApplicationFactory integration tests (controllers, config)
 
@@ -34,7 +35,7 @@ immichFrame.Web             SvelteKit SPA (built into wwwroot by the Dockerfile)
 docs                        Docusaurus site
 docker                      compose files, example Settings.json / Settings.yml, example.env
 openApi/swagger.json        ImmichFrame's own OpenAPI spec, checked in; source for the TS client
-audit                       codebase-audit kit driven by the `audit-*` Make targets
+audit                       codebase-audit kit for the `audit-*` Make targets (`adapters/fullstack.sh`)
 templates/release-template.md  release-notes template referenced by CLAUDE.md
 ```
 
@@ -57,14 +58,23 @@ with its config models.
 
 ### Configuration profiles
 
-Config is loaded once at startup from `Settings.json` / `Settings.yml` (path from
-`IMMICHFRAME_CONFIG_PATH`, else a `Config` directory next to the binary). `ConfigLoader` tries the
-current schema first, then falls back to the v1 schema via `ServerSettingsV1Adapter`, for both JSON
-and YAML. The result is an `IConfigCatalog`: a default configuration plus named profiles.
+Settings live in an EF Core SQLite database, `immichframe.db`, in the configuration directory
+(`IMMICHFRAME_CONFIG_PATH`, else a `Config` directory next to the binary). `SettingsService` makes
+the database the source of truth: the first run that finds no stored document imports an existing
+`Settings.json` / `Settings.yml` once and ignores the file from then on, and with no file the app
+starts unconfigured. `ConfigLoader` survives only as the reader for that import — current schema
+first, then the v1 schema via `ServerSettingsV1Adapter`, which the import converts to
+current-schema JSON. The stored text binds into an `IConfigCatalog`: a default configuration plus
+named profiles. The registered catalog is `SwappableConfigCatalog`, and the admin editor (see Auth)
+saves through `AdminConfigService`, which calls `Swap` to apply the new configuration at runtime,
+without a restart.
 
 A request selects a profile with the `?profile=` query parameter (query, not header — asset URLs
 are consumed bare by `<img src>`/`<video src>`). The chain is:
 
+- `ProfileNotFoundMiddleware` (`Program.cs:393`) — outside everything that resolves a profile;
+  404s a request whose profile a save removed while it was in flight, since the
+  `ProfileNotFoundException` surfaces from DI or the auth handler, outside MVC's exception filters.
 - `UnknownProfileMiddleware` — 404s an unknown profile before anything downstream resolves it.
 - `ICurrentProfile` / `CurrentProfile` (scoped) — reads the query parameter.
 - `ProfileRegistry` (singleton) — `ConcurrentDictionary<string, Lazy<ProfileServices>>`, builds each
@@ -73,13 +83,16 @@ are consumed bare by `<img src>`/`<video src>`). The chain is:
 - `ProfileServices` — the expensive per-profile pieces: HTTP clients, asset pools, API caches, and a
   per-profile `BloomFilterAssetAccountTracker`.
 
-`Program.cs` registers `ProfileServices` itself as **scoped**, resolved from the registry once per
-request, and then registers `IServerSettings`, `IGeneralSettings`, `IClientSettings`,
-`IServerBehaviorSettings`, `IWeatherService`, `ICalendarService`, and `IImmichFrameLogic` as
-**scoped** delegates reading from that one pinned instance rather than each asking the registry
-again — so a configuration swap landing mid-request cannot split a request across two
-configurations, and controllers keep injecting the same interfaces they always have, unaware of
-profiles entirely.
+`Program.cs` registers `ProfileScope` as **scoped** (`Program.cs:227`): it leases the profile's
+`ProfileServices` from the registry once per request and hands the lease back when the request's
+scope disposes it. `IServerSettings`, `IGeneralSettings`, `IClientSettings`,
+`IServerBehaviorSettings`, `IWeatherService`, and `ICalendarService` are **scoped** delegates
+reading from that one lease rather than each asking the registry again; `IImmichFrameLogic` goes
+out through `NonOwningImmichFrameLogic` (`Program.cs:248`), because the container disposes whatever
+a scoped factory returns and the logic is shared by every request on the profile. So a
+configuration swap landing mid-request neither splits a request across two configurations nor tears
+its graph down under it, and controllers keep injecting the same interfaces they always have,
+unaware of profiles entirely.
 
 Profile names are validated in `ConfigCatalog`: `^[A-Za-z0-9_-]{1,64}$`, case-insensitive, with
 `api`, `static`, `swagger`, `admin`, `default`, and the three OIDC handshake paths (`signin-oidc`,
@@ -99,10 +112,25 @@ This is the busiest area of the codebase — see hotspots below.
 
 ### Auth
 
-Single shared secret. `ImmichFrameAuthenticationHandler` (scheme `ImmichFrameScheme`) succeeds
-anonymously when no `AuthenticationSecret` is configured or the endpoint carries no `[Authorize]`;
-otherwise it compares a `Bearer` token. `CustomAuthenticationMiddleware` runs the scheme for every
-request and short-circuits with a 401 and the failure message.
+Two separate mechanisms, registered in `Program.cs:285-355`.
+
+**The frame: a shared secret.** `ImmichFrameAuthenticationHandler` (scheme `ImmichFrameScheme`, the
+default) succeeds anonymously when no `AuthenticationSecret` is configured or the endpoint carries
+no `[Authorize]`; otherwise it compares a `Bearer` token. `CustomAuthenticationMiddleware` runs the
+scheme for every request outside the admin paths and short-circuits with a 401 and the failure
+message.
+
+**The admin surface: OpenID Connect into a cookie.** The `/admin` SPA route (`src/routes/admin/`,
+components in `src/lib/components/admin/`) talks to `AdminConfigController` (the settings
+document), `AdminImmichController` (the account picker's Immich proxy) and `AdminSessionController`
+(session, sign-in, sign-out), all under `/api/admin`. Sign-in is an OIDC code flow with PKCE
+(`AdminAuthentication.OidcScheme`) landing in the `immichframe.admin` cookie (`CookieScheme`),
+configured from `IMMICHFRAME_OIDC_*` environment variables only, never from the settings it guards.
+The `AdminOnly` policy requires that cookie and a caller on the `IMMICHFRAME_OIDC_ADMINS` allowlist
+(`AdminAllowlistHandler`). `AdminSurfaceMiddleware` 404s the `/api/admin` prefix (bar the session
+probe) unless authority, client id, secret and allowlist are all set, and `AdminEndpointGuard`
+refuses to boot if any endpoint on an admin path lacks the `AdminOnly` policy or an explicit
+`[AdminEndpoint]` waiver — a bare `[Authorize]` falls back to the frame's scheme and does not count.
 
 ## Conventions
 
@@ -150,8 +178,12 @@ request and short-circuits with a 401 and the failure message.
   (`immichFrame.Web/.prettierrc`). ESLint flat config layering `js.configs.recommended`,
   `typescript-eslint`, `eslint-plugin-svelte`, and `eslint-config-prettier`.
 - Type checking via `svelte-check` (`npm run check`), not `tsc` directly.
-- API access goes exclusively through the generated `$lib/immichFrameApi`; state lives in small
-  hand-rolled Svelte stores (`src/lib/stores/*.store.ts`) that wrap `writable`.
+- API calls go through the generated `$lib/immichFrameApi`, never a raw `fetch()` in `src/` (the
+  service worker in `static/` re-issues requests by design). URLs the browser loads itself are built
+  by hand instead: media for `<img>`/`<video>` (`lib/index.ts:96`, `immich-picker.ts:177`) and the
+  admin sign-in, a full-page navigation that must follow a 302 to the identity provider
+  (`routes/admin/+page.svelte:69`). State lives in small hand-rolled Svelte stores
+  (`src/lib/stores/*.store.ts`) that wrap `writable`.
 - Dev server proxies `/api` and `/static` to `http://localhost:5217` (`vite.config.ts`).
 
 ## Lint and test commands
@@ -169,6 +201,7 @@ make dev              # dotnet run --project ./ImmichFrame.WebApi   (port 5217)
 npm run lint          # prettier --check . && eslint .
 npm run format        # prettier --write .
 npm run check         # svelte-kit sync && svelte-check
+npm test              # vitest run   (from the repo root: npm --prefix immichFrame.Web test)
 npm run dev           # vite dev
 
 # Docs
@@ -183,7 +216,7 @@ make docker-prod
 ```
 
 CI (`.github/workflows/test.yml`) runs exactly the two `dotnet test` invocations on .NET 8.0.x for
-every push and PR on every branch. **Frontend lint/check is not run in CI** — run it locally.
+every push and PR on every branch. **Frontend lint/check/test is not run in CI** — run them locally.
 
 ## Project structure hotspots
 
@@ -236,9 +269,10 @@ Svelte component that consumes it, and `docs/docs/getting-started/configuration.
 - Don't add a version attribute to a `<PackageReference>` — central package management will reject it.
 - Don't inject `IConfigCatalog` or `ProfileRegistry` into controllers; no controller in the tree
   knows profiles exist.
-- Don't add an `appsettings` binding for user configuration — user config comes from
-  `Settings.json`/`Settings.yml` through `ConfigLoader`, and both the current and v1 schemas must
-  keep loading.
+- Don't add an `appsettings` binding for user configuration — it lives in the settings database
+  behind `SettingsService` and changes through the admin editor. `Settings.json`/`Settings.yml` is
+  only imported once, through `ConfigLoader`, which must keep reading both the current and v1
+  schemas.
 - Don't leak server-only settings into `ClientSettingsDto`; `ConfigControllerTests` explicitly
   asserts that keys, webhooks, calendars, and the auth secret never reach the client.
 - Don't reach for a new assertion library — NUnit constraint syntax (plus AwesomeAssertions in the
@@ -250,7 +284,4 @@ Svelte component that consumes it, and `docs/docs/getting-started/configuration.
 - No `.editorconfig` and no `dotnet format` step, so C# style (file-scoped namespaces, primary
   constructors, brace placement) is inconsistent between older and newer files. Worth settling if
   formatting churn becomes a nuisance.
-- `audit/` ships a Go adapter only (`audit/adapters/go.sh`); the Makefile defaults
-  `AUDIT_ADAPTER=dotnet`, so the `audit-*` targets stay inert until `audit/adapters/dotnet.sh`
-  exists.
-- Frontend `npm run lint` / `npm run check` are not wired into any workflow.
+- Frontend `npm run lint` / `npm run check` / `npm test` are not wired into any workflow.

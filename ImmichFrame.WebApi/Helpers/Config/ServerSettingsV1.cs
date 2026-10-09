@@ -1,6 +1,6 @@
 using ImmichFrame.Core.Interfaces;
 
-namespace ImmichFrame.WebApi.Helpers;
+namespace ImmichFrame.WebApi.Helpers.Config;
 
 /// <summary>
 /// Original 'flat' Settings definition, which contains settings related to all components

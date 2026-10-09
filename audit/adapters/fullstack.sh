@@ -1443,12 +1443,15 @@ _af_arch_check_csprojs() {
 # This is what keeps Section A honest. A C# `using N;` does NOT reach every
 # directory that declares N -- it reaches the members of N in THIS assembly and
 # in assemblies this project references. ImmichFrame.Core.csproj carries no
-# <ProjectReference> at all, so a `using ImmichFrame.WebApi.Helpers;` inside
-# ImmichFrame.Core cannot possibly bind to ImmichFrame.WebApi/Helpers; it binds
-# to the two files under ImmichFrame.Core/Helpers that declare that namespace
-# from inside Core. Emitting the WebApi edges anyway invented four upward
-# Core -> WebApi edges that cannot compile, contradicting both ARCHITECTURE.md's
-# one-way rule and Section E on the same page.
+# <ProjectReference> at all, so when this was written the two
+# `using ImmichFrame.WebApi.Helpers;` lines inside ImmichFrame.Core could not
+# bind to ImmichFrame.WebApi/Helpers; they bound to the two files under
+# ImmichFrame.Core/Helpers that then declared that namespace from inside Core.
+# Emitting the WebApi edges anyway invented four upward Core -> WebApi edges
+# that could not compile, contradicting both ARCHITECTURE.md's one-way rule and
+# Section E on the same page. 1d9eabc and 9e0f7e4 have since moved both files
+# into ImmichFrame.Core.Helpers; the filter stays as the guard, so a recurrence
+# is never drawn as a Core -> WebApi edge that cannot compile.
 #
 # The closure is transitive because C# project references are: ImmichFrame.
 # WebApi.Tests references only WebApi, yet its files legitimately `using
@@ -1679,13 +1682,15 @@ audit_arch_build_graph() {
     # does not depend on itself.
     #
     # One namespace can be declared in SEVERAL directories, and in this repo one
-    # is: ImmichFrame.WebApi.Helpers is declared under ImmichFrame.WebApi/Helpers,
-    # under ImmichFrame.WebApi/Helpers/Config, AND by two files that physically
-    # sit under ImmichFrame.Core/Helpers. The map is therefore multi-valued --
-    # but a `using` only binds within the compiling assembly and the assemblies
-    # it references, so a candidate directory in an UNREFERENCED project is
-    # discarded (see _af_arch_build_projrefs). Without that filter this emitted
-    # four Core -> WebApi edges that cannot compile, and for WebhookHelper.cs it
+    # was: ImmichFrame.WebApi.Helpers was declared under
+    # ImmichFrame.WebApi/Helpers, under ImmichFrame.WebApi/Helpers/Config, AND
+    # by two files that physically sat under ImmichFrame.Core/Helpers. Each has
+    # since moved to the namespace its directory implies, but nothing in C#
+    # stops it recurring, so the map stays multi-valued -- and a `using` only
+    # binds within the compiling assembly and the assemblies it references, so
+    # a candidate directory in an UNREFERENCED project is discarded (see
+    # _af_arch_build_projrefs). Without that filter this emitted four
+    # Core -> WebApi edges that could not compile, and for WebhookHelper.cs it
     # replaced a same-directory reference with two cross-project ones, because
     # the only true target was its own directory and was dropped as a self-edge.
     #
@@ -2035,8 +2040,15 @@ audit_arch_section_b() {
             # Whole-line comments only. Stripping from a mid-line "//" would
             # also cut string literals containing "http://".
             if (code ~ /^[ \t]*\/\//) code = ""
-            nopen = nchar(code, "\\{")
-            nclos = nchar(code, "\\}")
+            # Braces are counted with string and char literals blanked: a "{"
+            # inside one (a test asserting on serialized text) would otherwise
+            # hold the function open until its enclosing type closes, scoring
+            # every function after it as part of it. Keywords count on code.
+            bc = code
+            gsub(/"([^"\\]|\\.)*"/, "\"\"", bc)
+            gsub(/\047([^\047\\]|\\.)\047/, "\047\047", bc)
+            nopen = nchar(bc, "\\{")
+            nclos = nchar(bc, "\\}")
             if (infn) {
                 score += kwcount(code)
                 depth += nopen - nclos
@@ -2201,8 +2213,8 @@ audit_arch_section_d() {
 #                   projects; a production assembly referencing it is a leak.
 #   profile-leak    "Don't inject IConfigCatalog or ProfileRegistry into
 #                   controllers; no controller in the tree knows profiles exist."
-#   raw-fetch       "API access goes exclusively through the generated
-#                   $lib/immichFrameApi."
+#   raw-fetch       "API calls go through the generated $lib/immichFrameApi,
+#                   never a raw fetch() in src/."
 #   namespace-project-mismatch
 #                   a file declaring a namespace owned by a DIFFERENT project
 #                   than the one it is compiled into. Hygiene, not a layer
@@ -2300,14 +2312,17 @@ _af_arch_rprint() {
 
 # _af_arch_rule_core_to_webapi: the one rule that must RESOLVE rather than grep.
 #
-# A grep for `using ImmichFrame.WebApi` under ImmichFrame.Core/ reports two hits
-# in this repo, and calling them a broken one-way dependency would be wrong:
-# ImmichFrame.Core.csproj has no <ProjectReference> at all, so those usings
-# cannot bind to anything in the WebApi assembly. They resolve inside Core, to
-# the two files under ImmichFrame.Core/Helpers that declare a WebApi namespace
-# from inside Core -- which is a naming problem, reported separately below as
-# namespace-project-mismatch. The code compiles precisely because it is not a
-# layer inversion.
+# When this rule was written, a grep for `using ImmichFrame.WebApi` under
+# ImmichFrame.Core/ reported two hits, and calling them a broken one-way
+# dependency would have been wrong: ImmichFrame.Core.csproj has no
+# <ProjectReference> at all, so those usings could not bind to anything in the
+# WebApi assembly. They resolved inside Core, to the two files under
+# ImmichFrame.Core/Helpers that declared a WebApi namespace from inside Core --
+# a naming problem, reported separately below as namespace-project-mismatch.
+# The code compiled precisely because it was not a layer inversion. 1d9eabc
+# and 9e0f7e4 have since moved both files into ImmichFrame.Core.Helpers, so
+# that grep now finds nothing; resolving, and refusing a verdict when the
+# reference graph cannot be read, stay as the guard against a recurrence.
 #
 # So this rule reads the resolved edge list Section A drew (which already
 # applies the project-reference filter) and fails only on an edge that genuinely
@@ -2456,17 +2471,24 @@ audit_arch_section_e() {
         "$TMP_DIR/arch.rule.ctrl" \
         '(^|[^A-Za-z0-9_])(IConfigCatalog|ProfileRegistry)([^A-Za-z0-9_]|$)'
 
-    # All API access goes through the generated client. Scoped to src/ on
-    # purpose: static/pwa-service-worker.js is a service worker, whose entire
-    # job is intercepting and re-issuing raw fetch() calls, so the three it
-    # contains are correct and the rule must not look there. The n/a text says
-    # so, because a scope of static/ alone would otherwise read as "nothing to
-    # see" over a file that visibly calls fetch().
+    # API calls go through the generated client, never a raw fetch(). Scoped
+    # to src/ on purpose: static/pwa-service-worker.js is a service worker,
+    # whose entire job is intercepting and re-issuing raw fetch() calls, so the
+    # three it contains are correct and the rule must not look there. The n/a
+    # text says so, because a scope of static/ alone would otherwise read as
+    # "nothing to see" over a file that visibly calls fetch().
+    #
+    # Tests are excluded too. They never ship -- Vitest runs them under node --
+    # and they stub fetch (vi.stubGlobal) and describe it in comments, none of
+    # which is the app reaching the API. The optional -<name> suffix catches
+    # the test-only helpers beside them (admin-config.test-editor.ts,
+    # .test-fixtures.ts, .test-server-model.ts), which only test files import.
     grep -E "^$AUDIT_WEB_ROOT/src/.*\.(ts|js|svelte)$" "$TMP_DIR/arch.scope.files" \
         | grep -Fxv "$AUDIT_WEB_GENERATED" \
+        | grep -Ev '\.test(-[A-Za-z0-9-]+)?\.(ts|js)$' \
         > "$TMP_DIR/arch.rule.web" || :
     _af_arch_rule raw-fetch FAIL \
-        "no $AUDIT_WEB_ROOT/src sources in scope '$TARGET_SCOPE'; the rule never covers static/, where the service worker calls fetch() by design" \
+        "no non-test $AUDIT_WEB_ROOT/src sources in scope '$TARGET_SCOPE'; the rule never covers static/, where the service worker calls fetch() by design" \
         "$TMP_DIR/arch.rule.web" \
         '(^|[^A-Za-z0-9_$])fetch[[:space:]]*\('
 
