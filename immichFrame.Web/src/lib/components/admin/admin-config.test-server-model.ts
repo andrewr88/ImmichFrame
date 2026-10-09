@@ -14,10 +14,12 @@ import type { StoredAccount } from './admin-config.test-fixtures';
  * neither handles - which is exactly the defect this model exists to find. Where a rule below looks
  * arbitrary, the C# it came from is named beside it.
  *
- * Two things it does not model, because the grid does not vary them: an `ApiKeyFile` is assumed to
+ * Three things it does not model, because the grid does not vary them: an `ApiKeyFile` is assumed to
  * exist and to hold a non-empty key (`File.ReadAllText` throwing is an installation problem, not a
- * save the editor could have prevented), and general settings are only checked for being settings
- * the server knows about.
+ * save the editor could have prevented), general settings are only checked for being settings the
+ * server knows about, and an account's numbers and dates are not checked at all. Those are the
+ * bounds on `ImagesFromDays` and `Rating`, and an `ImagesFromDate` later than `ImagesUntilDate`.
+ * Every fixture leaves all four unset.
  *
  * ## Which of these rules the suite actually exercises
  *

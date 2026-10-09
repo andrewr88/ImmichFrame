@@ -57,6 +57,7 @@ General:
   Webcalendars:  # string[]
     - UUID
   # Interval in hours. Determines how often images are pulled from a album/person in immich.
+  # Allowed values are 0 to 87600 (ten years). 0 pulls them again on every request.
   RefreshAlbumPeopleInterval: 12  # int
   # Date format. See https://date-fns.org/v4.1.0/docs/format for more information.
   PhotoDateFormat: 'MM/dd/yyyy'  # string
@@ -147,9 +148,9 @@ Accounts:
     ShowVideos: false  # boolean
     # Show images from the last X days, e.g., 365 -> show images from the last year
     ImagesFromDays: null  # int
-    # Show images before date.
+    # Show images before date. Must not be earlier than `ImagesFromDate`.
     ImagesUntilDate: '2020-01-02'  # Date
-    # Rating of an image in stars, allowed values from -1 to 5. This will only show images with the exact rating you are filtering for.
+    # Rating of an image in stars, allowed values from 1 to 5. Any other value is invalid. This will only show images with the exact rating you are filtering for.
     Rating: null  # int
     # UUID of album(s) - e.g. ['00000000-0000-0000-0000-000000000001']
     Albums:  # string[]

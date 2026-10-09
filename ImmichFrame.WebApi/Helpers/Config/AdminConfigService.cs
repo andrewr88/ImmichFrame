@@ -478,9 +478,21 @@ public sealed class AdminConfigService(
 
         var profiles = new Dictionary<string, object?>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var position = 0;
 
         foreach (var profile in request.Profiles ?? [])
         {
+            position++;
+
+            // Refused in words, as an empty account entry is: model binding accepts a null entry, the
+            // editor never sends one, and the null used to be dereferenced below, answering 500.
+            if (profile is null)
+            {
+                throw new SettingsNotValidException(
+                    $"Profiles entry {position} is empty: every entry in the profile list has to be a " +
+                    "configuration profile. Remove the empty entry and save again.");
+            }
+
             var name = profile.Name ?? string.Empty;
 
             // The loader's own rules, so a name the editor accepts is one the next restart accepts.
@@ -518,6 +530,15 @@ public sealed class AdminConfigService(
 
         foreach (var key in entry.DeclaredKeys ?? [])
         {
+            // Refused for the same reason as an empty profile entry: binding accepts it, and the
+            // null used to be dereferenced just below, answering 500.
+            if (key is null)
+            {
+                throw new SettingsNotValidException(
+                    $"DeclaredKeys in {ConfigurationNamed(profileName)} has an empty entry: every declared " +
+                    "key has to name a setting. Remove the empty entry and save again.");
+            }
+
             if (key.StartsWith($"{ConfigKeys.General}.", StringComparison.OrdinalIgnoreCase))
             {
                 var name = key[(ConfigKeys.General.Length + 1)..];
@@ -633,7 +654,7 @@ public sealed class AdminConfigService(
         string? profileName)
     {
         var entryName = profileName ?? ConfigCatalog.DefaultProfileName;
-        var where = profileName is null ? "the default configuration" : $"configuration profile '{profileName}'";
+        var where = ConfigurationNamed(profileName);
         var claimed = new HashSet<string>(StringComparer.Ordinal);
         var labelled = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var defaults = new ServerAccountSettings();
@@ -806,6 +827,13 @@ public sealed class AdminConfigService(
     /// </summary>
     private static string Describe(AdminAccountSettingsDto account) =>
         string.IsNullOrWhiteSpace(account.ImmichServerUrl) ? "(no server URL)" : account.ImmichServerUrl;
+
+    /// <summary>
+    /// How a refusal names the configuration it is about: the default one for a null
+    /// <paramref name="profileName"/>, otherwise that profile.
+    /// </summary>
+    private static string ConfigurationNamed(string? profileName) =>
+        profileName is null ? "the default configuration" : $"configuration profile '{profileName}'";
 
     /// <summary>
     /// A label as everything here compares and stores it. Absent, empty and whitespace-only are one

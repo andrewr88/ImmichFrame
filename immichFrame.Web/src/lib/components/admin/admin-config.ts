@@ -244,7 +244,7 @@ export const accountFields: Record<AccountProp, FieldSpec> = {
 		kind: 'lines',
 		help: 'Only photos with these tags, stored as the full path, e.g. Travel/Europe.'
 	},
-	rating: { label: 'Rating', kind: 'integer', help: 'Exact star rating, -1 to 5. Blank for any.' }
+	rating: { label: 'Rating', kind: 'integer', help: 'Exact star rating, 1 to 5. Blank for any.' }
 };
 
 export const accountProps = Object.keys(accountFields) as AccountProp[];
@@ -1353,10 +1353,24 @@ const INT32_MAX = 2147483647;
  * The account settings the server holds to a narrower range than an int's. `ImagesFromDays` is
  * bounded by `ServerAccountSettings.MaxImagesFromDays`: a negative number moves the cut-off into the
  * future, and one a date cannot count back from today failed every request for the account's photos.
- * The server refuses either, but in words that name neither the configuration nor the account.
+ * `Rating` is bounded by `ServerAccountSettings.MinRating` and `MaxRating`, the ratings Immich gives
+ * a photo. An account shows only the photos rated exactly that, so a number outside the range
+ * matched none. The server refuses all of these, but in words that do not say which account.
  */
 const accountRanges: Partial<Record<AccountProp, readonly [min: number, max: number]>> = {
-	imagesFromDays: [0, 36500]
+	imagesFromDays: [0, 36500],
+	rating: [1, 5]
+};
+
+/**
+ * The general settings the server holds to a narrower range than an int's.
+ * `RefreshAlbumPeopleInterval` is bounded by `GeneralSettings.MaxRefreshAlbumPeopleInterval`, ten
+ * years in hours. That is far below the point where the cache holding an account's albums and
+ * people can no longer set an expiry, which failed every request for photos. A negative number is
+ * not a number of hours.
+ */
+const generalRanges: Partial<Record<GeneralProp, readonly [min: number, max: number]>> = {
+	refreshAlbumPeopleInterval: [0, 87600]
 };
 
 /**
@@ -1413,7 +1427,7 @@ export function validationErrors(config: EditableConfig): string[] {
 					// committed, and rounding it there would save a number nobody typed - so it is
 					// refused here, by name. Asked only of a number, since a box with none in it has
 					// just been told so.
-					const need = wholeNumberNeed(value);
+					const need = wholeNumberNeed(value, generalRanges[prop]);
 
 					if (need) errors.push(`${entryLabel(entry)}: '${spec.label}' needs ${need}.`);
 				}

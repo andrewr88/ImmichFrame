@@ -185,8 +185,9 @@ function keyFilePath(fixture: AccountFixture, entryName: string, index: number):
 /**
  * One account as a read reports it. `AdminAccountSettingsDto`'s constructor binds without
  * `ValidateAndInitialize`, so a key-file account has an empty `ApiKey` and is reported through
- * `ApiKeyFromFile` instead; `HasApiKey` is `ApiKeyFromFile || ApiKey != ''`, and a stored account
- * that loaded at all has a key by one of the two means. `ApiKey` itself is never populated.
+ * `ApiKeyFromFile` instead. `HasApiKey` is `ApiKeyFromFile` or an `ApiKey` that is not blank, and a
+ * stored account that loaded at all has a key by one of the two means. `ApiKey` itself is never
+ * populated.
  */
 function accountDto(
 	fixture: AccountFixture,

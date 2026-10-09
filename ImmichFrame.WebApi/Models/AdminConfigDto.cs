@@ -144,9 +144,13 @@ public class AdminGeneralSettingsDto
         WeatherLatLong = settings.WeatherLatLong;
         UnitSystem = settings.UnitSystem;
 
-        HasWeatherApiKey = !string.IsNullOrEmpty(settings.WeatherApiKey);
-        HasWebhook = !string.IsNullOrEmpty(settings.Webhook);
-        HasAuthenticationSecret = !string.IsNullOrEmpty(settings.AuthenticationSecret);
+        // Asked the way everything that uses a secret asks. A secret that is only whitespace is no
+        // secret: the frame's handler serves every request without one, the weather service and the
+        // webhook stay off, and a save drops it. Reporting it as set told an administrator the frames
+        // were guarded while anyone could open them.
+        HasWeatherApiKey = !string.IsNullOrWhiteSpace(settings.WeatherApiKey);
+        HasWebhook = !string.IsNullOrWhiteSpace(settings.Webhook);
+        HasAuthenticationSecret = !string.IsNullOrWhiteSpace(settings.AuthenticationSecret);
     }
 
     public int? Interval { get; set; }
@@ -229,8 +233,10 @@ public class AdminAccountSettingsDto
         // an ApiKeyFile has an empty ApiKey here. Reporting that as "no key" would show an account
         // that works as one that is not configured, and invite an administrator to type a key it
         // cannot accept alongside the file.
+        //
+        // A key that is only whitespace is no key, as validation says when it refuses one.
         ApiKeyFromFile = !string.IsNullOrWhiteSpace(settings.ApiKeyFile);
-        HasApiKey = ApiKeyFromFile || !string.IsNullOrEmpty(settings.ApiKey);
+        HasApiKey = ApiKeyFromFile || !string.IsNullOrWhiteSpace(settings.ApiKey);
     }
 
     /// <summary>

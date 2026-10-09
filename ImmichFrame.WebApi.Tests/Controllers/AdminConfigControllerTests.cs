@@ -380,6 +380,47 @@ public class AdminConfigControllerTests
     }
 
     /// <summary>
+    /// A secret that is only whitespace is not a secret to anything that reads it. The frame's
+    /// handler serves every request without asking for one, a save drops it, and validation refuses
+    /// an account whose key is only whitespace. The read reported each one as set anyway, so the
+    /// editor told an administrator the frames were guarded while anyone could open them. This
+    /// settings file is written by hand, because the editor never saves such a value.
+    /// </summary>
+    [Test]
+    public async Task GetConfig_SecretsThatAreOnlyWhitespace_AreReportedAsNotSet()
+    {
+        // Arrange
+        WriteSettings("Settings.json", """
+            {
+              "General": {
+                "AuthenticationSecret": "   ",
+                "WeatherApiKey": " ",
+                "Webhook": "\t"
+              },
+              "Accounts": [
+                { "ImmichServerUrl": "http://server-x.example.com", "ApiKey": "key-x" },
+                { "ImmichServerUrl": "http://server-y.example.com", "ApiKey": "  " }
+              ]
+            }
+            """);
+        using var factory = CreateFactory();
+
+        // Act
+        var config = await GetConfig(factory.CreateClient());
+        var general = config.Default.General;
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(general.HasAuthenticationSecret, Is.False);
+            Assert.That(general.HasWeatherApiKey, Is.False);
+            Assert.That(general.HasWebhook, Is.False);
+            Assert.That(config.Default.Accounts[1].HasApiKey, Is.False);
+            Assert.That(config.Default.Accounts[0].HasApiKey, Is.True, "a real key is still reported as set");
+        });
+    }
+
+    /// <summary>
     /// Not everything this answers with is masked: a calendar's URL is sent as it stands, and that URL
     /// is often the only secret the calendar has. So no cache may keep a copy - not the browser's, for
     /// the next person at that browser to be shown, and not one between it and the server, for whoever
@@ -813,6 +854,77 @@ public class AdminConfigControllerTests
     }
 
     /// <summary>
+    /// A secret pasted with a trailing space or line break. The frame's handler trims the bearer token
+    /// a frame sends, so a secret stored with whitespace around it matched no token that any frame
+    /// could send. Every frame was refused, while the editor reported the secret as set.
+    /// </summary>
+    [Test]
+    public async Task SaveConfig_SecretWithSurroundingWhitespace_IsMatchedByTheFramesToken()
+    {
+        // Arrange
+        WriteSettings("Settings.json", SettingsJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var config = await GetConfig(client);
+        config.Default.General.AuthenticationSecret = "s3cret \n";
+
+        // Act
+        var response = await Put(client, config);
+        var body = await response.Content.ReadAsStringAsync();
+        var (frame, anonymous) = await CalendarWithAndWithoutToken(client, "s3cret");
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK), body);
+            Assert.That(frame.StatusCode, Is.EqualTo(HttpStatusCode.OK), "a frame sending the secret is let in");
+            Assert.That(anonymous.StatusCode, Is.EqualTo(HttpStatusCode.Unauthorized),
+                "and the secret still guards the frames");
+        });
+    }
+
+    /// <summary>
+    /// The same secret written into a settings file by hand. The import never goes through the
+    /// editor's save, only through the validation that a restart runs. The trim lives in that
+    /// validation, so it has to hold on this path too.
+    /// </summary>
+    [Test]
+    public async Task Config_ImportedSecretWithSurroundingWhitespace_IsMatchedByTheFramesToken()
+    {
+        // Arrange
+        WriteSettings("Settings.json",
+            SettingsJson.Replace("\"AuthenticationSecret\": \"frame-secret\"", "\"AuthenticationSecret\": \" s3cret \\n\""));
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        // Act
+        var (frame, anonymous) = await CalendarWithAndWithoutToken(client, "s3cret");
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(frame.StatusCode, Is.EqualTo(HttpStatusCode.OK), "a frame sending the secret is let in");
+            Assert.That(anonymous.StatusCode, Is.EqualTo(HttpStatusCode.Unauthorized),
+                "and the secret still guards the frames");
+        });
+    }
+
+    /// <summary>
+    /// <c>/api/Calendar</c> asked for by a frame presenting <paramref name="token"/>, and by one
+    /// presenting nothing. It carries <c>[Authorize]</c> and, with no calendars configured, answers
+    /// without any network I/O.
+    /// </summary>
+    private static async Task<(HttpResponseMessage Frame, HttpResponseMessage Anonymous)> CalendarWithAndWithoutToken(
+        HttpClient client, string token)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/Calendar");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        return (await client.SendAsync(request), await client.GetAsync("/api/Calendar"));
+    }
+
+    /// <summary>
     /// What the editor does when the administrator picks "no secret" on a profile: the key joins that
     /// profile's declared keys and carries the empty string, which is how <see cref="AdminSecret"/>
     /// documents "not the stored one".
@@ -931,6 +1043,179 @@ public class AdminConfigControllerTests
             Assert.That(StoredText(factory), Is.EqualTo(before),
                 "a rejected configuration must never reach the store");
         });
+    }
+
+    /// <summary>
+    /// Immich rates a photo from 1 to 5 stars (since v3, no longer -1 or 0), and an account with a Rating shows only
+    /// photos with exactly that rating. A number outside the range therefore matched no photo, and the
+    /// frame went blank without saying why. The endpoint accepts any number an int holds, so the save
+    /// has to refuse such a number by name.
+    /// </summary>
+    [TestCase(-1)]
+    [TestCase(0)]
+    [TestCase(6)]
+    [TestCase(int.MaxValue)]
+    public async Task SaveConfig_RatingOutsideWhatImmichRates_IsRefused(int rating)
+    {
+        // Arrange
+        WriteSettings("Settings.json", SettingsJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var before = StoredText(factory);
+        var config = await GetConfig(client);
+        config.Default.Accounts[0].Rating = rating;
+
+        // Act
+        var response = await Put(client, config);
+        var detail = (string?)JsonNode.Parse(await response.Content.ReadAsStringAsync())?["detail"];
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+            Assert.That(detail, Does.Contain("Rating"), "the operator has to be told what is wrong");
+            Assert.That(StoredText(factory), Is.EqualTo(before),
+                "a rejected configuration must never reach the store");
+        });
+    }
+
+    /// <summary>Both ends of the range are ratings Immich gives a photo, so both are saved.</summary>
+    [TestCase(1)]
+    [TestCase(5)]
+    public async Task SaveConfig_RatingAtEitherEndOfWhatImmichRates_IsSaved(int rating)
+    {
+        // Arrange
+        WriteSettings("Settings.json", SettingsJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var config = await GetConfig(client);
+        config.Default.Accounts[0].Rating = rating;
+
+        // Act
+        var response = await Put(client, config);
+        var body = await response.Content.ReadAsStringAsync();
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK), body);
+            Assert.That((int?)JsonNode.Parse(StoredText(factory))?["Accounts"]?[0]?["Rating"], Is.EqualTo(rating));
+        });
+    }
+
+    /// <summary>
+    /// An account shows the photos taken from its ImagesFromDate up to its ImagesUntilDate. A from
+    /// date later than the until date leaves no photo between them, and the frame went blank with
+    /// nothing said, so the save has to refuse it by name.
+    /// </summary>
+    [Test]
+    public async Task SaveConfig_ImagesFromDateAfterImagesUntilDate_IsRefused()
+    {
+        // Arrange
+        WriteSettings("Settings.json", SettingsJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var before = StoredText(factory);
+        var config = await GetConfig(client);
+        config.Default.Accounts[0].ImagesFromDate = new DateTime(2024, 6, 1);
+        config.Default.Accounts[0].ImagesUntilDate = new DateTime(2024, 5, 31);
+
+        // Act
+        var response = await Put(client, config);
+        var detail = (string?)JsonNode.Parse(await response.Content.ReadAsStringAsync())?["detail"];
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+            Assert.That(detail, Does.Contain("ImagesFromDate").And.Contain("ImagesUntilDate"),
+                "the operator has to be told which two settings disagree");
+            Assert.That(StoredText(factory), Is.EqualTo(before),
+                "a rejected configuration must never reach the store");
+        });
+    }
+
+    /// <summary>
+    /// RefreshAlbumPeopleInterval is how many hours an account's albums and people stay cached, and
+    /// the endpoint accepts any number an int holds. Two such numbers broke every request for the
+    /// configuration's photos once saved. int.MaxValue hours is more than a TimeSpan can hold, and
+    /// a hundred million hours is further ahead than the cache can set an expiry. The save refuses
+    /// both by name. It also refuses a negative number, which is not a number of hours.
+    /// </summary>
+    [TestCase(int.MaxValue)]
+    [TestCase(100_000_000)]
+    [TestCase(87601)]
+    [TestCase(-1)]
+    public async Task SaveConfig_RefreshAlbumPeopleIntervalOutsideItsRange_IsRefused(int hours)
+    {
+        // Arrange
+        WriteSettings("Settings.json", SettingsJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var before = StoredText(factory);
+        var config = WithRefreshAlbumPeopleInterval(await GetConfig(client), hours);
+
+        // Act
+        var response = await Put(client, config);
+        var detail = (string?)JsonNode.Parse(await response.Content.ReadAsStringAsync())?["detail"];
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+            Assert.That(detail, Does.Contain("RefreshAlbumPeopleInterval"), "the operator has to be told what is wrong");
+            Assert.That(StoredText(factory), Is.EqualTo(before),
+                "a rejected configuration must never reach the store");
+        });
+    }
+
+    /// <summary>
+    /// Both ends of the range are saved. 0 is a cache that expires at once, so every request fetches
+    /// the albums and people again. Ten years is far longer than any frame should cache them.
+    /// </summary>
+    [TestCase(0)]
+    [TestCase(87600)]
+    public async Task SaveConfig_RefreshAlbumPeopleIntervalAtEitherEndOfItsRange_IsSaved(int hours)
+    {
+        // Arrange
+        WriteSettings("Settings.json", SettingsJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var config = WithRefreshAlbumPeopleInterval(await GetConfig(client), hours);
+
+        // Act
+        var response = await Put(client, config);
+        var body = await response.Content.ReadAsStringAsync();
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK), body);
+            Assert.That((int?)JsonNode.Parse(StoredText(factory))?["General"]?["RefreshAlbumPeopleInterval"],
+                Is.EqualTo(hours));
+        });
+    }
+
+    /// <summary>
+    /// The default configuration given its own RefreshAlbumPeopleInterval. The key is declared along
+    /// with the value, because a save writes only the keys an entry declares.
+    /// </summary>
+    private static AdminConfigDto WithRefreshAlbumPeopleInterval(AdminConfigDto config, int hours)
+    {
+        config.Default.General.RefreshAlbumPeopleInterval = hours;
+
+        return config with
+        {
+            Default = config.Default with
+            {
+                DeclaredKeys = [.. config.Default.DeclaredKeys, "General.RefreshAlbumPeopleInterval"]
+            }
+        };
     }
 
     [Test]
@@ -2806,6 +3091,83 @@ public class AdminConfigControllerTests
             Assert.That(problem, Does.Contain("empty"));
             Assert.That(problem, Does.Contain(profileName is null ? "the default configuration" : $"'{profileName}'"),
                 "the message has to say which list to fix");
+            Assert.That(problem, Does.Not.Contain("Object reference"));
+            Assert.That(StoredText(factory), Is.EqualTo(before));
+        });
+    }
+
+    /// <summary>
+    /// An empty entry in the request's profile list. Model binding accepts it, as it accepts an
+    /// empty account. The editor never sends one, so it is a malformed request. The save used to hit
+    /// it as a null dereference and answer 500, and now refuses it by name with the stored settings
+    /// untouched.
+    /// </summary>
+    [Test]
+    public async Task SaveConfig_EmptyProfileInTheRequest_IsRefusedReadably()
+    {
+        // Arrange
+        WriteSettings("Settings.json", SettingsJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var before = StoredText(factory);
+        var config = await GetConfig(client);
+        config = config with { Profiles = [.. config.Profiles, null!] };
+
+        // Act
+        var response = await Put(client, config);
+        var problem = await response.Content.ReadAsStringAsync();
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest), problem);
+            Assert.That(problem, Does.Contain("empty"));
+            Assert.That(problem, Does.Not.Contain("Object reference"));
+            Assert.That(StoredText(factory), Is.EqualTo(before));
+        });
+    }
+
+    /// <summary>
+    /// An empty entry in one configuration's DeclaredKeys, for the same reasons as an empty profile.
+    /// Binding accepts it, the editor never sends it, and the save hit it as a null dereference and
+    /// answered 500.
+    /// </summary>
+    [TestCase(null, TestName = "SaveConfig_EmptyDeclaredKeyInTheDefaultConfiguration_IsRefusedReadably")]
+    [TestCase("kitchen", TestName = "SaveConfig_EmptyDeclaredKeyInAProfile_IsRefusedReadably")]
+    public async Task SaveConfig_EmptyDeclaredKeyInTheRequest_IsRefusedReadably(string? profileName)
+    {
+        // Arrange
+        WriteSettings("Settings.json", SettingsJson);
+        using var factory = CreateFactory();
+        var client = factory.CreateClient();
+
+        var before = StoredText(factory);
+        var config = await GetConfig(client);
+
+        config = profileName is null
+            ? config with { Default = config.Default with { DeclaredKeys = [.. config.Default.DeclaredKeys, null!] } }
+            : config with
+            {
+                Profiles =
+                [
+                    .. config.Profiles.Select(profile => profile.Name == profileName
+                        ? profile with { DeclaredKeys = [.. profile.DeclaredKeys, null!] }
+                        : profile)
+                ]
+            };
+
+        // Act
+        var response = await Put(client, config);
+        var problem = await response.Content.ReadAsStringAsync();
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest), problem);
+            Assert.That(problem, Does.Contain("empty"));
+            Assert.That(problem, Does.Contain(profileName is null ? "the default configuration" : $"'{profileName}'"),
+                "the message has to say which configuration to fix");
             Assert.That(problem, Does.Not.Contain("Object reference"));
             Assert.That(StoredText(factory), Is.EqualTo(before));
         });

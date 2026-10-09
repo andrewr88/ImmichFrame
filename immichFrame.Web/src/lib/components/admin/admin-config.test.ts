@@ -1624,10 +1624,14 @@ interface NumberEdit {
 }
 
 function errorsAfter({ entry, on, prop, value }: NumberEdit): string[] {
-	// Arrange: both settings overridden and the account declared, in both configurations, so
-	// that every box edited below is one a save writes out.
+	// Arrange: every general setting edited below is overridden, and the account is declared, in
+	// both configurations. That way every box edited below is one a save writes out.
 	const declaring = {
-		declares: ['General.Interval', 'General.TransitionDuration'],
+		declares: [
+			'General.Interval',
+			'General.TransitionDuration',
+			'General.RefreshAlbumPeopleInterval'
+		],
 		accounts: [{ label: 'Att' }]
 	};
 	const { config } = open({ default: declaring, profiles: [{ name: 'hall', ...declaring }] });
@@ -1693,6 +1697,8 @@ describe('regression: a fraction in a setting the server holds as a whole number
 });
 
 describe('regression: a whole number past the range the server holds it in', () => {
+	// General settings only. Each whole-number account setting has a narrower range of its own,
+	// tested below with the setting it belongs to.
 	describe.each<Pick<NumberEdit, 'on' | 'prop'> & { refusal: string }>([
 		{
 			on: 'general',
@@ -1700,13 +1706,6 @@ describe('regression: a whole number past the range the server holds it in', () 
 			refusal:
 				"the default configuration: 'Interval' needs a whole number between -2147483648 and " +
 				'2147483647.'
-		},
-		{
-			on: 'account',
-			prop: 'rating',
-			refusal:
-				"the default configuration: 'Rating' for Att needs a whole number between -2147483648 " +
-				'and 2147483647, or to be left blank.'
 		}
 	])('$on $prop', ({ on, prop, refusal }) => {
 		it.each([2147483648, -2147483649, 1e21, 2147483647.5])('at %s, is refused by name', (value) => {
@@ -1742,6 +1741,48 @@ describe('regression: a number of days the server will not count back', () => {
 	it.each([0, 36500])('imagesFromDays at %s, is accepted', (value) => {
 		// Assert: 0 is today's photos alone, and both ends of the range are its own.
 		expect(errorsAfter({ entry: DEFAULT_NAME, on: 'account', prop, value })).toEqual([]);
+	});
+});
+
+describe('regression: a rating Immich does not give a photo', () => {
+	const prop = 'rating';
+
+	it.each([-1, 0, 6, 2147483648, 5.5])('rating at %s, is refused by name', (value) => {
+		// Assert: the server refuses a Rating outside 1 to 5, because an account shows only photos
+		// rated exactly that and so a number outside the range matched none. Its message does not
+		// say which account, so the editor names it. A number past the range is told the range,
+		// whether or not it is a fraction, as with an int's range.
+		expect(errorsAfter({ entry: DEFAULT_NAME, on: 'account', prop, value })).toEqual([
+			"the default configuration: 'Rating' for Att needs a whole number between 1 and 5, or to " +
+				'be left blank.'
+		]);
+	});
+
+	it.each([1, 3, 5])('rating at %s, is accepted', (value) => {
+		// Assert: both ends of the range, and a number between them.
+		expect(errorsAfter({ entry: DEFAULT_NAME, on: 'account', prop, value })).toEqual([]);
+	});
+});
+
+describe('regression: a refresh interval the server cannot cache for', () => {
+	const prop = 'refreshAlbumPeopleInterval';
+
+	it.each([-1, 87601, 2147483647, 87600.5])(
+		'refreshAlbumPeopleInterval at %s, is refused by name',
+		(value) => {
+			// Assert: the server refuses RefreshAlbumPeopleInterval outside 0 to 87600 hours.
+			// int.MaxValue hours is more than a TimeSpan can hold, a hundred million hours is further
+			// ahead than the cache can set an expiry, and either failed every request for photos.
+			expect(errorsAfter({ entry: DEFAULT_NAME, on: 'general', prop, value })).toEqual([
+				"the default configuration: 'Refresh albums and people every' needs a whole number " +
+					'between 0 and 87600.'
+			]);
+		}
+	);
+
+	it.each([0, 87600])('refreshAlbumPeopleInterval at %s, is accepted', (value) => {
+		// Assert: 0 fetches the albums and people again for every request, and 87600 is ten years.
+		expect(errorsAfter({ entry: DEFAULT_NAME, on: 'general', prop, value })).toEqual([]);
 	});
 });
 
