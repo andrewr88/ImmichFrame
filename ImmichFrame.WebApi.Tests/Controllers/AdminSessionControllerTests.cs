@@ -262,8 +262,8 @@ public class AdminSessionControllerTests
 
     /// <summary>
     /// Sign-out is authentication-only on purpose. A signed-in non-administrator has to be able to
-    /// end their own session: the "you are not an administrator" screen polls the session endpoint,
-    /// which re-issues the sliding cookie, so a policy-gated sign-out would never let them out.
+    /// end their own session: each visit to the admin page reads the session endpoint, which re-issues
+    /// the sliding cookie, so a policy-gated sign-out would never let them out.
     /// <para>
     /// And succeeding has to mean the session is over: the browser is told to drop the cookie - its
     /// value emptied and its expiry in the past. A 200 that left the cookie alone would sign nobody out.

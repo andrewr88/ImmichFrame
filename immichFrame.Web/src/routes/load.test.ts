@@ -2,6 +2,7 @@ import { get } from 'svelte/store';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ClientSettingsDto } from '$lib/immichFrameApi';
 import { configStore } from '$lib/stores/config.store';
+import { clientIdentifierStore } from '$lib/stores/persist.store';
 import { load as loadDefault } from './+page';
 import { load as loadProfile } from './[config]/+page';
 
@@ -22,6 +23,9 @@ beforeEach(() => {
 	// under test as well: what they make of a body that is not JSON is the whole of the bug.
 	vi.stubGlobal('fetch', fetchMock);
 	configStore.ps(RUNNING);
+	// Back to the identifier the mock starts with: a `?client=` load below changes it, and the
+	// store outlives the test that did.
+	clientIdentifierStore.set('frame');
 });
 
 afterEach(() => {
@@ -36,15 +40,15 @@ function answer(status: number, body: string | null = null, contentType?: string
 	);
 }
 
-const openDefault = () =>
+const openDefault = (search = '') =>
 	loadDefault({
-		url: new URL('http://frame.local/'),
+		url: new URL(`http://frame.local/${search}`),
 		params: {}
 	} as unknown as Parameters<typeof loadDefault>[0]);
 
-const openProfile = (profile: string) =>
+const openProfile = (profile: string, search = '') =>
 	loadProfile({
-		url: new URL(`http://frame.local/${profile}`),
+		url: new URL(`http://frame.local/${profile}${search}`),
 		params: { config: profile }
 	} as unknown as Parameters<typeof loadProfile>[0]);
 
@@ -125,5 +129,32 @@ describe('load: a 404', () => {
 			body: { message: expect.not.stringContaining('profile') }
 		});
 		expect(get(configStore)).toBe(RUNNING);
+	});
+});
+
+describe.each([
+	{
+		route: '/?client=hall',
+		open: () => openDefault('?client=hall'),
+		request: '/api/Config?clientIdentifier=hall'
+	},
+	{
+		route: '/kitchen?client=hall',
+		open: () => openProfile('kitchen', '?client=hall'),
+		request: '/api/Config?clientIdentifier=hall&profile=kitchen'
+	}
+])('load on $route', ({ open, request }) => {
+	it('asks for the configuration as that client, and stays that client', async () => {
+		// Arrange
+		answer(200, JSON.stringify({ interval: 7 }), 'application/json; charset=utf-8');
+
+		// Act
+		await open();
+
+		// Assert: the override only has to be given once, as the documentation tells a frame's
+		// owner - the store keeps it, and every request the slideshow makes after this load reads
+		// it from there - so it has to reach this request and the store both.
+		expect(fetchMock).toHaveBeenCalledWith(request, expect.anything());
+		expect(get(clientIdentifierStore)).toBe('hall');
 	});
 });

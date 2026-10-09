@@ -73,9 +73,11 @@ public class AdminSessionController(AdminOidcOptions _options) : ControllerBase
     /// <para>
     /// Authentication against the cookie scheme, deliberately <em>not</em> the AdminOnly policy.
     /// Destroying your own session is not a privileged act, and gating it on the allowlist would
-    /// strand exactly the person who most needs it: a signed-in non-administrator sits on the "you
-    /// are not an administrator" screen, whose polling of <c>session</c> re-issues the sliding
-    /// cookie, so the session would never expire and only clearing browser cookies would end it.
+    /// strand exactly the person who most needs it: a signed-in non-administrator lands on the "you
+    /// are not an administrator" screen. The page reads <c>session</c> each time it is opened, and
+    /// a read in the second half of the cookie's lifetime re-issues the sliding cookie, so someone
+    /// who kept coming back to see whether they had been added would never see the session expire,
+    /// and only clearing browser cookies would end it.
     /// </para>
     /// <para>
     /// No CSRF token: the cookie is <c>SameSite=Lax</c>, which is not sent with a cross-site POST,

@@ -16,7 +16,11 @@
 	%sveltekit.head%
 </head>
 
-<body data-sveltekit-preload-data="hover">
+<!-- Off rather than "hover": loading a frame route is not free of side effects. The loaders
+     re-point the profile, and with it the bearer header and the secret posted to the service
+     worker, and they replace the running configuration - so preloading a link to another profile
+     on hover would switch this frame over to it without navigating there. -->
+<body data-sveltekit-preload-data="off">
 	<div style="display: contents">%sveltekit.body%</div>
 	<script>
 		if ('serviceWorker' in navigator) {

@@ -35,8 +35,8 @@ public sealed class AdminEndpointAttribute : Attribute
     /// deliberately does not require the caller to be on the allowlist.
     /// <para>
     /// True for exactly one: signing out. Ending your own session is not a privileged act, and
-    /// gating it on the allowlist strands a signed-in non-administrator whose polling of the session
-    /// endpoint keeps renewing the sliding cookie.
+    /// gating it on the allowlist would strand a signed-in non-administrator, whose every visit to the
+    /// admin page reads the session endpoint and so renews the sliding cookie.
     /// </para>
     /// <para>
     /// It is a flag rather than something <see cref="AdminEndpointGuard"/> infers from the

@@ -1,6 +1,11 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import * as api from '$lib/immichFrameApi';
+	import {
+		sessionView,
+		type AdminView,
+		type SessionRead
+	} from '$lib/components/admin/admin-session';
 	import ConfigEditor from '$lib/components/admin/config-editor.svelte';
 	// Imported here rather than from app.css so the slideshow bundle never carries the admin
 	// theme. Every rule in it is nested under `.admin-theme`, which only this page sets.
@@ -15,9 +20,7 @@
 	// comes last, so its rules win a tie either way.)
 	import '$lib/components/admin/admin-theme.css';
 
-	type View = 'loading' | 'error' | 'unconfigured' | 'signed-out' | 'not-admin' | 'admin';
-
-	let view = $state<View>('loading');
+	let view = $state<AdminView>('loading');
 	let session = $state<api.AdminSessionDto | undefined>(undefined);
 	let errorMessage = $state('');
 	let configSource = $state('');
@@ -40,28 +43,21 @@
 		// account's settings-file path sitting in the header.
 		configSource = '';
 
+		let read: SessionRead;
+
 		try {
-			const response = await api.getAdminSession();
-			const status: number = response.status;
-
-			if (status !== 200) {
-				errorMessage = `The admin session could not be read (HTTP ${status}).`;
-				view = 'error';
-				return;
-			}
-
-			session = response.data;
-			view = !session.configured
-				? 'unconfigured'
-				: !session.authenticated
-					? 'signed-out'
-					: !session.isAdmin
-						? 'not-admin'
-						: 'admin';
-		} catch {
-			errorMessage = 'The admin session could not be read. Is ImmichFrame still running?';
-			view = 'error';
+			read = await api.getAdminSession();
+		} catch (thrown) {
+			read = { thrown };
 		}
+
+		// All three from the one read, `session` included: an error that left it as it was kept the
+		// previous account and a working Sign out in the masthead, over the error. See sessionView.
+		const shown = sessionView(read);
+
+		view = shown.view;
+		session = shown.session;
+		errorMessage = shown.errorMessage;
 	}
 
 	/**
