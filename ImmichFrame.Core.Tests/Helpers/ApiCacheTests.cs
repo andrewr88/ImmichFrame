@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using ImmichFrame.Core.Helpers;
 using Microsoft.Extensions.Caching.Memory;
 using NUnit.Framework;
@@ -184,6 +185,31 @@ public class ApiCacheTests
     }
 
     [Test]
+    public async Task GetOrAddAsync_ReadMoreOftenThanTimeToLive_StillLoadsAgain()
+    {
+        // Arrange - the time to live counts from when the entry was made, not from when it was last
+        // read. Renewed by every read, as a sliding expiry would be, it would never lapse for a frame
+        // asking more often than its refresh interval - as every running frame does - and the frame
+        // would go on showing the albums, people and tags it first loaded for as long as it ran.
+        using var cache = new ApiCache(TimeSpan.FromMilliseconds(300));
+        var loads = 0;
+        Task<int> Load() => Task.FromResult(++loads);
+
+        // Act - read every 20 ms, well inside the time to live, until a second has passed since the
+        // first entry was made; the last read therefore comes long after that entry has lapsed
+        await cache.GetOrAddAsync("key", Load);
+        var reading = Stopwatch.StartNew();
+        while (reading.Elapsed < TimeSpan.FromSeconds(1))
+        {
+            await Task.Delay(20);
+            await cache.GetOrAddAsync("key", Load);
+        }
+
+        // Assert - loaded again at least once; exactly how often depends on how the delays fall
+        Assert.That(loads, Is.GreaterThanOrEqualTo(2));
+    }
+
+    [Test]
     public async Task GetOrAddAsync_EntryOptions_AreTakenForEachNewEntry()
     {
         // Arrange - an absolute expiry, as DailyApiCache sets one: the first entry lapses at once, as
@@ -205,5 +231,31 @@ public class ApiCacheTests
 
         // Assert - loaded again once the first entry lapsed, and the second entry then held
         Assert.That(cached, Is.EqualTo(2));
+    }
+
+    [Test]
+    public async Task GetOrAddAsync_EntryOptions_AreTakenBeforeTheLoadRuns()
+    {
+        // Arrange - DailyApiCache works its expiry out as its options are taken: the coming midnight.
+        // Taken as the load starts, a load that runs past midnight is given the midnight just gone,
+        // and the next caller loads the new day's memories. Taken once the load is done, they would
+        // give it the midnight after, and the day before's memories would be shown all the next day.
+        var optionsTaken = 0;
+        using var cache = new ApiCache(() =>
+        {
+            optionsTaken++;
+            return new MemoryCacheEntryOptions();
+        });
+        var takenWhenLoading = -1;
+
+        // Act
+        await cache.GetOrAddAsync("key", () =>
+        {
+            takenWhenLoading = optionsTaken;
+            return Task.FromResult(42);
+        });
+
+        // Assert
+        Assert.That(takenWhenLoading, Is.EqualTo(1));
     }
 }

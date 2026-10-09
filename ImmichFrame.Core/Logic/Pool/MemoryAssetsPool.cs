@@ -48,9 +48,17 @@ class DailyApiCache : ApiCache
 {
     public DailyApiCache() : base(() => new MemoryCacheEntryOptions
     {
-        AbsoluteExpiration = DateTimeOffset.Now.Date.AddDays(1)
+        AbsoluteExpiration = ExpiryFor(DateTimeOffset.Now)
     }
     )
     {
     }
+
+    /// <summary>
+    /// The midnight that ends <paramref name="now"/>'s day, after which the memories loaded on it are
+    /// no longer the ones "on this day". In local time, as <c>DateTimeOffset.Now</c> is: the date is
+    /// read off <paramref name="now"/>'s clock and its midnight taken at the machine's own offset.
+    /// Taken apart from the options so that it can be checked against fixed times.
+    /// </summary>
+    internal static DateTimeOffset ExpiryFor(DateTimeOffset now) => now.Date.AddDays(1);
 }

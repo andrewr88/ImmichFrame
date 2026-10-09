@@ -288,4 +288,40 @@ public class MemoryAssetsPoolTests
         _mockImmichApi.VerifyAll();
 
     }
+
+    [TestCase("12:00:00", TestName = "ExpiryFor_MidDay_IsTheMidnightEndingThatDay")]
+    [TestCase("23:59:59.9999999", TestName = "ExpiryFor_JustBeforeMidnight_IsThatMidnight")]
+    [TestCase("00:00:00", TestName = "ExpiryFor_ExactlyMidnight_IsAFullDayLater")]
+    public void ExpiryFor_TimeOfDay_IsTheMidnightEndingThatDay(TimeSpan timeOfDay)
+    {
+        // Arrange - a local time, as DateTimeOffset.Now gives one. The memories Immich finds are the
+        // ones "on this day", so they are good until the day is out: not past already, not for a
+        // moment, and not for a year
+        var now = new DateTimeOffset(new DateTime(2026, 6, 10) + timeOfDay);
+
+        // Act
+        var expiry = DailyApiCache.ExpiryFor(now);
+
+        // Assert - local midnight between the 10th and the 11th
+        Assert.That(expiry, Is.EqualTo(new DateTimeOffset(new DateTime(2026, 6, 11))));
+    }
+
+    [Test]
+    public async Task GetAssets_AgainTheSameDay_DoesNotSearchTheMemoriesAgain()
+    {
+        // Arrange - through the pool's own DailyApiCache, so that it is the expiry it actually sets
+        // that is tested. A run that straddles midnight would rightly search twice.
+        Assume.That(DateTime.Now.TimeOfDay, Is.LessThan(new TimeSpan(23, 59, 50)),
+            "too close to midnight, when the day's memories rightly expire");
+        _mockImmichApi.Setup(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(CreateSampleImageMemories(1, 1, true, DateTime.Now.Year - 1));
+
+        // Act - the second request comes long after an entry made for a millisecond would have lapsed
+        await _memoryAssetsPool.GetAssets(1, CancellationToken.None);
+        await Task.Delay(50);
+        await _memoryAssetsPool.GetAssets(1, CancellationToken.None);
+
+        // Assert - the day's memories were held rather than searched for on every request
+        _mockImmichApi.Verify(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, It.IsAny<CancellationToken>()), Times.Once);
+    }
 }
