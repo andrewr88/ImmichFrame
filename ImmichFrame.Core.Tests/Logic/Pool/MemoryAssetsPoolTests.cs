@@ -75,7 +75,7 @@ public class MemoryAssetsPoolTests
     public async Task LoadAssets_CallsSearchMemoriesAsync()
     {
         // Arrange
-        _mockImmichApi.Setup(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, It.IsAny<CancellationToken>()))
+        _mockImmichApi.Setup(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, null, null, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<MemoryResponseDto>());
 
         // Act
@@ -87,7 +87,7 @@ public class MemoryAssetsPoolTests
         await _memoryAssetsPool.GetAssets(1, CancellationToken.None); // This should trigger LoadAssets
 
         // Assert
-        _mockImmichApi.Verify(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, It.IsAny<CancellationToken>()), Times.Once);
+        _mockImmichApi.Verify(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, null, null, null, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Test]
@@ -95,8 +95,8 @@ public class MemoryAssetsPoolTests
     {
         // Arrange
         DateTimeOffset? searchDate = null;
-        _mockImmichApi.Setup(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, It.IsAny<CancellationToken>()))
-            .Callback<DateTimeOffset?, bool?, bool?, MemorySearchOrder?, long?, MemoryType?, CancellationToken>((date, _, _, _, _, _, _) => searchDate = date)
+        _mockImmichApi.Setup(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, null, null, null, It.IsAny<CancellationToken>()))
+            .Callback<DateTimeOffset?, Guid?, bool?, bool?, bool?, MemorySearchOrder?, long?, long?, MemoryType?, CancellationToken>((date, _, _, _, _, _, _, _, _, _) => searchDate = date)
             .ReturnsAsync(new List<MemoryResponseDto>());
 
         // Act
@@ -114,7 +114,7 @@ public class MemoryAssetsPoolTests
         var memories = CreateSampleVideoMemories(1, 1, false, DateTime.Now.Year - 2);
 
         _mockAccountSettings.Setup(x => x.ShowVideos).Returns(false);
-        _mockImmichApi.Setup(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, It.IsAny<CancellationToken>()))
+        _mockImmichApi.Setup(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, null, null, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(memories);
         _mockImmichApi.Setup(x => x.GetAssetInfoAsync(It.IsAny<Guid>(), null, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AssetResponseDto { ExifInfo = new ExifResponseDto(), People = new List<PersonResponseDto>() });
@@ -135,7 +135,7 @@ public class MemoryAssetsPoolTests
         var memories = CreateSampleImageMemories(1, 1, false, memoryYear); // Asset without ExifInfo
         var assetId = memories[0].Assets.First().Id;
 
-        _mockImmichApi.Setup(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, It.IsAny<CancellationToken>()))
+        _mockImmichApi.Setup(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, null, null, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(memories);
         _mockImmichApi.Setup(x => x.GetAssetInfoAsync(assetId, null, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AssetResponseDto { Id = assetId, ExifInfo = new ExifResponseDto { DateTimeOriginal = new DateTime(memoryYear, 1, 1) }, People = new List<PersonResponseDto>() });
@@ -157,7 +157,7 @@ public class MemoryAssetsPoolTests
         var memories = CreateSampleImageMemories(1, 1, false, memoryYear); // Asset without ExifInfo
         var assetId = memories[0].Assets.First().Id;
 
-        _mockImmichApi.Setup(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, It.IsAny<CancellationToken>()))
+        _mockImmichApi.Setup(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, null, null, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(memories);
         // ExifInfo is optional in the Immich API, so the full asset info can lack it too
         _mockImmichApi.Setup(x => x.GetAssetInfoAsync(assetId, null, null, It.IsAny<CancellationToken>()))
@@ -179,7 +179,7 @@ public class MemoryAssetsPoolTests
         var memories = CreateSampleImageMemories(1, 1, true, memoryYear); // Asset with ExifInfo
         var assetId = memories[0].Assets.First().Id;
 
-        _mockImmichApi.Setup(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, It.IsAny<CancellationToken>()))
+        _mockImmichApi.Setup(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, null, null, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(memories);
 
         // Act
@@ -208,7 +208,7 @@ public class MemoryAssetsPoolTests
             var memories = CreateSampleImageMemories(1, 1, true, tc.year);
             memories[0].Assets.First().ExifInfo.DateTimeOriginal = new DateTime(tc.year, 1, 1); // Ensure Exif has the year
 
-            _mockImmichApi.Setup(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, It.IsAny<CancellationToken>()))
+            _mockImmichApi.Setup(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, null, null, null, It.IsAny<CancellationToken>()))
                 .ReturnsAsync(memories);
 
             _memoryAssetsPool = new MemoryAssetsPool(_mockImmichApi.Object, _mockAccountSettings.Object);
@@ -235,7 +235,7 @@ public class MemoryAssetsPoolTests
         var memories = CreateSampleImageMemories(imageMemoriesCount, assetsPerMemory, true, memoryYear); // 2 memories, 2 assets each
         memories.AddRange(CreateSampleVideoMemories(videoMemoriesCount, assetsPerMemory, true, memoryYear)); // 2 video memories, 2 assets each
 
-        _mockImmichApi.Setup(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, It.IsAny<CancellationToken>()))
+        _mockImmichApi.Setup(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, null, null, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(memories).Verifiable(Times.Once);
 
         // Act
@@ -269,7 +269,7 @@ public class MemoryAssetsPoolTests
         memories.AddRange(CreateSampleVideoMemories(videoMemoriesCount, assetsPerMemory, true, memoryYear)); // 2 video memories, 2 assets each
 
         _mockAccountSettings.Setup(x => x.ShowVideos).Returns(true);
-        _mockImmichApi.Setup(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, It.IsAny<CancellationToken>()))
+        _mockImmichApi.Setup(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, null, null, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(memories).Verifiable(Times.Once);
 
         // Act
@@ -313,7 +313,7 @@ public class MemoryAssetsPoolTests
         // that is tested. A run that straddles midnight would rightly search twice.
         Assume.That(DateTime.Now.TimeOfDay, Is.LessThan(new TimeSpan(23, 59, 50)),
             "too close to midnight, when the day's memories rightly expire");
-        _mockImmichApi.Setup(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, It.IsAny<CancellationToken>()))
+        _mockImmichApi.Setup(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, null, null, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(CreateSampleImageMemories(1, 1, true, DateTime.Now.Year - 1));
 
         // Act - the second request comes long after an entry made for a millisecond would have lapsed
@@ -322,6 +322,6 @@ public class MemoryAssetsPoolTests
         await _memoryAssetsPool.GetAssets(1, CancellationToken.None);
 
         // Assert - the day's memories were held rather than searched for on every request
-        _mockImmichApi.Verify(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, It.IsAny<CancellationToken>()), Times.Once);
+        _mockImmichApi.Verify(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, null, null, null, It.IsAny<CancellationToken>()), Times.Once);
     }
 }

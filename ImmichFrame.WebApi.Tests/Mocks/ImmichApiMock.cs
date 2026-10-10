@@ -26,8 +26,9 @@ namespace ImmichFrame.WebApi.Tests.Mocks
         public static Mock<HttpMessageHandler> WithServerVersion(
             this Mock<HttpMessageHandler> handler,
             long major = ImmichServerVersionChecker.MinimumSupportedMajorVersion,
-            long minor = 0,
-            long patch = 0)
+            long minor = ImmichServerVersionChecker.MinimumSupportedMinorVersion,
+            long patch = ImmichServerVersionChecker.MinimumSupportedPatchVersion,
+            long? prerelease = null)
         {
             handler.Protected()
                 .Setup<Task<HttpResponseMessage>>(
@@ -39,7 +40,7 @@ namespace ImmichFrame.WebApi.Tests.Mocks
                 {
                     StatusCode = HttpStatusCode.OK,
                     Content = new StringContent(
-                        $"{{\"major\":{major},\"minor\":{minor},\"patch\":{patch},\"prerelease\":null}}")
+                        $"{{\"major\":{major},\"minor\":{minor},\"patch\":{patch},\"prerelease\":{prerelease?.ToString() ?? "null"}}}")
                 });
 
             return handler;

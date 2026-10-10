@@ -455,7 +455,7 @@ public class PooledImmichFrameLogicTests
     {
         const string noAssets = """
             {"albums":{"count":0,"facets":[],"items":[],"total":0},
-             "assets":{"count":0,"facets":[],"items":[],"nextPage":null,"total":0}}
+             "assets":{"count":0,"facets":[],"items":[],"nextCursor":null,"nextPage":null,"total":0}}
             """;
         var requests = new List<string>();
         _immich.Protected()

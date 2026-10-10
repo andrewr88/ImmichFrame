@@ -39,16 +39,25 @@ public class ImmichServerVersionCheckerTests
     private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(3);
 
     /// <summary>
-    /// Read off the server, not assumed: below the major version this ImmichFrame supports the account
-    /// is reported unsupported, and either way the message names the version the server runs, so an
-    /// operator knows what they are updating from.
+    /// Read off the server, not assumed: below the version this ImmichFrame supports, v3.2.0, the
+    /// account is reported unsupported, and either way the message names the version the server runs,
+    /// so an operator knows what they are updating from. The whole version counts, not its major part
+    /// alone. A pre-release of v3.2.0 comes before v3.2.0 itself and is unsupported with the versions
+    /// older still, while a pre-release of a later version is newer than v3.2.0 all the same.
     /// </summary>
-    [TestCase(ImmichServerVersionChecker.MinimumSupportedMajorVersion - 1, false)]
-    [TestCase(ImmichServerVersionChecker.MinimumSupportedMajorVersion, true)]
-    public async Task CheckAccount_ReportsWhetherTheServersMajorVersionIsSupported(long major, bool supported)
+    [TestCase(2, 5, 1, null, false, TestName = "CheckAccount_OlderMajorVersion_IsUnsupported")]
+    [TestCase(3, 1, 9, null, false, TestName = "CheckAccount_OlderMinorVersion_IsUnsupported")]
+    [TestCase(3, 2, 0, 1, false, TestName = "CheckAccount_PreReleaseOfTheMinimumVersion_IsUnsupported")]
+    [TestCase(3, 2, 0, null, true, TestName = "CheckAccount_MinimumVersion_IsSupported")]
+    [TestCase(3, 2, 1, null, true, TestName = "CheckAccount_NewerPatchVersion_IsSupported")]
+    [TestCase(3, 2, 1, 1, true, TestName = "CheckAccount_PreReleaseOfANewerVersion_IsSupported")]
+    [TestCase(3, 3, 0, null, true, TestName = "CheckAccount_NewerMinorVersion_IsSupported")]
+    [TestCase(4, 0, 0, null, true, TestName = "CheckAccount_NewerMajorVersion_IsSupported")]
+    public async Task CheckAccount_ReportsWhetherTheServersVersionIsSupported(
+        long major, long minor, long patch, long? prerelease, bool supported)
     {
         // Arrange
-        var immich = new Mock<HttpMessageHandler>().WithServerVersion(major, minor: 5, patch: 1);
+        var immich = new Mock<HttpMessageHandler>().WithServerVersion(major, minor, patch, prerelease);
         using var services = Services(immich);
 
         // Act
@@ -58,8 +67,8 @@ public class ImmichServerVersionCheckerTests
         Assert.Multiple(() =>
         {
             Assert.That(result.Success, Is.EqualTo(supported));
-            Assert.That(result.Version, Is.EqualTo($"{major}.5.1"));
-            Assert.That(result.Message, Does.Contain($"v{major}.5.1"));
+            Assert.That(result.Version, Is.EqualTo($"{major}.{minor}.{patch}"));
+            Assert.That(result.Message, Does.Contain($"v{major}.{minor}.{patch}"));
         });
     }
 

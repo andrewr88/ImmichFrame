@@ -4,6 +4,7 @@ using ImmichFrame.Core.Exceptions;
 using ImmichFrame.Core.Helpers;
 using ImmichFrame.WebApi.Helpers.Config;
 using ImmichFrame.WebApi.Models;
+using AdminConfigDto = ImmichFrame.WebApi.Models.AdminConfigDto;
 
 namespace ImmichFrame.WebApi.Helpers.Admin;
 

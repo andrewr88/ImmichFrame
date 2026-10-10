@@ -10,7 +10,7 @@ public class MemoryAssetsPool(ImmichApi immichApi, IAccountSettings accountSetti
     protected override async Task<IEnumerable<AssetResponseDto>> LoadAssets(CancellationToken ct = default)
     {
         var searchDate = DateTimeOffset.Now;
-        var memories = await Api.SearchMemoriesAsync(searchDate, null, null, null, null, null, ct);
+        var memories = await Api.SearchMemoriesAsync(searchDate, null, null, null, null, null, null, null, null, ct);
 
         var memoryAssets = new List<AssetResponseDto>();
         foreach (var memory in memories)

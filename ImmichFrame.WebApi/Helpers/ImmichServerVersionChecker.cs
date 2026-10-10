@@ -13,9 +13,18 @@ namespace ImmichFrame.WebApi.Helpers
         private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(5);
 
         /// <summary>
-        /// The minimum Immich server major version supported by this version of ImmichFrame.
+        /// The minimum Immich server version supported by this version of ImmichFrame. The Immich client
+        /// is generated from this version's API, and cannot read an older server's answer to a metadata
+        /// search: it lacks the <c>nextCursor</c> that v3.2.0 added and the client requires.
         /// </summary>
         public const int MinimumSupportedMajorVersion = 3;
+        public const int MinimumSupportedMinorVersion = 2;
+        public const int MinimumSupportedPatchVersion = 0;
+
+        public static readonly Version MinimumSupportedVersion = new(
+            MinimumSupportedMajorVersion,
+            MinimumSupportedMinorVersion,
+            MinimumSupportedPatchVersion);
 
         /// <summary>
         /// Checks a single account: is the Immich server reachable and running a supported version?
@@ -42,10 +51,10 @@ namespace ImmichFrame.WebApi.Helpers
                 var version = await immichApi.GetServerVersionAsync(cts.Token);
                 var versionString = $"{version.Major}.{version.Minor}.{version.Patch}";
 
-                if (version.Major < MinimumSupportedMajorVersion)
+                if (!IsSupported(version))
                 {
                     return new AccountCheckResult(false,
-                        $"Immich server {account.ImmichServerUrl} is running v{versionString}, but this version of ImmichFrame requires Immich v{MinimumSupportedMajorVersion} or newer. Please update your Immich server.",
+                        $"Immich server {account.ImmichServerUrl} is running v{versionString}, but this version of ImmichFrame requires Immich v{MinimumSupportedVersion} or newer. Please update your Immich server.",
                         versionString);
                 }
 
@@ -64,7 +73,7 @@ namespace ImmichFrame.WebApi.Helpers
         /// </summary>
         /// <returns>
         /// <c>true</c> only if every configured Immich server was reachable and reported a version of
-        /// v<see cref="MinimumSupportedMajorVersion"/> or newer.
+        /// v<see cref="MinimumSupportedVersion"/> or newer.
         /// </returns>
         public static async Task<bool> CheckServerVersions(IServiceProvider services, ILogger logger)
         {
@@ -114,5 +123,20 @@ namespace ImmichFrame.WebApi.Helpers
                 .SelectMany(settings => settings.Accounts)
                 .DistinctBy(account => (account.ImmichServerUrl, account.ApiKey))
                 .ToList();
+
+        /// <summary>
+        /// Whether <paramref name="version"/> is <see cref="MinimumSupportedVersion"/> or newer. A
+        /// pre-release comes before the release it leads up to, so a pre-release of the minimum itself
+        /// is older than the minimum and may lack what ImmichFrame needs from it. A pre-release of
+        /// any later version is still newer than the minimum.
+        /// </summary>
+        private static bool IsSupported(ServerVersionResponseDto version)
+        {
+            var numeric = new Version((int)version.Major, (int)version.Minor, (int)version.Patch);
+            if (numeric == MinimumSupportedVersion && version.Prerelease != null)
+                return false;
+
+            return numeric >= MinimumSupportedVersion;
+        }
     }
 }

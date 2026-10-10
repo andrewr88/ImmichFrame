@@ -22,6 +22,7 @@ using Microsoft.Extensions.Options;
 using Moq;
 using Moq.Protected;
 using NUnit.Framework;
+using AdminConfigDto = ImmichFrame.WebApi.Models.AdminConfigDto;
 
 namespace ImmichFrame.WebApi.Tests.Controllers;
 
