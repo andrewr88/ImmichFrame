@@ -88,12 +88,17 @@ generated code.
 Six scan drivers: `dotnet build`, `dotnet list package --vulnerable` and
 `roslynator` for the C# half; `eslint`, `svelte-check` and `npm audit` for the
 frontend. Prettier is deliberately not a driver — formatting diffs are noise in
-a findings table, the same reason `dotnet format` is absent. `npm audit` runs a
-second pass with `--omit=dev` and seeds advisories that are unreachable from the
+a findings table, the same reason `dotnet format` is absent. `npm audit` can run a
+second pass with `--omit=dev` and seed advisories that are unreachable from the
 production dependency graph one severity level lower, tagged `dev dependency` in
-the title, so build tooling cannot crowd out real findings. If that second
-pass fails, every advisory is kept at full severity and the driver says so —
-so a row that is not tagged `dev dependency` has genuinely been checked.
+the title. That split only applies when `package.json` declares a non-empty
+`dependencies` block — and this one does not: the SPA is bundled at build time,
+so what ships to the browser (the svelte and kit runtimes, date-fns, thumbhash)
+sits under `devDependencies` beside the build tooling. With no `dependencies`
+the second pass is skipped and every advisory is kept at full severity, untagged,
+with a notice saying why. If the second pass runs and fails, every advisory is
+likewise kept at full severity and the driver says so — so a row tagged
+`dev dependency` has genuinely been checked against a production graph.
 
 **Phase 3 (`arch-sweep`) covers both stacks.** `make audit-arch` reports on the
 whole repo; `make audit-arch PKG=<target>` scopes it, where `<target>` is a
@@ -115,9 +120,10 @@ than from assuming namespace mirrors path — it does not, the project directori
 carry dots — and a `using` is then resolved only into projects the owning
 `.csproj` actually references (transitively). That second filter is not
 optional: `ImmichFrame.Core.csproj` has no `<ProjectReference>` at all, and two
-files under `ImmichFrame.Core/Helpers` declare a `ImmichFrame.WebApi.Helpers`
-namespace, so without it the graph invents Core → WebApi edges that cannot
-compile. If the reference graph cannot be established at all — a csproj that is
+files under `ImmichFrame.Core/Helpers` used to declare a
+`ImmichFrame.WebApi.Helpers` namespace (moved into `ImmichFrame.Core.Helpers` by
+`1d9eabc` and `9e0f7e4`), and without it the graph invented Core → WebApi edges
+that cannot compile; it stays as a guard against that coming back. If the reference graph cannot be established at all — a csproj that is
 missing, unreadable, truncated, or carries a `<ProjectReference>` with no
 readable `Include` — the run says so on stderr, suppresses every cross-project
 edge, and makes `core-to-webapi` refuse a verdict rather than print a `pass` it
@@ -134,8 +140,9 @@ files it read, so a genuine `pass` is never confused with a rule that had
 nothing in scope (`n/a`); `FAIL` means a layering invariant is broken and `WARN`
 means hygiene that still compiles. `core-to-webapi` resolves its `using`s
 through the same edge list Section A draws rather than grepping, so the two
-sections cannot contradict each other — a bare grep reports two hits here that
-are *not* layer inversions, and they surface under the hygiene rule instead. Phase 3 shells out to neither dotnet nor npm: it is
+sections cannot contradict each other — a bare grep once reported two hits
+here that were *not* layer inversions, and a namespace declared outside its
+project surfaces under the hygiene rule instead. Phase 3 shells out to neither dotnet nor npm: it is
 git + grep + awk + sqlite3 over the tree. `audit/adapters/go.sh` is the upstream
 reference and `audit/ADAPTERS.md` the contract. `audit/THREAT_MODEL.md` has been
 rewritten for this stack — 13 classes, each tagged `(C#)`, `(frontend)` or
