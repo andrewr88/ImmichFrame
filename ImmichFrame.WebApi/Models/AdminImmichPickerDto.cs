@@ -72,7 +72,7 @@ public record AdminImmichPeopleDto(IReadOnlyList<AdminImmichPersonDto> People, l
 /// One Immich tag, trimmed to what a picker draws.
 /// <para>
 /// <see cref="Value"/> - not <see cref="Id"/>, and not <see cref="Name"/> - is what
-/// <c>ServerAccountSettings.Tags</c> holds: <c>TagAssetsPool</c> keys every tag by
+/// <c>ServerAccountSettings.Tags</c> holds: <c>AccountSearchPool</c> keys every tag by
 /// <c>TagResponseDto.Value</c> and looks each configured string up in that dictionary. A picker that
 /// submitted the id or the name would write a configuration that loads, validates, and then selects
 /// no assets at all - a failure with nothing to see in any log. Both are carried anyway, because

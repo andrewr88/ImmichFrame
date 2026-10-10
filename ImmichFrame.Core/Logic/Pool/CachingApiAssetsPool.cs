@@ -4,17 +4,10 @@ using ImmichFrame.Core.Interfaces;
 
 namespace ImmichFrame.Core.Logic.Pool;
 
-public abstract class CachingApiAssetsPool(IApiCache apiCache, ImmichApi immichApi, IAccountSettings accountSettings) : IAssetPool
+public abstract class CachingApiAssetsPool(IApiCache apiCache) : IAssetPool
 {
-    // One key for every kind of pool, not one per type: an account's pools share its cache and its
-    // excluded albums, and keyed by type each of them fetched every excluded album again.
-    private const string ExcludedAlbumsCacheKey = "ExcludedAlbums";
-
-    // Derived pools read these instead of their own constructor parameters, which would
-    // otherwise be captured a second time on top of the copy held here (CS9107).
+    // For whatever else a derived pool loads alongside its assets, to be kept for as long as they are.
     protected IApiCache Cache { get; } = apiCache;
-    protected ImmichApi Api { get; } = immichApi;
-    protected IAccountSettings AccountSettings { get; } = accountSettings;
 
     public async Task<long> GetAssetCount(CancellationToken ct = default)
     {
@@ -26,21 +19,16 @@ public abstract class CachingApiAssetsPool(IApiCache apiCache, ImmichApi immichA
         return (await AllAssets()).Shuffle().Take(requested);
     }
 
-    // Deliberately takes no CancellationToken: both loads are cached and served to every later
-    // request, so they must not be cut short by whichever request happened to trigger them.
-    private async Task<IEnumerable<AssetResponseDto>> AllAssets()
-    {
-        var excludedAlbumAssets = await Cache.GetOrAddAsync(ExcludedAlbumsCacheKey, () => AssetHelper.GetExcludedAlbumAssets(Api, AccountSettings));
+    // Deliberately takes no CancellationToken: the load is cached and served to every later request,
+    // so it must not be cut short by whichever request happened to trigger it.
+    private Task<IEnumerable<AssetResponseDto>> AllAssets()
+        => Cache.GetOrAddAsync(GetType().FullName!, LoadDistinctAssets);
 
-        return await Cache.GetOrAddAsync(GetType().FullName!, () => LoadDistinctAssets().ApplyAccountFilters(AccountSettings, excludedAlbumAssets));
-    }
-
-    // Deduplicated here, once for every pool, rather than in each LoadAssets: an asset in two
-    // configured albums, or with two configured people, comes back from both searches, and was
-    // counted - and could be handed out in one batch - once for each. TagAssetsPool still merges
-    // its copies as it loads them, to keep every tag each was found under.
+    // Deduplicated here, once for every pool, rather than in each LoadAssets: an asset that comes back
+    // twice was counted - and could be handed out in one batch - once for each time. Materialised,
+    // because what is cached here is read on every request, and a lazy query ran again each time.
     private async Task<IEnumerable<AssetResponseDto>> LoadDistinctAssets()
-        => (await LoadAssets()).DistinctBy(asset => asset.Id);
+        => (await LoadAssets()).DistinctBy(asset => asset.Id).ToList();
 
     protected abstract Task<IEnumerable<AssetResponseDto>> LoadAssets(CancellationToken ct = default);
 }

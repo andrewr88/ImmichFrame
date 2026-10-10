@@ -177,29 +177,26 @@ namespace ImmichFrame.Core.Tests.Logic.Pool
         }
 
         [Test]
-        public async Task GetAssets_AlbumOfThreePhotos_ReturnsEachPhotoOnce()
+        public async Task GetAssets_MemoriesOfThreePhotos_ReturnsEachPhotoOnce()
         {
-            // Arrange - the pool PooledImmichFrameLogic builds for an account showing one album, over a
-            // real cache: the album pool hands out from the same cached assets on every call, so its
+            // Arrange - the memories of an account showing them beside its library, over the pool's own
+            // real cache: the memory pool hands out from the same cached assets on every call, so its
             // count is what it holds rather than what it has left.
-            var albumId = Guid.NewGuid();
-            var album = new List<AssetResponseDto> { CreateAsset("a1"), CreateAsset("a2"), CreateAsset("a3") };
+            var memories = new List<AssetResponseDto> { CreateAsset("m1"), CreateAsset("m2"), CreateAsset("m3") };
 
             var accountSettings = new Mock<IAccountSettings>();
-            accountSettings.SetupGet(s => s.Albums).Returns(new List<Guid> { albumId });
 
             var immichApi = new Mock<ImmichApi>("", null!);
-            immichApi.Setup(api => api.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.Is<MetadataSearchDto>(d => d.AlbumIds.Contains(albumId)), It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new SearchResponseDto { Assets = new SearchAssetResponseDto { Items = album } });
+            immichApi.Setup(api => api.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, null, null, null, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new List<MemoryResponseDto> { new() { Assets = memories, Data = new OnThisDayDto { Year = DateTime.Now.Year - 1 } } });
 
-            using var apiCache = new ApiCache(TimeSpan.FromMinutes(5));
-            _multiPool = new MultiAssetPool(new List<IAssetPool> { new AlbumAssetsPool(apiCache, immichApi.Object, accountSettings.Object) });
+            _multiPool = new MultiAssetPool(new List<IAssetPool> { new MemoryAssetsPool(immichApi.Object, accountSettings.Object) });
 
             // Act - the batch the frame asks for
             var result = (await _multiPool.GetAssets(25, CancellationToken.None)).ToList();
 
             // Assert - each photo once, rather than 25 drawn from the 3 and shown back to back
-            Assert.That(result.Select(a => a.Id), Is.EquivalentTo(album.Select(a => a.Id)));
+            Assert.That(result.Select(a => a.Id), Is.EquivalentTo(memories.Select(a => a.Id)));
         }
 
         [Test]

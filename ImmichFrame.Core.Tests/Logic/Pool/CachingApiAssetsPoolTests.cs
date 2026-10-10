@@ -1,3 +1,4 @@
+using System.Collections;
 using NUnit.Framework;
 using Moq;
 using ImmichFrame.Core.Api;
@@ -11,8 +12,6 @@ namespace ImmichFrame.Core.Tests.Logic.Pool;
 public class CachingApiAssetsPoolTests
 {
     private Mock<IApiCache> _mockApiCache;
-    private Mock<ImmichApi> _mockImmichApi; // Dependency for constructor, may not be used directly in base class tests
-    private Mock<IAccountSettings> _mockAccountSettings;
     private TestableCachingApiAssetsPool _testPool;
 
     // Concrete implementation for testing the abstract class
@@ -20,8 +19,8 @@ public class CachingApiAssetsPoolTests
     {
         public Func<Task<IEnumerable<AssetResponseDto>>>? LoadAssetsFunc { get; set; }
 
-        public TestableCachingApiAssetsPool(IApiCache apiCache, ImmichApi immichApi, IAccountSettings accountSettings)
-            : base(apiCache, immichApi, accountSettings)
+        public TestableCachingApiAssetsPool(IApiCache apiCache)
+            : base(apiCache)
         {
         }
 
@@ -34,11 +33,8 @@ public class CachingApiAssetsPoolTests
     [SetUp]
     public void Setup()
     {
-        _mockApiCache = new Mock<IApiCache>(); // ILogger, IOptions<AppSettings>
-        _mockImmichApi = new Mock<ImmichApi>(null!, null!); // ILogger, IHttpClientFactory, IOptions<AppSettings>
-        _mockAccountSettings = new Mock<IAccountSettings>();
-
-        _testPool = new TestableCachingApiAssetsPool(_mockApiCache.Object, _mockImmichApi.Object, _mockAccountSettings.Object);
+        _mockApiCache = new Mock<IApiCache>();
+        _testPool = new TestableCachingApiAssetsPool(_mockApiCache.Object);
 
         // Default setup for ApiCache to execute the factory function
         _mockApiCache.Setup(c => c.GetOrAddAsync(
@@ -46,13 +42,6 @@ public class CachingApiAssetsPoolTests
                 It.IsAny<Func<Task<IEnumerable<AssetResponseDto>>>>()
             ))
             .Returns<string, Func<Task<IEnumerable<AssetResponseDto>>>>(async (key, factory) => await factory());
-
-        // Default account settings
-        _mockAccountSettings.SetupGet(s => s.ShowArchived).Returns(true);
-        _mockAccountSettings.SetupGet(s => s.ImagesFromDate).Returns((DateTime?)null);
-        _mockAccountSettings.SetupGet(s => s.ImagesUntilDate).Returns((DateTime?)null);
-        _mockAccountSettings.SetupGet(s => s.ImagesFromDays).Returns((int?)null);
-        _mockAccountSettings.SetupGet(s => s.Rating).Returns((int?)null);
     }
 
     private List<AssetResponseDto> CreateSampleAssets()
@@ -61,93 +50,78 @@ public class CachingApiAssetsPoolTests
         {
             new AssetResponseDto { Id = FixtureHelpers.GuidFor("1"), Type = AssetTypeEnum.IMAGE, IsArchived = false, ExifInfo = new ExifResponseDto { DateTimeOriginal = DateTime.Now.AddDays(-10), Rating = 5 } },
             new AssetResponseDto { Id = FixtureHelpers.GuidFor("2"), Type = AssetTypeEnum.VIDEO, IsArchived = false, ExifInfo = new ExifResponseDto { DateTimeOriginal = DateTime.Now.AddDays(-10) } }, // Video asset
-            new AssetResponseDto { Id = FixtureHelpers.GuidFor("3"), Type = AssetTypeEnum.IMAGE, IsArchived = true, ExifInfo = new ExifResponseDto { DateTimeOriginal = DateTime.Now.AddDays(-5), Rating = 3 } }, // Potentially filtered by archive status
+            new AssetResponseDto { Id = FixtureHelpers.GuidFor("3"), Type = AssetTypeEnum.IMAGE, IsArchived = true, ExifInfo = new ExifResponseDto { DateTimeOriginal = DateTime.Now.AddDays(-5), Rating = 3 } }, // Archived asset
             new AssetResponseDto { Id = FixtureHelpers.GuidFor("4"), Type = AssetTypeEnum.IMAGE, IsArchived = false, ExifInfo = new ExifResponseDto { DateTimeOriginal = DateTime.Now.AddDays(-2), Rating = 5 } },
             new AssetResponseDto { Id = FixtureHelpers.GuidFor("5"), Type = AssetTypeEnum.IMAGE, IsArchived = false, ExifInfo = new ExifResponseDto { DateTimeOriginal = DateTime.Now.AddYears(-1), Rating = 1 } },
         };
     }
 
     [Test]
-    public async Task GetAssetCount_ReturnsCorrectCount_AfterFiltering()
+    public async Task GetAssetCount_ReturnsLoadedCount()
     {
         // Arrange
         var assets = CreateSampleAssets();
         _testPool.LoadAssetsFunc = () => Task.FromResult<IEnumerable<AssetResponseDto>>(assets);
-        _mockAccountSettings.SetupGet(s => s.ShowArchived).Returns(false); // Filter out archived
 
         // Act
         var count = await _testPool.GetAssetCount();
 
-        // Assert
-        // Expected: Asset "1", "2", "4", "5" (Asset "2" is Video, Asset "3" is archived)
-        Assert.That(count, Is.EqualTo(3));
-    }
-
-    [Test]
-    public async Task GetAssetCount_ReturnsCorrectCount_AfterFiltering_WithVideo()
-    {
-        // Arrange
-        var assets = CreateSampleAssets();
-        _testPool.LoadAssetsFunc = () => Task.FromResult<IEnumerable<AssetResponseDto>>(assets);
-        _mockAccountSettings.SetupGet(s => s.ShowArchived).Returns(false); // Filter out archived
-        _mockAccountSettings.SetupGet(s => s.ShowVideos).Returns(true); // Include videos
-
-        // Act
-        var count = await _testPool.GetAssetCount();
-
-        // Assert
-        // Expected: Asset "1", "2", "4", "5" (Asset "3" is archived)
-        Assert.That(count, Is.EqualTo(4));
+        // Assert - filtering is up to the pool that loads them
+        Assert.That(count, Is.EqualTo(assets.Count));
     }
 
     [Test]
     public async Task GetAssets_ReturnsRequestedNumberOfAssets()
     {
         // Arrange
-        var assets = CreateSampleAssets(); // Total 5 assets, 4 images if ShowArchived = true
+        var assets = CreateSampleAssets();
         _testPool.LoadAssetsFunc = () => Task.FromResult<IEnumerable<AssetResponseDto>>(assets);
-        _mockAccountSettings.SetupGet(s => s.ShowArchived).Returns(true); // Asset "3" included
 
         // Act
         var result = (await _testPool.GetAssets(2)).ToList();
 
         // Assert
         Assert.That(result.Count, Is.EqualTo(2));
-        // All returned assets should be supported media types (image/video)
-        Assert.That(result.All(a => a.Type == AssetTypeEnum.IMAGE || a.Type == AssetTypeEnum.VIDEO));
+        Assert.That(result.Select(a => a.Id), Is.SubsetOf(assets.Select(a => a.Id)));
     }
 
     [Test]
     public async Task GetAssets_ReturnsAllAvailableIfLessThanRequested()
     {
         // Arrange
-        var assets = CreateSampleAssets().Where(a => !a.IsArchived).ToList(); // Excludes archived asset only
+        var assets = CreateSampleAssets().Where(a => !a.IsArchived).ToList();
         _testPool.LoadAssetsFunc = () => Task.FromResult<IEnumerable<AssetResponseDto>>(assets);
-        _mockAccountSettings.SetupGet(s => s.ShowArchived).Returns(false);
 
         // Act
-        var result = (await _testPool.GetAssets(5)).ToList(); // Request 5, but only 3 available after filtering
+        var result = (await _testPool.GetAssets(5)).ToList();
 
         // Assert
-        Assert.That(result.Count, Is.EqualTo(3));
+        Assert.That(result.Count, Is.EqualTo(assets.Count));
     }
 
+    /// <summary>
+    /// An asset loaded twice is one asset: counted twice, it weighed the pool's share of a batch as two,
+    /// and it could be handed out twice in one batch.
+    /// </summary>
     [Test]
-    public async Task GetAssets_ReturnsAllAvailableIfLessThanRequested_WithVideos()
+    public async Task GetAssets_AssetLoadedTwice_IsCountedAndReturnedOnce()
     {
         // Arrange
-        var assets = CreateSampleAssets().Where(a => !a.IsArchived).ToList(); // Excludes archived asset only
-        _testPool.LoadAssetsFunc = () => Task.FromResult<IEnumerable<AssetResponseDto>>(assets);
-        _mockAccountSettings.SetupGet(s => s.ShowArchived).Returns(false);
-        _mockAccountSettings.SetupGet(s => s.ShowVideos).Returns(true);
+        var asset = CreateSampleAssets()[0];
+        var sameAssetAgain = new AssetResponseDto { Id = asset.Id, Type = asset.Type };
+        _testPool.LoadAssetsFunc = () => Task.FromResult<IEnumerable<AssetResponseDto>>([asset, sameAssetAgain]);
 
         // Act
-        var result = (await _testPool.GetAssets(5)).ToList(); // Request 5, but only 3 available after filtering
+        var count = await _testPool.GetAssetCount();
+        var result = (await _testPool.GetAssets(2)).ToList();
 
         // Assert
-        Assert.That(result.Count, Is.EqualTo(4));
+        Assert.Multiple(() =>
+        {
+            Assert.That(count, Is.EqualTo(1));
+            Assert.That(result.Select(a => a.Id), Is.EqualTo(new[] { asset.Id }));
+        });
     }
-
 
     [Test]
     public async Task AllAssets_UsesCache_LoadAssetsCalledOnce()
@@ -187,180 +161,39 @@ public class CachingApiAssetsPoolTests
     }
 
     /// <summary>
-    /// An account's pools share its cache, and every one of them leaves out the same excluded albums,
-    /// so those are fetched once for the account. Cached under each pool's own type, an account showing
-    /// its favourites and an album paged through every excluded album twice, and once more for each
-    /// further kind of pool.
+    /// What is cached is read by every request for a count or an asset, so it is read out of the load
+    /// once, when it is cached. Cached as a lazy query, every request ran it over the load again.
     /// </summary>
     [Test]
-    public async Task GetAssets_TwoKindsOfPoolOnOneCache_FetchTheExcludedAlbumsOnce()
+    public async Task GetAssets_ManyRequests_ReadTheLoadedAssetsOnce()
     {
         // Arrange
-        var excludedAlbumId = Guid.NewGuid();
-        _mockAccountSettings.SetupGet(s => s.ExcludedAlbums).Returns([excludedAlbumId]);
-        _mockAccountSettings.SetupGet(s => s.Albums).Returns([Guid.NewGuid()]);
-        _mockImmichApi.Setup(api => api.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<MetadataSearchDto>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(() => new SearchResponseDto { Assets = new SearchAssetResponseDto { Items = [] } });
-
+        var loaded = new CountingEnumerable<AssetResponseDto>(CreateSampleAssets());
         using var cache = new ApiCache(TimeSpan.FromHours(1));
-        var favorites = new FavoriteAssetsPool(cache, _mockImmichApi.Object, _mockAccountSettings.Object);
-        var album = new AlbumAssetsPool(cache, _mockImmichApi.Object, _mockAccountSettings.Object);
+        var pool = new TestableCachingApiAssetsPool(cache)
+        {
+            LoadAssetsFunc = () => Task.FromResult<IEnumerable<AssetResponseDto>>(loaded)
+        };
 
         // Act
-        await favorites.GetAssets(1);
-        await album.GetAssets(1);
+        await pool.GetAssetCount();
+        (await pool.GetAssets(2)).ToList();
+        (await pool.GetAssets(2)).ToList();
 
         // Assert
-        _mockImmichApi.Verify(api => api.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(),
-            It.Is<MetadataSearchDto>(d => d.AlbumIds != null && d.AlbumIds.Contains(excludedAlbumId)), It.IsAny<CancellationToken>()), Times.Once);
+        Assert.That(loaded.Enumerations, Is.EqualTo(1));
     }
 
-    [Test]
-    public async Task ApplyAccountFilters_FiltersArchived()
+    private sealed class CountingEnumerable<T>(IEnumerable<T> items) : IEnumerable<T>
     {
-        // Arrange
-        var assets = CreateSampleAssets(); // Asset "3" is archived
-        _testPool.LoadAssetsFunc = () => Task.FromResult<IEnumerable<AssetResponseDto>>(assets);
-        _mockAccountSettings.SetupGet(s => s.ShowArchived).Returns(false);
+        public int Enumerations { get; private set; }
 
-        // Act
-        var result = (await _testPool.GetAssets(5)).ToList(); // Request more than available to get all filtered
+        public IEnumerator<T> GetEnumerator()
+        {
+            Enumerations++;
+            return items.GetEnumerator();
+        }
 
-        // Assert
-        Assert.That(result.Any(a => a.Id == FixtureHelpers.GuidFor("2")), Is.False); // Video asset filtered out by default
-        Assert.That(result.Any(a => a.Id == FixtureHelpers.GuidFor("3")), Is.False); // Archived asset
-        Assert.That(result.Count, Is.EqualTo(3)); // 1, 4, 5
-    }
-
-    [Test]
-    public async Task ApplyAccountFilters_FiltersArchived_WithVideo()
-    {
-        // Arrange
-        var assets = CreateSampleAssets(); // Asset "3" is archived
-        _testPool.LoadAssetsFunc = () => Task.FromResult<IEnumerable<AssetResponseDto>>(assets);
-        _mockAccountSettings.SetupGet(s => s.ShowArchived).Returns(false);
-        _mockAccountSettings.SetupGet(s => s.ShowVideos).Returns(true);
-
-        // Act
-        var result = (await _testPool.GetAssets(5)).ToList(); // Request more than available to get all filtered
-
-        // Assert
-        Assert.That(result.Any(a => a.Id == FixtureHelpers.GuidFor("3")), Is.False);
-        Assert.That(result.Count, Is.EqualTo(4)); // 1, 2, 4, 5
-    }
-
-    [Test]
-    public async Task ApplyAccountFilters_FiltersImagesUntilDate()
-    {
-        // Arrange
-        var assets = CreateSampleAssets();
-        _testPool.LoadAssetsFunc = () => Task.FromResult<IEnumerable<AssetResponseDto>>(assets);
-        var untilDate = DateTime.Now.AddDays(-7); // Assets "1" (10 days ago), "5" (1 year ago) should match
-        _mockAccountSettings.SetupGet(s => s.ImagesUntilDate).Returns(untilDate);
-        _mockAccountSettings.SetupGet(s => s.ShowArchived).Returns(true); // Include asset "3" for date check if not filtered by archive
-
-        // Act
-        var result = (await _testPool.GetAssets(5)).ToList();
-
-        // Assert (all are images already by default)
-        // Assets: 1 (10d), 3 (5d, archived), 4 (2d), 5 (1y)
-        // Filter: ShowArchived=true. UntilDate = -7d.
-        // Expected: Assets "1", "5"
-        Assert.That(result.All(a => a.ExifInfo?.DateTimeOriginal <= untilDate));
-        Assert.That(result.Count, Is.EqualTo(2), string.Join(",", result.Select(x => x.Id)));
-        Assert.That(result.Any(a => a.Id == FixtureHelpers.GuidFor("1")));
-        Assert.That(result.Any(a => a.Id == FixtureHelpers.GuidFor("2")), Is.False); // Video asset
-        Assert.That(result.Any(a => a.Id == FixtureHelpers.GuidFor("5")));
-    }
-
-    [Test]
-    public async Task ApplyAccountFilters_FiltersImagesFromDate()
-    {
-        // Arrange
-        var assets = CreateSampleAssets();
-        _testPool.LoadAssetsFunc = () => Task.FromResult<IEnumerable<AssetResponseDto>>(assets);
-        var fromDate = DateTime.Now.AddDays(-7); // Assets "3" (5 days ago), "4" (2 days ago) should match
-        _mockAccountSettings.SetupGet(s => s.ImagesFromDate).Returns(fromDate);
-        _mockAccountSettings.SetupGet(s => s.ShowArchived).Returns(true);
-
-        // Act
-        var result = (await _testPool.GetAssets(5)).ToList();
-
-        // Assert
-        // Assets: 1 (10d), 3 (5d, archived), 4 (2d), 5 (1y)
-        // Filter: ShowArchived=true. FromDate = -7d.
-        // Expected: Asset "3", "4"
-        Assert.That(result.All(a => a.ExifInfo?.DateTimeOriginal >= fromDate));
-        Assert.That(result.Count, Is.EqualTo(2), string.Join(",", result.Select(x => x.Id)));
-        Assert.That(result.Any(a => a.Id == FixtureHelpers.GuidFor("3")));
-        Assert.That(result.Any(a => a.Id == FixtureHelpers.GuidFor("4")));
-    }
-
-    [Test]
-    public async Task ApplyAccountFilters_FiltersImagesFromDays()
-    {
-        // Arrange
-        var assets = CreateSampleAssets();
-        _testPool.LoadAssetsFunc = () => Task.FromResult<IEnumerable<AssetResponseDto>>(assets);
-        _mockAccountSettings.SetupGet(s => s.ImagesFromDays).Returns(7); // Last 7 days
-        _mockAccountSettings.SetupGet(s => s.ShowArchived).Returns(true);
-        var fromDate = DateTime.Today.AddDays(-7);
-
-
-        // Act
-        var result = (await _testPool.GetAssets(5)).ToList();
-
-        // Assert
-        // Assets: 1 (10d), 3 (5d, archived), 4 (2d), 5 (1y)
-        // Filter: ShowArchived=true. FromDays = 7 (so fromDate approx -7d from today).
-        // Expected: Asset "3", "4"
-        Assert.That(result.All(a => a.ExifInfo?.DateTimeOriginal >= fromDate));
-        Assert.That(result.Count, Is.EqualTo(2), string.Join(",", result.Select(x => x.Id)));
-        Assert.That(result.Any(a => a.Id == FixtureHelpers.GuidFor("3")));
-        Assert.That(result.Any(a => a.Id == FixtureHelpers.GuidFor("4")));
-    }
-
-    [Test]
-    public async Task ApplyAccountFilters_FiltersRating()
-    {
-        // Arrange
-        var assets = CreateSampleAssets(); // Asset "1" (rating 5), "3" (rating 3), "4" (rating 5), "5" (rating 1)
-        _testPool.LoadAssetsFunc = () => Task.FromResult<IEnumerable<AssetResponseDto>>(assets);
-        _mockAccountSettings.SetupGet(s => s.Rating).Returns(5);
-        _mockAccountSettings.SetupGet(s => s.ShowArchived).Returns(true);
-
-
-        // Act
-        var result = (await _testPool.GetAssets(5)).ToList();
-
-        // Assert
-        // Expected: Asset "1", "4" (both rating 5)
-        Assert.That(result.All(a => a.ExifInfo?.Rating == 5));
-        Assert.That(result.Count, Is.EqualTo(2), string.Join(",", result.Select(x => x.Id)));
-        Assert.That(result.Any(a => a.Id == FixtureHelpers.GuidFor("1")));
-        Assert.That(result.Any(a => a.Id == FixtureHelpers.GuidFor("4")));
-    }
-
-    [Test]
-    public async Task ApplyAccountFilters_CombinedFilters()
-    {
-        // Arrange
-        var assets = CreateSampleAssets();
-        _testPool.LoadAssetsFunc = () => Task.FromResult<IEnumerable<AssetResponseDto>>(assets);
-
-        _mockAccountSettings.SetupGet(s => s.ShowArchived).Returns(false); // No archived (Asset "3" out)
-        _mockAccountSettings.SetupGet(s => s.ImagesFromDays).Returns(15); // Last 15 days (Asset "5" out)
-        // Assets "1" (10d), "4" (2d) remain
-        _mockAccountSettings.SetupGet(s => s.Rating).Returns(5); // Asset "1" (rating 5), Asset "4" (rating 5)
-
-        // Act
-        var result = (await _testPool.GetAssets(5)).ToList();
-
-        // Assert
-        // Expected: Assets "1", "4"
-        Assert.That(result.Count, Is.EqualTo(2));
-        Assert.That(result.Any(a => a.Id == FixtureHelpers.GuidFor("1")));
-        Assert.That(result.Any(a => a.Id == FixtureHelpers.GuidFor("4")));
-        Assert.That(result.Any(a => a.Id == FixtureHelpers.GuidFor("3") || a.Id == FixtureHelpers.GuidFor("5") || a.Id == FixtureHelpers.GuidFor("2")), Is.False);
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
 }

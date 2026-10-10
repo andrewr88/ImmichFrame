@@ -259,10 +259,11 @@ public class ServerAccountSettings : IAccountSettings, IConfigSettable
 
     /// <summary>
     /// Never null, for the reason <see cref="Albums"/> is not, and never holding an empty entry
-    /// either. A null in JSON or a bare <c>-</c> in YAML binds as a null tag, and <c>TagAssetsPool</c>
-    /// looks every tag up as a dictionary key, so one failed every request for the account's photos;
-    /// an entry that is only whitespace names no tag either. The three lists of ids cannot hold such
-    /// an entry: both binders refuse an empty one where a Guid belongs, so the file never loads.
+    /// either. A null in JSON or a bare <c>-</c> in YAML binds as a null tag, and
+    /// <c>AccountSearchPool</c> looks every tag up as a dictionary key, so one failed every request for
+    /// the account's photos; an entry that is only whitespace names no tag either. The three lists of
+    /// ids cannot hold such an entry: both binders refuse an empty one where a Guid belongs, so the
+    /// file never loads.
     /// </summary>
     public List<string> Tags
     {
@@ -273,16 +274,17 @@ public class ServerAccountSettings : IAccountSettings, IConfigSettable
     private List<string> _tags = [];
 
     /// <summary>
-    /// The exact star rating of the photos the account shows, between <see cref="MinRating"/> and
-    /// <see cref="MaxRating"/>. Leave it out to show photos of any rating.
+    /// The fewest stars a photo the account shows is rated, between <see cref="MinRating"/> and
+    /// <see cref="MaxRating"/>: photos rated that or higher are shown. Leave it out to show photos of
+    /// any rating, and unrated ones.
     /// </summary>
     public int? Rating { get; set; }
 
     /// <summary>
-    /// The range of <see cref="Rating"/>: 1 to 5 stars. Immich v3, the oldest ImmichFrame supports, no
-    /// longer rates a photo -1 or 0, and its search refuses either. Photos are matched on the exact rating, so a number outside the range matched no photo, and the
-    /// frame showed nothing without saying why. The admin editor applies the same bound, in
-    /// <c>admin-config.ts</c>.
+    /// The range of <see cref="Rating"/>: 1 to 5 stars, the ratings Immich gives a photo - since v3,
+    /// never -1 or 0. Photos are matched on at least the rating, so a number above the range matches no
+    /// photo, and the frame would show nothing without saying why; one below it matches just what 1
+    /// does. The admin editor applies the same bound, in <c>admin-config.ts</c>.
     /// </summary>
     public const int MinRating = 1;
 

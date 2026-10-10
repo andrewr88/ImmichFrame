@@ -3,6 +3,7 @@ using Moq;
 using ImmichFrame.Core.Api;
 using ImmichFrame.Core.Interfaces;
 using ImmichFrame.Core.Logic.Pool;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -324,4 +325,231 @@ public class MemoryAssetsPoolTests
         // Assert - the day's memories were held rather than searched for on every request
         _mockImmichApi.Verify(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, null, null, null, It.IsAny<CancellationToken>()), Times.Once);
     }
+
+    // The rest of an account's photos are filtered by Immich's search, which its memories do not come
+    // from, so the pool holds them to the account's settings itself. Each test below turns one setting
+    // on, and checks that it leaves out what it should and keeps the rest.
+
+    [Test]
+    public async Task GetAssets_MemoryNeitherImageNorVideo_IsLeftOut()
+    {
+        // Arrange - videos are shown, so it is the kind of asset that is refused, not that it is a video
+        _mockAccountSettings.SetupGet(s => s.ShowVideos).Returns(true);
+        var image = Remembered();
+        var video = Remembered(AssetTypeEnum.VIDEO);
+        ImmichRemembers(image, video, Remembered(AssetTypeEnum.AUDIO), Remembered(AssetTypeEnum.OTHER));
+
+        // Act
+        var shown = await AllShown();
+
+        // Assert
+        Assert.That(shown, Is.EquivalentTo(new[] { image, video }));
+    }
+
+    [TestCase(false, TestName = "GetAssets_ArchivedMemoryWithShowArchivedOff_IsLeftOut")]
+    [TestCase(true, TestName = "GetAssets_ArchivedMemoryWithShowArchivedOn_IsShown")]
+    public async Task GetAssets_ArchivedMemory_IsShownOnlyWithShowArchived(bool showArchived)
+    {
+        // Arrange
+        _mockAccountSettings.SetupGet(s => s.ShowArchived).Returns(showArchived);
+        var inTimeline = Remembered();
+        var archived = Remembered(archived: true);
+        ImmichRemembers(inTimeline, archived);
+
+        // Act
+        var shown = await AllShown();
+
+        // Assert
+        Assert.That(shown, Is.EquivalentTo(showArchived ? new[] { inTimeline, archived } : new[] { inTimeline }));
+    }
+
+    /// <summary>
+    /// Both ends of the date range are inclusive, as they are for the search: a memory taken at the very
+    /// moment ImagesFromDate or ImagesUntilDate names is shown. One taken a tick outside it is not,
+    /// which shows the filter ran.
+    /// </summary>
+    [TestCase(nameof(IAccountSettings.ImagesFromDate), -1, TestName = "GetAssets_MemoryTakenAtImagesFromDate_IsShown")]
+    [TestCase(nameof(IAccountSettings.ImagesUntilDate), 1, TestName = "GetAssets_MemoryTakenAtImagesUntilDate_IsShown")]
+    public async Task GetAssets_MemoryTakenAtEitherEndOfTheRange_IsShown(string end, int ticksOutside)
+    {
+        // Arrange
+        var boundary = new DateTime(2024, 6, 1, 12, 0, 0);
+        if (end == nameof(IAccountSettings.ImagesFromDate))
+            _mockAccountSettings.SetupGet(s => s.ImagesFromDate).Returns(boundary);
+        else
+            _mockAccountSettings.SetupGet(s => s.ImagesUntilDate).Returns(boundary);
+
+        var atTheEnd = Remembered(taken: boundary);
+        ImmichRemembers(atTheEnd, Remembered(taken: boundary.AddTicks(ticksOutside)));
+
+        // Act
+        var shown = await AllShown();
+
+        // Assert
+        Assert.That(shown, Is.EqualTo(new[] { atTheEnd }));
+    }
+
+    [Test]
+    public async Task GetAssets_MemoryTakenBeforeImagesFromDays_IsLeftOut()
+    {
+        // Arrange
+        _mockAccountSettings.SetupGet(s => s.ImagesFromDays).Returns(7);
+        var recent = Remembered(taken: DateTime.Today.AddDays(-6));
+        ImmichRemembers(recent, Remembered(taken: DateTime.Today.AddDays(-8)));
+
+        // Act
+        var shown = await AllShown();
+
+        // Assert
+        Assert.That(shown, Is.EqualTo(new[] { recent }));
+    }
+
+    [Test]
+    public async Task GetAssets_Rating_ShowsMemoriesRatedAtLeastThat()
+    {
+        // Arrange
+        _mockAccountSettings.SetupGet(s => s.Rating).Returns(3);
+        var ratedThree = Remembered(rating: 3);
+        var ratedFive = Remembered(rating: 5);
+        ImmichRemembers(Remembered(rating: null), Remembered(rating: 2), ratedThree, ratedFive);
+
+        // Act
+        var shown = await AllShown();
+
+        // Assert - read as the search reads it: at least the rating, which no unrated memory meets
+        Assert.That(shown, Is.EquivalentTo(new[] { ratedThree, ratedFive }));
+    }
+
+    [Test]
+    public async Task GetAssets_MemoryInAnExcludedAlbum_IsLeftOut()
+    {
+        // Arrange
+        _mockAccountSettings.SetupGet(s => s.ExcludedAlbums).Returns([Guid.NewGuid()]);
+        var kept = Remembered();
+        var excluded = Remembered();
+        ImmichRemembers(kept, excluded);
+        ExcludedAlbumsHold(excluded.Id);
+
+        // Act
+        var shown = await AllShown();
+
+        // Assert
+        Assert.That(shown, Is.EqualTo(new[] { kept }));
+    }
+
+    /// <summary>
+    /// The excluded albums are searched for through the search's filter and paged through by its
+    /// cursor - not by the page number and album ids Immich deprecated in 3.2.0 - in each visibility
+    /// the account shows a memory in, so an archived memory in an excluded album is found as well.
+    /// </summary>
+    [Test]
+    public async Task GetAssets_ExcludedAlbumsLargerThanAPage_AreSearchedPageByPageByCursor()
+    {
+        // Arrange
+        var excludedAlbums = new List<Guid> { Guid.NewGuid(), Guid.NewGuid() };
+        _mockAccountSettings.SetupGet(s => s.ExcludedAlbums).Returns(excludedAlbums);
+        _mockAccountSettings.SetupGet(s => s.ShowArchived).Returns(true);
+        var onFirstPage = Remembered(archived: true);
+        var onSecondPage = Remembered();
+        var kept = Remembered();
+        ImmichRemembers(onFirstPage, onSecondPage, kept);
+
+        var searches = new List<MetadataSearchDto>();
+        _mockImmichApi.Setup(x => x.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<MetadataSearchDto>(), It.IsAny<CancellationToken>()))
+            .Callback<string, string, MetadataSearchDto, CancellationToken>((_, _, search, _) => searches.Add(search))
+            .ReturnsAsync((string _, string _, MetadataSearchDto search, CancellationToken _) =>
+                search.Cursor == null ? SearchPage("page-2", onFirstPage.Id) : SearchPage(null, onSecondPage.Id));
+
+        // Act
+        var shown = await AllShown();
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(shown, Is.EqualTo(new[] { kept }));
+            Assert.That(searches.Select(search => search.Cursor), Is.EqualTo(new[] { null, "page-2" }));
+            Assert.That(searches.Select(search => search.Size), Has.All.EqualTo(1000));
+            Assert.That(searches.Select(search => search.Filter.AlbumIds.Any), Has.All.EquivalentTo(excludedAlbums));
+            Assert.That(searches.Select(search => search.Filter.Visibility.In),
+                Has.All.EquivalentTo(new[] { AssetVisibility.Timeline, AssetVisibility.Archive }));
+            Assert.That(searches.Select(SentFields), Has.All.SubsetOf(new[] { "filter", "cursor", "size" }),
+                "sent with a field other than the filter, the cursor and the page size");
+        });
+    }
+
+    [TestCase(false, TestName = "GetAssets_NullExcludedAlbums_DoesNotSearchForThem")]
+    [TestCase(true, TestName = "GetAssets_EmptyExcludedAlbums_DoesNotSearchForThem")]
+    public async Task GetAssets_NoExcludedAlbums_DoesNotSearchForThem(bool emptyList)
+    {
+        // Arrange
+        _mockAccountSettings.SetupGet(s => s.ExcludedAlbums).Returns(emptyList ? new List<Guid>() : null!);
+        var memory = Remembered();
+        ImmichRemembers(memory);
+
+        // Act
+        var shown = await AllShown();
+
+        // Assert
+        Assert.That(shown, Is.EqualTo(new[] { memory }));
+        _mockImmichApi.Verify(x => x.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<MetadataSearchDto>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Test]
+    public async Task GetAssets_AgainTheSameDay_DoesNotSearchTheExcludedAlbumsAgain()
+    {
+        // Arrange - as for the memories themselves, a run that straddles midnight would rightly search twice
+        Assume.That(DateTime.Now.TimeOfDay, Is.LessThan(new TimeSpan(23, 59, 50)),
+            "too close to midnight, when the day's memories rightly expire");
+        _mockAccountSettings.SetupGet(s => s.ExcludedAlbums).Returns([Guid.NewGuid()]);
+        ImmichRemembers(Remembered());
+        ExcludedAlbumsHold();
+
+        // Act
+        await _memoryAssetsPool.GetAssets(1, CancellationToken.None);
+        await Task.Delay(50);
+        await _memoryAssetsPool.GetAssets(1, CancellationToken.None);
+
+        // Assert - searched once for the day, and without a request's token, being shared by every request
+        _mockImmichApi.Verify(x => x.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<MetadataSearchDto>(), CancellationToken.None), Times.Once);
+    }
+
+    // A memory asset with its info already at hand, taken on the given date or else on a fixed one.
+    private static AssetResponseDto Remembered(AssetTypeEnum type = AssetTypeEnum.IMAGE, DateTime? taken = null, int? rating = null, bool archived = false) => new()
+    {
+        Id = Guid.NewGuid(),
+        Type = type,
+        IsArchived = archived,
+        ExifInfo = new ExifResponseDto { DateTimeOriginal = taken ?? new DateTime(2020, 1, 1), Rating = rating },
+        People = new List<PersonResponseDto>()
+    };
+
+    // Has Immich find one memory today, holding exactly these assets.
+    private void ImmichRemembers(params AssetResponseDto[] assets) =>
+        _mockImmichApi.Setup(x => x.SearchMemoriesAsync(It.IsAny<DateTimeOffset>(), null, null, null, null, null, null, null, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<MemoryResponseDto>
+            {
+                new() { Id = Guid.NewGuid(), Assets = assets.ToList(), Data = new OnThisDayDto { Year = DateTime.Now.Year - 2 } }
+            });
+
+    // Has Immich find exactly these assets in the excluded albums, on a single page.
+    private void ExcludedAlbumsHold(params Guid[] assetIds) =>
+        _mockImmichApi.Setup(x => x.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<MetadataSearchDto>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SearchPage(null, assetIds));
+
+    private static SearchResponseDto SearchPage(string? nextCursor, params Guid[] assetIds) => new()
+    {
+        Assets = new SearchAssetResponseDto
+        {
+            Items = assetIds.Select(id => new AssetResponseDto { Id = id }).ToList(),
+            NextCursor = nextCursor
+        }
+    };
+
+    // Every memory the pool shows, asking for more than any test holds.
+    private async Task<List<AssetResponseDto>> AllShown() =>
+        (await _memoryAssetsPool.GetAssets(100, CancellationToken.None)).ToList();
+
+    // The fields a search is sent with: a field left null is left out of the request.
+    private static IEnumerable<string> SentFields(MetadataSearchDto search) =>
+        JObject.FromObject(search).Properties().Select(property => property.Name);
 }

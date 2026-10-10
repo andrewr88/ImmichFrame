@@ -186,8 +186,8 @@ public class AdminImmichControllerTests
         {
             Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
 
-            // TagAssetsPool keys every tag by TagResponseDto.Value and looks the configured strings up
-            // in that dictionary, so an editor that submitted the name or the id would write a
+            // AccountSearchPool keys every tag by TagResponseDto.Value and looks the configured strings
+            // up in that dictionary, so an editor that submitted the name or the id would write a
             // configuration that loads, validates and then selects nothing. The three are deliberately
             // all different here, so a field swapped for either of the others fails this.
             Assert.That((string?)tags?[0]?["value"], Is.EqualTo("trips/summer 2024"));

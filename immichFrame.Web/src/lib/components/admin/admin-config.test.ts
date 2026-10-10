@@ -1748,10 +1748,10 @@ describe('regression: a rating Immich does not give a photo', () => {
 	const prop = 'rating';
 
 	it.each([-1, 0, 6, 2147483648, 5.5])('rating at %s, is refused by name', (value) => {
-		// Assert: the server refuses a Rating outside 1 to 5, because an account shows only photos
-		// rated exactly that and so a number outside the range matched none. Its message does not
-		// say which account, so the editor names it. A number past the range is told the range,
-		// whether or not it is a fraction, as with an int's range.
+		// Assert: the server refuses a Rating outside 1 to 5, the ratings Immich gives a photo, and
+		// an account shows only photos rated at least that, so a number above the range matches
+		// none. Its message does not say which account, so the editor names it. A number past the
+		// range is told the range, whether or not it is a fraction, as with an int's range.
 		expect(errorsAfter({ entry: DEFAULT_NAME, on: 'account', prop, value })).toEqual([
 			"the default configuration: 'Rating' for Att needs a whole number between 1 and 5, or to " +
 				'be left blank.'

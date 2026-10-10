@@ -5,12 +5,17 @@ using Microsoft.Extensions.Caching.Memory;
 
 namespace ImmichFrame.Core.Logic.Pool;
 
-public class MemoryAssetsPool(ImmichApi immichApi, IAccountSettings accountSettings) : CachingApiAssetsPool(new DailyApiCache(), immichApi, accountSettings)
+public class MemoryAssetsPool(ImmichApi immichApi, IAccountSettings accountSettings) : CachingApiAssetsPool(new DailyApiCache())
 {
+    private const string ExcludedAlbumsCacheKey = "ExcludedAlbums";
+
+    // The most a search hands back at once.
+    private const int SearchPageSize = 1000;
+
     protected override async Task<IEnumerable<AssetResponseDto>> LoadAssets(CancellationToken ct = default)
     {
         var searchDate = DateTimeOffset.Now;
-        var memories = await Api.SearchMemoriesAsync(searchDate, null, null, null, null, null, null, null, null, ct);
+        var memories = await immichApi.SearchMemoriesAsync(searchDate, null, null, null, null, null, null, null, null, ct);
 
         var memoryAssets = new List<AssetResponseDto>();
         foreach (var memory in memories)
@@ -18,7 +23,7 @@ public class MemoryAssetsPool(ImmichApi immichApi, IAccountSettings accountSetti
             var assets = memory.Assets.ToList();
             var yearsAgo = searchDate.Year - memory.Data.Year;
 
-            if (!AccountSettings.ShowVideos)
+            if (!accountSettings.ShowVideos)
             {
                 assets = assets.Where(a => a.Type == AssetTypeEnum.IMAGE).ToList();
             }
@@ -27,7 +32,7 @@ public class MemoryAssetsPool(ImmichApi immichApi, IAccountSettings accountSetti
             {
                 if (asset.ExifInfo == null)
                 {
-                    var assetInfo = await Api.GetAssetInfoAsync(asset.Id, null, null, ct);
+                    var assetInfo = await immichApi.GetAssetInfoAsync(asset.Id, null, null, ct);
                     asset.ExifInfo = assetInfo.ExifInfo;
                     asset.People = assetInfo.People;
                 }
@@ -40,7 +45,69 @@ public class MemoryAssetsPool(ImmichApi immichApi, IAccountSettings accountSetti
             memoryAssets.AddRange(assets);
         }
 
-        return memoryAssets;
+        return await ShownByAccount(memoryAssets);
+    }
+
+    /// <summary>
+    /// The memories the account's settings let through. The rest of the account's photos are filtered
+    /// by Immich's search, but memories come from elsewhere, so they are filtered here instead - to the
+    /// same settings, read the same way: both ends of the date range inclusive, and a rating met by
+    /// any photo rated at least that. Anything but an image or a video is never shown.
+    /// </summary>
+    private async Task<List<AssetResponseDto>> ShownByAccount(List<AssetResponseDto> assets)
+    {
+        var takenAfter = accountSettings.ImagesFromDate
+            ?? (accountSettings.ImagesFromDays is int days ? DateTime.Today.AddDays(-days) : null);
+        var takenBefore = accountSettings.ImagesUntilDate;
+        var rating = accountSettings.Rating;
+
+        var shown = assets.Where(asset =>
+                (asset.Type == AssetTypeEnum.IMAGE || (asset.Type == AssetTypeEnum.VIDEO && accountSettings.ShowVideos))
+                && (accountSettings.ShowArchived || !asset.IsArchived)
+                && (takenAfter == null || asset.ExifInfo?.DateTimeOriginal >= takenAfter)
+                && (takenBefore == null || asset.ExifInfo?.DateTimeOriginal <= takenBefore)
+                && (rating == null || asset.ExifInfo?.Rating >= rating))
+            .ToList();
+
+        // On a day with no memories to show, the excluded albums are not searched at all.
+        if (shown.Count == 0 || accountSettings.ExcludedAlbums is not { Count: > 0 } excludedAlbums)
+        {
+            return shown;
+        }
+
+        // Without a request's token: this is part of the memories' own load, which is cached and shared
+        // with every request. Kept as long as the memories are, until the day is out.
+        var excludedIds = await Cache.GetOrAddAsync(ExcludedAlbumsCacheKey, () => LoadAssetIds(excludedAlbums));
+        return shown.Where(asset => !excludedIds.Contains(asset.Id)).ToList();
+    }
+
+    /// <summary>
+    /// The ids of every asset in <paramref name="albums"/>, in one search paged through by its cursor.
+    /// Looked for in each visibility the account shows a memory in, so that what is excluded does not
+    /// rest on which of them Immich would search when it is not told.
+    /// </summary>
+    private async Task<HashSet<Guid>> LoadAssetIds(List<Guid> albums)
+    {
+        var ids = new HashSet<Guid>();
+        string? cursor = null;
+        do
+        {
+            var page = await immichApi.SearchAssetsAsync(null, null, new MetadataSearchDto
+            {
+                Size = SearchPageSize,
+                Cursor = cursor,
+                Filter = new SearchFilter
+                {
+                    AlbumIds = new IdsFilter { Any = albums },
+                    Visibility = SearchFilters.Visibility(accountSettings)
+                }
+            }, CancellationToken.None);
+
+            ids.UnionWith(page.Assets.Items.Select(asset => asset.Id));
+            cursor = page.Assets.NextCursor;
+        } while (!string.IsNullOrEmpty(cursor));
+
+        return ids;
     }
 }
 

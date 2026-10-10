@@ -449,13 +449,21 @@ public class PooledImmichFrameLogicTests
         VerifyImmichRequests("/search/statistics", Times.Once());
     }
 
-    // Answers every search with nothing found, and keeps each request as its method, path and body -
-    // read as it is sent, since the client disposes a request once it is answered.
+    // The one tag ImmichFindsNothing's Immich has.
+    private static readonly Guid HolidayTagId = Guid.NewGuid();
+
+    // Answers every search with nothing found - and the tags with Holiday alone - and keeps each request
+    // as its method, path and body: read as it is sent, since the client disposes a request once it is
+    // answered.
     private List<string> ImmichFindsNothing()
     {
         const string noAssets = """
             {"albums":{"count":0,"facets":[],"items":[],"total":0},
              "assets":{"count":0,"facets":[],"items":[],"nextCursor":null,"nextPage":null,"total":0}}
+            """;
+        var tags = $$"""
+            [{"id":"{{HolidayTagId}}","name":"Holiday","value":"Holiday",
+              "createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:00:00Z"}]
             """;
         var requests = new List<string>();
         _immich.Protected()
@@ -468,6 +476,7 @@ public class PooledImmichFrameLogicTests
 
                 var json = path.EndsWith("/search/metadata") ? noAssets
                     : path.EndsWith("/search/statistics") ? """{"total":0}"""
+                    : path.EndsWith("/tags") ? tags
                     : "[]";
                 return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json) };
             });
@@ -475,26 +484,38 @@ public class PooledImmichFrameLogicTests
     }
 
     /// <summary>
-    /// An account showing one kind of asset draws on that kind's own search, and on nothing else.
-    /// Taken for an account narrowed to nothing, it would draw at random from its whole library;
-    /// built without the kind's pool, it would show nothing at all.
+    /// An account showing one kind of asset searches for that kind alone: the one branch of the
+    /// search's "or", as it goes to Immich. With no "or", it would draw at random from its whole
+    /// library; with another branch, or one Immich does not accept, it would show something else, or
+    /// nothing at all.
     /// </summary>
-    [TestCase("Favorites", "POST /api/search/metadata", "\"isFavorite\":true")]
-    [TestCase("Memories", "GET /api/memories", "")]
-    [TestCase("Albums", "POST /api/search/metadata", "\"albumIds\":")]
-    [TestCase("People", "POST /api/search/metadata", "\"personIds\":")]
-    [TestCase("Tags", "GET /api/tags", "")]
-    public async Task GetAssets_AccountShowingOneKindOnly_SearchesThatKindRatherThanTheLibrary(
-        string kind, string request, string body)
+    [TestCase("Favorites")]
+    [TestCase("Albums")]
+    [TestCase("People")]
+    [TestCase("Tags")]
+    public async Task GetAssets_AccountShowingOneKindOnly_SearchesForThatKindAlone(string kind)
     {
         // Arrange - the account's pool is built along with its logic
+        var id = Guid.NewGuid();
+        string branch;
         switch (kind)
         {
-            case "Favorites": _accountSettings.SetupGet(s => s.ShowFavorites).Returns(true); break;
-            case "Memories": _accountSettings.SetupGet(s => s.ShowMemories).Returns(true); break;
-            case "Albums": _accountSettings.SetupGet(s => s.Albums).Returns([Guid.NewGuid()]); break;
-            case "People": _accountSettings.SetupGet(s => s.People).Returns([Guid.NewGuid()]); break;
-            case "Tags": _accountSettings.SetupGet(s => s.Tags).Returns(["Holiday"]); break;
+            case "Favorites":
+                _accountSettings.SetupGet(s => s.ShowFavorites).Returns(true);
+                branch = """{"isFavorite":{"eq":true}}""";
+                break;
+            case "Albums":
+                _accountSettings.SetupGet(s => s.Albums).Returns([id]);
+                branch = $$$"""{"albumIds":{"any":["{{{id}}}"]}}""";
+                break;
+            case "People":
+                _accountSettings.SetupGet(s => s.People).Returns([id]);
+                branch = $$$"""{"personIds":{"any":["{{{id}}}"]}}""";
+                break;
+            default:
+                _accountSettings.SetupGet(s => s.Tags).Returns(["Holiday"]);
+                branch = $$$"""{"tagIds":{"any":["{{{HolidayTagId}}}"]}}""";
+                break;
         }
 
         var requests = ImmichFindsNothing();
@@ -506,9 +527,81 @@ public class PooledImmichFrameLogicTests
         // Assert
         Assert.Multiple(() =>
         {
-            Assert.That(requests, Has.Some.Matches<string>(r => r.StartsWith(request) && r.Contains(body)));
-            Assert.That(requests, Has.None.Contains("/search/random"));
+            Assert.That(requests, Has.Some.Matches<string>(r => r.StartsWith("POST /api/search/random") && r.Contains($"\"or\":[{branch}]")));
+            Assert.That(requests, Has.None.Contains("/memories"));
         });
+    }
+
+    /// <summary>
+    /// An account showing nothing but its memories draws on them alone. Built with the library search
+    /// beside them, it would show its whole library as well.
+    /// </summary>
+    [Test]
+    public async Task GetAssets_AccountShowingMemoriesOnly_DoesNotSearchTheLibrary()
+    {
+        // Arrange
+        _accountSettings.SetupGet(s => s.ShowMemories).Returns(true);
+        var requests = ImmichFindsNothing();
+        using var logic = await CreateLogic();
+
+        // Act
+        await logic.GetAssets();
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(requests, Has.Some.StartsWith("GET /api/memories"));
+            Assert.That(requests, Has.None.Contains("/search/"));
+        });
+    }
+
+    /// <summary>
+    /// An account showing its memories and another kind of asset draws on both, each weighed by its
+    /// count. Built with the memories alone, it would never show the other kind.
+    /// </summary>
+    [Test]
+    public async Task GetAssets_AccountShowingMemoriesAndFavorites_CountsBoth()
+    {
+        // Arrange
+        _accountSettings.SetupGet(s => s.ShowMemories).Returns(true);
+        _accountSettings.SetupGet(s => s.ShowFavorites).Returns(true);
+        var requests = ImmichFindsNothing();
+        using var logic = await CreateLogic();
+
+        // Act
+        await logic.GetAssets();
+
+        // Assert
+        Assert.Multiple(() =>
+        {
+            Assert.That(requests, Has.Some.StartsWith("GET /api/memories"));
+            Assert.That(requests, Has.Some.Matches<string>(r =>
+                r.StartsWith("POST /api/search/statistics") && r.Contains("""
+                    "or":[{"isFavorite":{"eq":true}}]
+                    """)));
+        });
+    }
+
+    /// <summary>
+    /// Trashed photos are left out by asking for the ones whose trashedAt is null, and that null has to
+    /// reach Immich. The client generated from Immich's spec leaves a null out of the request, which
+    /// sends a filter with nothing in it and leaves the trash in the slideshow.
+    /// </summary>
+    [Test]
+    public async Task GetAssets_LibrarySearch_AsksImmichForWhatIsNotInTheTrash()
+    {
+        // Arrange - an account narrowed to nothing
+        var requests = ImmichFindsNothing();
+        using var logic = await CreateLogic();
+
+        // Act
+        await logic.GetAssets();
+
+        // Assert
+        Assert.That(requests, Has.Some.Matches<string>(r =>
+            r.StartsWith("POST /api/search/random") && r.Contains("""
+                "trashedAt":{"eq":null}
+                """)));
     }
 
     /// <summary>

@@ -155,7 +155,7 @@ Accounts:
     ImagesFromDays: null  # int
     # Show images before date. Must not be earlier than `ImagesFromDate`.
     ImagesUntilDate: '2020-01-02'  # Date
-    # Rating of an image in stars, allowed values from 1 to 5. Any other value is invalid. This will only show images with the exact rating you are filtering for.
+    # Minimum rating in stars, allowed values from 1 to 5. Any other value is invalid. Shows images with this rating or higher.
     Rating: null  # int
     # UUID of album(s) - e.g. ['00000000-0000-0000-0000-000000000001']
     Albums:  # string[]

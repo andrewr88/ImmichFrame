@@ -244,7 +244,7 @@ export const accountFields: Record<AccountProp, FieldSpec> = {
 		kind: 'lines',
 		help: 'Only photos with these tags, stored as the full path, e.g. Travel/Europe.'
 	},
-	rating: { label: 'Rating', kind: 'integer', help: 'Exact star rating, 1 to 5. Blank for any.' }
+	rating: { label: 'Rating', kind: 'integer', help: 'Minimum star rating, 1 to 5. Blank for any.' }
 };
 
 export const accountProps = Object.keys(accountFields) as AccountProp[];
@@ -1354,8 +1354,8 @@ const INT32_MAX = 2147483647;
  * bounded by `ServerAccountSettings.MaxImagesFromDays`: a negative number moves the cut-off into the
  * future, and one a date cannot count back from today failed every request for the account's photos.
  * `Rating` is bounded by `ServerAccountSettings.MinRating` and `MaxRating`, the ratings Immich gives
- * a photo. An account shows only the photos rated exactly that, so a number outside the range
- * matched none. The server refuses all of these, but in words that do not say which account.
+ * a photo. An account shows only the photos rated at least that, so a number above the range
+ * matches none. The server refuses all of these, but in words that do not say which account.
  */
 const accountRanges: Partial<Record<AccountProp, readonly [min: number, max: number]>> = {
 	imagesFromDays: [0, 36500],

@@ -467,9 +467,9 @@ public class ConfigCatalogTest
     /// <summary>
     /// An empty entry in a list of strings - a null in JSON, a bare <c>-</c> or a <c>~</c> in YAML -
     /// binds as a null string, which a setter replacing only a null list let through. The calendar
-    /// service calls <c>Replace</c> on every calendar URL on every poll and <c>TagAssetsPool</c> looks
-    /// every tag up as a dictionary key, so one null failed every <c>GET /api/Calendar</c>, or every
-    /// request for the account's photos. An entry that is only whitespace names nothing either.
+    /// service calls <c>Replace</c> on every calendar URL on every poll and <c>AccountSearchPool</c>
+    /// looks every tag up as a dictionary key, so one null failed every <c>GET /api/Calendar</c>, or
+    /// every request for the account's photos. An entry that is only whitespace names nothing either.
     /// </summary>
     [TestCase(ConfigFormat.Json, """
                                  {
