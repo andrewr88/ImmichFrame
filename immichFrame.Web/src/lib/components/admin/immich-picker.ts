@@ -21,7 +21,7 @@ export const pickerNouns: Record<PickerKind, { one: string; many: string }> = {
 export interface PickerItem {
 	/**
 	 * Exactly what the settings file holds for this entry. Albums and people carry the Immich id;
-	 * a tag carries its `value`, never its id or its name - `TagAssetsPool` keys every tag by
+	 * a tag carries its `value`, never its id or its name - `AccountSearchPool` keys every tag by
 	 * `TagResponseDto.Value`, so anything else writes a configuration that loads, validates and
 	 * then selects no assets at all.
 	 */

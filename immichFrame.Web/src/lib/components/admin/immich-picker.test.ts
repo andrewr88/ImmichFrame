@@ -228,7 +228,7 @@ describe('loadPickerList', () => {
 		// Act
 		const result = await loadPickerList('tags', SAVED);
 
-		// Assert: `TagAssetsPool` keys every tag by its value, so anything else would write a
+		// Assert: `AccountSearchPool` keys every tag by its value, so anything else would write a
 		// configuration that loads and then selects nothing.
 		expect(result).toEqual({
 			ok: true,

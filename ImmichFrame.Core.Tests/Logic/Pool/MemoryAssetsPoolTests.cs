@@ -477,6 +477,42 @@ public class MemoryAssetsPoolTests
         });
     }
 
+    /// <summary>
+    /// A server that hands back the very cursor it was sent would have the excluded albums paged
+    /// through forever, and every frame request waits on that load. It ends at the repeat instead,
+    /// with the ids both pages held.
+    /// </summary>
+    [Test]
+    public async Task GetAssets_ExcludedAlbumsSearchRepeatsACursor_EndsWithTheIdsFound()
+    {
+        // Arrange
+        _mockAccountSettings.SetupGet(s => s.ExcludedAlbums).Returns([Guid.NewGuid()]);
+        var onFirstPage = Remembered();
+        var onRepeatingPage = Remembered();
+        var kept = Remembered();
+        ImmichRemembers(onFirstPage, onRepeatingPage, kept);
+
+        // Repeats the cursor only so often, so that a load that pages on past the repeat fails this
+        // test rather than hanging it
+        var searches = new List<MetadataSearchDto>();
+        _mockImmichApi.Setup(x => x.SearchAssetsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<MetadataSearchDto>(), It.IsAny<CancellationToken>()))
+            .Callback<string, string, MetadataSearchDto, CancellationToken>((_, _, search, _) => searches.Add(search))
+            .ReturnsAsync((string _, string _, MetadataSearchDto search, CancellationToken _) =>
+                search.Cursor == null ? SearchPage("page-2", onFirstPage.Id)
+                : searches.Count < 10 ? SearchPage("page-2", onRepeatingPage.Id)
+                : SearchPage(null));
+
+        // Act
+        var shown = await AllShown();
+
+        // Assert - what both pages held is excluded, and nothing was searched for past the repeat
+        Assert.Multiple(() =>
+        {
+            Assert.That(shown, Is.EqualTo(new[] { kept }));
+            Assert.That(searches.Select(search => search.Cursor), Is.EqualTo(new[] { null, "page-2" }));
+        });
+    }
+
     [TestCase(false, TestName = "GetAssets_NullExcludedAlbums_DoesNotSearchForThem")]
     [TestCase(true, TestName = "GetAssets_EmptyExcludedAlbums_DoesNotSearchForThem")]
     public async Task GetAssets_NoExcludedAlbums_DoesNotSearchForThem(bool emptyList)

@@ -90,7 +90,7 @@ public class MemoryAssetsPool(ImmichApi immichApi, IAccountSettings accountSetti
     {
         var ids = new HashSet<Guid>();
         string? cursor = null;
-        do
+        while (true)
         {
             var page = await immichApi.SearchAssetsAsync(null, null, new MetadataSearchDto
             {
@@ -104,10 +104,18 @@ public class MemoryAssetsPool(ImmichApi immichApi, IAccountSettings accountSetti
             }, CancellationToken.None);
 
             ids.UnionWith(page.Assets.Items.Select(asset => asset.Id));
-            cursor = page.Assets.NextCursor;
-        } while (!string.IsNullOrEmpty(cursor));
 
-        return ids;
+            // A server that hands back the cursor it was just sent would be asked for the same page
+            // forever, and every frame request waits on this load. Paging stops there instead, with the
+            // ids found so far.
+            var nextCursor = page.Assets.NextCursor;
+            if (string.IsNullOrEmpty(nextCursor) || nextCursor == cursor)
+            {
+                return ids;
+            }
+
+            cursor = nextCursor;
+        }
     }
 }
 
