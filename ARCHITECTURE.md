@@ -49,9 +49,17 @@ with its config models.
 
 1. **Immich → Core.** `ImmichFrame.Core/OpenAPIs/immich-openapi-specs.json` is fed to NSwag at
    build time (`<OpenApiReference>` in `ImmichFrame.Core.csproj`) producing the `ImmichApi` class
-   in namespace `ImmichFrame.Core.Api`. `ImmichFrame.Core/Api/ImmichApi.cs` is a small hand-written
-   `partial` that adds the constructor and a range-request video method — the rest is generated,
-   so never edit generated members.
+   in namespace `ImmichFrame.Core.Api`. The checked-in spec is pinned to Immich **v3.2.0** (the
+   `<SourceUri>` points at the `v3.2.0` tag, not `main`). `ImmichFrame.Core/Api/ImmichApi.cs` is a
+   small hand-written `partial` that adds the constructor and a range-request video method;
+   `AssetResponseDto.cs` is another partial (thumbhash stream, server URL), and `NullableDateFilter.cs`
+   subclasses the generated `DateFilterNullable` so a filter can send an explicit JSON `null` (used
+   for "not trashed"). The rest is generated, so never edit generated members.
+
+   Because the client is generated from 3.2.0 — whose search responses carry a required
+   `nextCursor` — `ImmichServerVersionChecker` (`ImmichFrame.WebApi/Helpers/`) treats anything below
+   **Immich 3.2.0**, including a 3.2.0 prerelease, as unsupported. It runs un-awaited at startup
+   (`Program.cs:434`) and logs critically rather than blocking boot.
 2. **ImmichFrame → web client.** `make api` curls the running app's Swagger doc into
    `openApi/swagger.json`, then `npm run api` (oazapfts) regenerates
    `immichFrame.Web/src/lib/immichFrameApi.ts`. That file is marked `DO NOT MODIFY`.
@@ -101,10 +109,26 @@ Profile names are validated in `ConfigCatalog`: `^[A-Za-z0-9_-]{1,64}$`, case-in
 ### Asset selection: the pool hierarchy
 
 `PooledImmichFrameLogic` builds an `IAssetPool` per account from that account's settings
-(`BuildPool`): an `AllAssetsPool` when nothing is narrowed, otherwise a `MultiAssetPool` composing
-`FavoriteAssetsPool`, `MemoryAssetsPool`, `AlbumAssetsPool`, `PersonAssetsPool`, `TagAssetsPool`.
-`AggregatingAssetPool` / `QueuingAssetPool` / `CachingApiAssetsPool` are the shared machinery;
-`MultiAssetPool` picks a delegate weighted by asset count. Across accounts,
+(`BuildPool`) out of at most two pools, wrapped in a `MultiAssetPool` only when both apply:
+
+- `AccountSearchPool` — the account's whole library selection in **one Immich search**: draws from
+  `search/random` and counts from `search/statistics`, both given the same filter from
+  `SearchFilters.ForAccount` (`ImmichFrame.Core/Helpers/SearchFilters.cs`) so the count cannot drift
+  from the draw. Account-wide settings (not trashed, visibility/archived, image/video type, excluded
+  albums, date range inclusive at both ends, Rating as a *minimum*) go on the top-level filter;
+  favourites, albums, people and tags each become an **OR branch**, and an account that narrows to
+  none has no `or` and shows its whole library. Tags are resolved from their full path to ids
+  (cached). Omitted when the account is memories-only.
+- `MemoryAssetsPool` — "on this day" memories, which do not come from search, so it applies the
+  account's filters itself (videos, archived, date range, rating) and drops assets in excluded
+  albums, fetched by paging a metadata search by cursor (stopping if Immich repeats a cursor).
+  Cached until local midnight (`DailyApiCache`).
+
+There are no per-source pools and no client-side account filtering any more (`AllAssetsPool`,
+`FavoriteAssetsPool`, `AlbumAssetsPool`, `PeopleAssetsPool`, `TagAssetsPool`, `AssetHelper`,
+`AssetExtensionMethods` and `IAssetSearchFilters` are gone). `AggregatingAssetPool` /
+`QueuingAssetPool` / `CachingApiAssetsPool` are the shared machinery; `MultiAssetPool` picks a
+delegate weighted by asset count. Across accounts,
 `MultiImmichFrameLogicDelegate` plus `TotalAccountImagesSelectionStrategy` and
 `BloomFilterAssetAccountTracker` decide which account serves a given asset id.
 
@@ -162,9 +186,9 @@ refuses to boot if any endpoint on an admin path lacks the `AdminOnly` policy or
 ### Tests
 
 - NUnit: `[TestFixture]` class, `[SetUp]` method, `[Test]` methods.
-- Naming: `Method_Scenario_ExpectedResult` (`LoadAssets_NoIncludedAlbums_ReturnsEmpty`).
+- Naming: `Method_Scenario_ExpectedResult` (`GetAssets_ShowVideos_AddsVideoType`).
 - Arrange / Act / Assert marked with comments.
-- Moq for collaborators, including mocking the generated `ImmichApi` (`new Mock<ImmichApi>("", null)`)
+- Moq for collaborators, including mocking the generated `ImmichApi` (`new Mock<ImmichApi>(null!, null!)`)
   — its methods are virtual, so no wrapper interface is used.
 - Assertions: `Assert.That(x, Is.EqualTo(y))` in `ImmichFrame.Core.Tests`; the WebApi tests also
   have `AwesomeAssertions` available.
@@ -235,7 +259,7 @@ Highest churn over the last 200 commits (change count → why it moves):
 | `ImmichFrame.Core/Logic/PooledImmichFrameLogic.cs` | 23 | Per-account orchestration; pool composition and asset fetching |
 | `ImmichFrame.WebApi/Controllers/AssetController.cs` | 15 | The main API surface: assets, ranges, webhooks |
 | `immichFrame.Web/src/lib/components/elements/asset.svelte` | 13 | Asset rendering (image/video, transitions) |
-| `ImmichFrame.Core/Logic/Pool/AllAssetsPool.cs` (+ its tests) | 11 each | Default selection path; filter changes land here |
+| `ImmichFrame.Core/Logic/Pool/MemoryAssetsPool.cs` | 12 | Memories path; applies account filters itself, so filter changes land here as well as in `SearchFilters.cs` |
 | `ImmichFrame.Core/Logic/MultiImmichFrameLogicDelegate.cs` | 9 | Multi-account fan-out |
 | `docs/docs/getting-started/configuration.md` | 9 | Every new setting needs documenting |
 
